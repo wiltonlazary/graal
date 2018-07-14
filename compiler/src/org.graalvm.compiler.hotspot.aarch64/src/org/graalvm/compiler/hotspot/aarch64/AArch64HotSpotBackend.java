@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -108,7 +110,7 @@ public class AArch64HotSpotBackend extends HotSpotHostBackend {
 
     @Override
     public LIRGenerationResult newLIRGenerationResult(CompilationIdentifier compilationId, LIR lir, FrameMapBuilder frameMapBuilder, StructuredGraph graph, Object stub) {
-        return new HotSpotLIRGenerationResult(compilationId, lir, frameMapBuilder, makeCallingConvention(graph, (Stub) stub), stub);
+        return new HotSpotLIRGenerationResult(compilationId, lir, frameMapBuilder, makeCallingConvention(graph, (Stub) stub), stub, config.requiresReservedStackCheck(graph.getMethods()));
     }
 
     @Override
@@ -232,7 +234,8 @@ public class AArch64HotSpotBackend extends HotSpotHostBackend {
         HotSpotFrameContext frameContext = new HotSpotFrameContext(stub != null);
 
         DataBuilder dataBuilder = new HotSpotDataBuilder(getCodeCache().getTarget());
-        CompilationResultBuilder crb = factory.createBuilder(getCodeCache(), getForeignCalls(), frameMap, masm, dataBuilder, frameContext, lir.getOptions(), lir.getDebug(), compilationResult);
+        CompilationResultBuilder crb = factory.createBuilder(getCodeCache(), getForeignCalls(), frameMap, masm, dataBuilder, frameContext, lir.getOptions(), lir.getDebug(), compilationResult,
+                        Register.None);
         crb.setTotalFrameSize(frameMap.totalFrameSize());
         crb.setMaxInterpreterFrameSize(gen.getMaxInterpreterFrameSize());
         StackSlot deoptimizationRescueSlot = gen.getDeoptimizationRescueSlot();

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -26,15 +28,14 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.graalvm.compiler.asm.Assembler;
-import org.graalvm.compiler.asm.amd64.AMD64Assembler;
-import org.graalvm.compiler.asm.amd64.AMD64Assembler.OperandDataAnnotation;
+import org.graalvm.compiler.asm.amd64.AMD64BaseAssembler.OperandDataAnnotation;
 import org.graalvm.compiler.code.CompilationResult;
 import org.graalvm.compiler.code.CompilationResult.CodeAnnotation;
 import org.graalvm.compiler.lir.asm.CompilationResultBuilder;
 
 public class AMD64InstructionPatcher {
 
-    private final Map<Integer, AMD64Assembler.OperandDataAnnotation> operandAnnotations;
+    private final Map<Integer, OperandDataAnnotation> operandAnnotations;
 
     public AMD64InstructionPatcher(CompilationResult compilationResult) {
         /*
@@ -46,8 +47,8 @@ public class AMD64InstructionPatcher {
         for (CodeAnnotation codeAnnotation : compilationResult.getAnnotations()) {
             if (codeAnnotation instanceof CompilationResultBuilder.AssemblerAnnotation) {
                 Assembler.CodeAnnotation assemblerAnotation = ((CompilationResultBuilder.AssemblerAnnotation) codeAnnotation).assemblerCodeAnnotation;
-                if (assemblerAnotation instanceof AMD64Assembler.OperandDataAnnotation) {
-                    AMD64Assembler.OperandDataAnnotation operandAnnotation = (OperandDataAnnotation) assemblerAnotation;
+                if (assemblerAnotation instanceof OperandDataAnnotation) {
+                    OperandDataAnnotation operandAnnotation = (OperandDataAnnotation) assemblerAnotation;
                     operandAnnotations.put(operandAnnotation.instructionPosition, operandAnnotation);
                 }
             }
@@ -81,7 +82,7 @@ public class AMD64InstructionPatcher {
     }
 
     public PatchData findPatchData(int codePos, int relative) {
-        AMD64Assembler.OperandDataAnnotation operandData = operandAnnotations.get(codePos);
+        OperandDataAnnotation operandData = operandAnnotations.get(codePos);
         assert operandData.instructionPosition == codePos;
 
         int offset = relative - (operandData.nextInstructionPosition - operandData.instructionPosition);

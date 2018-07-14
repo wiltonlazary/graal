@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -25,7 +27,6 @@ package com.oracle.svm.core.posix.pthread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
-import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.word.WordBase;
 import org.graalvm.word.WordFactory;
@@ -43,7 +44,7 @@ public final class PthreadThreadLocal<T extends WordBase> {
 
     @Uninterruptible(reason = "Called from uninterruptible code. Too early for safepoints.")
     public void initialize() {
-        CIntPointer keyPtr = StackValue.get(SizeOf.get(CIntPointer.class));
+        CIntPointer keyPtr = StackValue.get(CIntPointer.class);
         PthreadVMLockSupport.checkResult(Pthread.pthread_key_create(keyPtr, WordFactory.nullPointer()), "pthread_key_create");
         key = keyPtr.read();
     }

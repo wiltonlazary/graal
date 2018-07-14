@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -82,8 +84,8 @@ final class NativeImageServer extends NativeImage {
     private volatile Server building = null;
     private final List<FileChannel> openFileChannels = new ArrayList<>();
 
-    NativeImageServer() {
-        super();
+    NativeImageServer(BuildConfiguration buildConfiguration) {
+        super(buildConfiguration);
         registerOptionHandler(new ServerOptionHandler(this));
     }
 
@@ -536,7 +538,7 @@ final class NativeImageServer extends NativeImage {
         ProcessBuilder pb = new ProcessBuilder();
         pb.directory(serverDir.toFile());
         List<String> command = pb.command();
-        command.add(getJavaHome().resolve("bin/java").toString());
+        command.add(canonicalize(config.getJavaExecutable()).toString());
         if (!bootClasspath.isEmpty()) {
             command.add(bootClasspath.stream().map(Path::toString).collect(Collectors.joining(":", "-Xbootclasspath/a:", "")));
         }

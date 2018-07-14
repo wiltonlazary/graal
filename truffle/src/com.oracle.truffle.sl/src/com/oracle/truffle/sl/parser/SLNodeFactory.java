@@ -46,6 +46,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.antlr.v4.runtime.Parser;
+import org.antlr.v4.runtime.Token;
+
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.FrameDescriptor;
@@ -142,7 +145,7 @@ public class SLNodeFactory {
         return allFunctions;
     }
 
-    public void startFunction(Token nameToken, int bodyStartPos) {
+    public void startFunction(Token nameToken, Token bodyStartToken) {
         assert functionStartPos == 0;
         assert functionName == null;
         assert functionBodyStartPos == 0;
@@ -150,9 +153,9 @@ public class SLNodeFactory {
         assert frameDescriptor == null;
         assert lexicalScope == null;
 
-        functionStartPos = nameToken.charPos;
-        functionName = nameToken.val;
-        functionBodyStartPos = bodyStartPos;
+        functionStartPos = nameToken.getStartIndex();
+        functionName = nameToken.getText();
+        functionBodyStartPos = bodyStartToken.getStartIndex();
         frameDescriptor = new FrameDescriptor();
         methodNodes = new ArrayList<>();
         startBlock();
@@ -284,7 +287,7 @@ public class SLNodeFactory {
         }
 
         conditionNode.addStatementTag();
-        final int start = whileToken.charPos;
+        final int start = whileToken.getStartIndex();
         final int end = bodyNode.getSourceEndIndex();
         final SLWhileNode whileNode = new SLWhileNode(conditionNode, bodyNode);
         whileNode.setSourceSection(start, end - start);
@@ -307,7 +310,7 @@ public class SLNodeFactory {
         }
 
         conditionNode.addStatementTag();
-        final int start = ifToken.charPos;
+        final int start = ifToken.getStartIndex();
         final int end = elsePartNode == null ? thenPartNode.getSourceEndIndex() : elsePartNode.getSourceEndIndex();
         final SLIfNode ifNode = new SLIfNode(conditionNode, thenPartNode, elsePartNode);
         ifNode.setSourceSection(start, end - start);
@@ -322,8 +325,8 @@ public class SLNodeFactory {
      * @return An SLReturnNode for the given parameters.
      */
     public SLStatementNode createReturn(Token t, SLExpressionNode valueNode) {
-        final int start = t.charPos;
-        final int length = valueNode == null ? t.val.length() : valueNode.getSourceEndIndex() - start;
+        final int start = t.getStartIndex();
+        final int length = valueNode == null ? t.getText().length() : valueNode.getSourceEndIndex() - start;
         final SLReturnNode returnNode = new SLReturnNode(valueNode);
         returnNode.setSourceSection(start, length);
         return returnNode;
@@ -357,7 +360,7 @@ public class SLNodeFactory {
         }
 
         final SLExpressionNode result;
-        switch (opToken.val) {
+        switch (opToken.getText()) {
             case "+":
                 result = SLAddNodeGen.create(leftUnboxed, rightUnboxed);
                 break;
@@ -395,12 +398,13 @@ public class SLNodeFactory {
                 result = new SLLogicalOrNode(leftUnboxed, rightUnboxed);
                 break;
             default:
-                throw new RuntimeException("unexpected operation: " + opToken.val);
+                throw new RuntimeException("unexpected operation: " + opToken.getText());
         }
 
         int start = leftNode.getSourceCharIndex();
         int length = rightNode.getSourceEndIndex() - start;
         result.setSourceSection(start, length);
+        result.addExpressionTag();
 
         return result;
     }
@@ -422,8 +426,9 @@ public class SLNodeFactory {
         final SLExpressionNode result = new SLInvokeNode(functionNode, parameterNodes.toArray(new SLExpressionNode[parameterNodes.size()]));
 
         final int startPos = functionNode.getSourceCharIndex();
-        final int endPos = finalToken.charPos + finalToken.val.length();
+        final int endPos = finalToken.getStartIndex() + finalToken.getText().length();
         result.setSourceSection(startPos, endPos - startPos);
+        result.addExpressionTag();
 
         return result;
     }
@@ -450,6 +455,7 @@ public class SLNodeFactory {
             final int length = valueNode.getSourceEndIndex() - start;
             result.setSourceSection(start, length);
         }
+        result.addExpressionTag();
 
         return result;
     }
@@ -483,12 +489,13 @@ public class SLNodeFactory {
             result = new SLFunctionLiteralNode(language, name);
         }
         result.setSourceSection(nameNode.getSourceCharIndex(), nameNode.getSourceLength());
+        result.addExpressionTag();
         return result;
     }
 
     public SLExpressionNode createStringLiteral(Token literalToken, boolean removeQuotes) {
         /* Remove the trailing and ending " */
-        String literal = literalToken.val;
+        String literal = literalToken.getText();
         if (removeQuotes) {
             assert literal.length() >= 2 && literal.startsWith("\"") && literal.endsWith("\"");
             literal = literal.substring(1, literal.length() - 1);
@@ -496,6 +503,7 @@ public class SLNodeFactory {
 
         final SLStringLiteralNode result = new SLStringLiteralNode(literal.intern());
         srcFromToken(result, literalToken);
+        result.addExpressionTag();
         return result;
     }
 
@@ -503,12 +511,13 @@ public class SLNodeFactory {
         SLExpressionNode result;
         try {
             /* Try if the literal is small enough to fit into a long value. */
-            result = new SLLongLiteralNode(Long.parseLong(literalToken.val));
+            result = new SLLongLiteralNode(Long.parseLong(literalToken.getText()));
         } catch (NumberFormatException ex) {
             /* Overflow of long value, so fall back to BigInteger. */
-            result = new SLBigIntegerLiteralNode(new BigInteger(literalToken.val));
+            result = new SLBigIntegerLiteralNode(new BigInteger(literalToken.getText()));
         }
         srcFromToken(result, literalToken);
+        result.addExpressionTag();
         return result;
     }
 
@@ -540,6 +549,7 @@ public class SLNodeFactory {
         final int startPos = receiverNode.getSourceCharIndex();
         final int endPos = nameNode.getSourceEndIndex();
         result.setSourceSection(startPos, endPos - startPos);
+        result.addExpressionTag();
 
         return result;
     }
@@ -563,6 +573,7 @@ public class SLNodeFactory {
         final int start = receiverNode.getSourceCharIndex();
         final int length = valueNode.getSourceEndIndex() - start;
         result.setSourceSection(start, length);
+        result.addExpressionTag();
 
         return result;
     }
@@ -571,7 +582,7 @@ public class SLNodeFactory {
      * Creates source description of a single token.
      */
     private static void srcFromToken(SLStatementNode node, Token token) {
-        node.setSourceSection(token.charPos, token.val.length());
+        node.setSourceSection(token.getStartIndex(), token.getText().length());
     }
 
     /**

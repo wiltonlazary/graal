@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -27,13 +29,14 @@ import static com.oracle.svm.core.option.RuntimeOptionParser.GRAAL_OPTION_PREFIX
 import static com.oracle.svm.core.option.SubstrateOptionsParser.BooleanOptionFormat.NAME_VALUE;
 import static com.oracle.svm.core.option.SubstrateOptionsParser.BooleanOptionFormat.PLUS_MINUS;
 
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 //Checkstyle: allow reflection
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
-import java.util.function.Consumer;
 import java.util.Collections;
+import java.util.List;
 
 import org.graalvm.compiler.word.Word;
 import org.graalvm.nativeimage.Feature;
@@ -57,11 +60,9 @@ import com.oracle.svm.core.c.function.CEntryPointSetup.EnterCreateIsolatePrologu
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.jdk.RuntimeFeature;
 import com.oracle.svm.core.jdk.RuntimeSupport;
-import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.option.RuntimeOptionParser;
 import com.oracle.svm.core.option.XOptions;
 import com.oracle.svm.core.properties.RuntimePropertyParser;
-import com.oracle.svm.core.snippets.SnippetRuntime;
 import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.util.Counter;
 import com.oracle.svm.core.util.VMError;
@@ -86,51 +87,18 @@ public class JavaMainWrapper {
 
     public static class JavaMainSupport {
 
-        public static void executeStartupHooks() {
-            RuntimeSupport runtimeSupport = RuntimeSupport.getRuntimeSupport();
-            executeHooks(runtimeSupport.getStartupHooks(), runtimeSupport::removeStartupHook);
-        }
-
-        public static void executeShutdownHooks() {
-            RuntimeSupport runtimeSupport = RuntimeSupport.getRuntimeSupport();
-            executeHooks(runtimeSupport.getShutdownHooks(), runtimeSupport::removeShutdownHook);
-        }
-
-        private static void executeHooks(List<Runnable> hooks, Consumer<Runnable> deleteHookAction) {
-            List<Throwable> hookExceptions = new ArrayList<>();
-
-            for (Runnable hook : hooks) {
-                deleteHookAction.accept(hook);
-                try {
-                    hook.run();
-                } catch (Throwable ex) {
-                    hookExceptions.add(ex);
-                }
-            }
-
-            // report all hook exceptions, but do not re-throw
-            if (hookExceptions.size() > 0) {
-                for (Throwable ex : hookExceptions) {
-                    ex.printStackTrace(Log.logStream());
-                }
-            }
-        }
-
-        private final Method javaMainMethod;
+        final MethodHandle javaMainHandle;
+        final String javaMainClassName;
 
         @Platforms(Platform.HOSTED_ONLY.class)
-        public JavaMainSupport(Method javaMainMethod) {
-            this.javaMainMethod = javaMainMethod;
-        }
-
-        private Method getJavaMainMethod() {
-            assert javaMainMethod != null;
-            return javaMainMethod;
+        public JavaMainSupport(Method javaMainMethod) throws IllegalAccessException {
+            this.javaMainHandle = MethodHandles.lookup().unreflect(javaMainMethod);
+            this.javaMainClassName = javaMainMethod.getDeclaringClass().getName();
         }
 
         public String getJavaCommand() {
-            if (javaMainMethod != null && mainArgs != null) {
-                StringBuilder commandLine = new StringBuilder(javaMainMethod.getDeclaringClass().getName());
+            if (mainArgs != null) {
+                StringBuilder commandLine = new StringBuilder(javaMainClassName);
 
                 for (String arg : mainArgs) {
                     commandLine.append(' ');
@@ -156,7 +124,12 @@ public class JavaMainWrapper {
     }
 
     /** A shutdown hook to print the PrintGCSummary output. */
-    public static class PrintGCSummaryShutdownHook implements Runnable {
+    public static class PrintGCSummaryShutdownHook extends Thread {
+
+        public PrintGCSummaryShutdownHook() {
+            super("PrintGCSummaryShutdownHook");
+        }
+
         @Override
         public void run() {
             Heap.getHeap().getGC().printGCSummary();
@@ -186,30 +159,40 @@ public class JavaMainWrapper {
             args = RuntimePropertyParser.parse(args);
         }
         mainArgs = args;
+
         try {
-            final RuntimeSupport rs = RuntimeSupport.getRuntimeSupport();
             if (AllocationSite.Options.AllocationProfiling.getValue()) {
-                rs.addShutdownHook(new AllocationSite.AllocationProfilingShutdownHook());
+                Runtime.getRuntime().addShutdownHook(new AllocationSite.AllocationProfilingShutdownHook());
             }
             if (SubstrateOptions.PrintGCSummary.getValue()) {
-                rs.addShutdownHook(new PrintGCSummaryShutdownHook());
+                Runtime.getRuntime().addShutdownHook(new PrintGCSummaryShutdownHook());
             }
-            try {
-                JavaMainSupport.executeStartupHooks();
-                ImageSingletons.lookup(JavaMainSupport.class).getJavaMainMethod().invoke(null, (Object) mainArgs);
-            } finally { // always execute the shutdown hooks
-                JavaMainSupport.executeShutdownHooks();
-            }
+            RuntimeSupport.getRuntimeSupport().executeStartupHooks();
+
+            /*
+             * Invoke the application's main method. Invoking the main method via a method handle
+             * preserves exceptions, while invoking the main method via reflection would wrap
+             * exceptions in a InvocationTargetException.
+             */
+            ImageSingletons.lookup(JavaMainSupport.class).javaMainHandle.invokeExact(args);
+
         } catch (Throwable ex) {
-            SnippetRuntime.reportUnhandledExceptionJava(ex);
+            JavaThreads.dispatchUncaughtException(Thread.currentThread(), ex);
+
+        } finally {
+            /*
+             * Shutdown sequence: First wait for all non-daemon threads to exit.
+             */
+            JavaThreads.singleton().joinAllNonDaemons();
+            /*
+             * Run shutdown hooks (both our own hooks and application-registered hooks. Note that
+             * this can start new non-daemon threads. We are not responsible to wait until they have
+             * exited.
+             */
+            RuntimeSupport.getRuntimeSupport().shutdown();
+
+            Counter.logValues();
         }
-
-        JavaThreads.singleton().joinAllNonDaemons();
-        Counter.logValues();
-
-        /* Shut down the VM. */
-        RuntimeSupport.getRuntimeSupport().shutdown();
-
         return 0;
     }
 

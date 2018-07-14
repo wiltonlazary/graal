@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -221,7 +223,12 @@ public final class FrameStateBuilder implements SideEffectsState {
                 stamp = plugins.getOverridingStamp(tool, type, false);
             }
             if (stamp == null) {
-                stamp = StampFactory.forDeclaredType(assumptions, type, false);
+                // GR-714: subword inputs cannot be trusted
+                if (kind.getStackKind() != kind) {
+                    stamp = StampPair.createSingle(StampFactory.forKind(JavaKind.Int));
+                } else {
+                    stamp = StampFactory.forDeclaredType(assumptions, type, false);
+                }
             }
 
             FloatingNode param = null;

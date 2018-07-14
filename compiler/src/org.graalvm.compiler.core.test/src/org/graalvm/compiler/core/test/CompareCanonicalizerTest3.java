@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -27,7 +29,11 @@ import org.graalvm.compiler.nodes.StructuredGraph.AllowAssumptions;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderContext;
 import org.graalvm.compiler.nodes.graphbuilderconf.InlineInvokePlugin;
+import org.graalvm.compiler.phases.OptimisticOptimizations;
 import org.graalvm.compiler.phases.common.CanonicalizerPhase;
+import org.graalvm.compiler.phases.common.FrameStateAssignmentPhase;
+import org.graalvm.compiler.phases.common.GuardLoweringPhase;
+import org.graalvm.compiler.phases.tiers.MidTierContext;
 import org.graalvm.compiler.phases.tiers.PhaseContext;
 import org.junit.Ignore;
 import org.junit.Test;
@@ -39,6 +45,7 @@ public class CompareCanonicalizerTest3 extends GraalCompilerTest {
     @SuppressWarnings("unused") private static int sink0;
     @SuppressWarnings("unused") private static int sink1;
 
+    @Ignore("Subword input cannot be trusted.")
     @Test
     public void test00() {
         assertCanonicallyEqual("integerTestCanonicalization00", "referenceSnippet00");
@@ -232,6 +239,8 @@ public class CompareCanonicalizerTest3 extends GraalCompilerTest {
         PhaseContext context = new PhaseContext(getProviders());
         CanonicalizerPhase canonicalizer = new CanonicalizerPhase();
         canonicalizer.apply(graph, context);
+        new GuardLoweringPhase().apply(graph, new MidTierContext(getProviders(), getTargetProvider(), OptimisticOptimizations.ALL, graph.getProfilingInfo()));
+        new FrameStateAssignmentPhase().apply(graph);
         canonicalizer.apply(graph, context);
         StructuredGraph referenceGraph = parseEager(reference, AllowAssumptions.YES);
         canonicalizer.apply(referenceGraph, context);

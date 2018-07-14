@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -141,7 +143,7 @@ public class Signal {
                 __sigset_t uc_sigmask;
                 struct _libc_fpstate __fpregs_mem;
               } ucontext_t;
-
+        
             // Context to describe whole processor state.
             typedef struct
               {
@@ -284,7 +286,24 @@ public class Signal {
     @CContext(PosixDirectives.class)
     public enum LinuxSignalEnum {
         /* Pollable event (Sys V). Synonym for SIGIO */
-        SIGPOLL;
+        SIGPOLL,
+        /* Power failure restart (System V). */
+        SIGPWR;
+
+        @CEnumValue
+        public native int getCValue();
+    }
+
+    /** An alphabetical list of Darwin-specific signals. */
+    /* Workaround for GR-7858: @Platform @CEnum members. */
+    @Platforms(Platform.DARWIN.class)
+    @CEnum
+    @CContext(PosixDirectives.class)
+    public enum DarwinSignalEnum {
+        /* status request from keyboard */
+        SIGINFO,
+        /* EMT instruction */
+        SIGEMT;
 
         @CEnumValue
         public native int getCValue();

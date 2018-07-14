@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -30,7 +32,6 @@ import org.graalvm.nativeimage.PinnedObject;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
-import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
@@ -54,7 +55,7 @@ public class DarwinExecutableName extends PosixExecutableName {
     @Override
     public Object apply(Object[] args) {
         /* Find out how long the executable path is. */
-        final CIntPointer sizePointer = StackValue.get(SizeOf.get(CIntPointer.class));
+        final CIntPointer sizePointer = StackValue.get(CIntPointer.class);
         sizePointer.write(0);
         if (DarwinDyld._NSGetExecutablePath(WordFactory.nullPointer(), sizePointer) != -1) {
             VMError.shouldNotReachHere("DarwinExecutableName.getExecutableName: Executable path length is 0?");

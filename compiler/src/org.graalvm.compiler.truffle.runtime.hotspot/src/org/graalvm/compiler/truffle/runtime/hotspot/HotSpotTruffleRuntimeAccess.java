@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -38,7 +40,7 @@ import com.oracle.truffle.api.TruffleRuntime;
 import com.oracle.truffle.api.TruffleRuntimeAccess;
 import com.oracle.truffle.api.impl.DefaultTruffleRuntime;
 
-import jdk.vm.ci.hotspot.HotSpotJVMCIRuntimeProvider;
+import jdk.vm.ci.hotspot.HotSpotJVMCIRuntime;
 import jdk.vm.ci.hotspot.HotSpotVMConfigAccess;
 import jdk.vm.ci.runtime.JVMCI;
 import jdk.vm.ci.runtime.JVMCICompiler;
@@ -59,7 +61,7 @@ public class HotSpotTruffleRuntimeAccess implements TruffleRuntimeAccess {
         // initialize JVMCI to make sure the TruffleCompiler option is parsed
         Services.initializeJVMCI();
 
-        HotSpotJVMCIRuntimeProvider hsRuntime = (HotSpotJVMCIRuntimeProvider) JVMCI.getRuntime();
+        HotSpotJVMCIRuntime hsRuntime = (HotSpotJVMCIRuntime) JVMCI.getRuntime();
         HotSpotVMConfigAccess config = new HotSpotVMConfigAccess(hsRuntime.getConfigStore());
         boolean useCompiler = config.getFlag("UseCompiler", Boolean.class);
         if (!useCompiler) {

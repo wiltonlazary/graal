@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -34,6 +36,7 @@ import java.util.List;
 
 import org.graalvm.compiler.api.runtime.GraalJVMCICompiler;
 import org.graalvm.compiler.bytecode.Bytecode;
+import org.graalvm.compiler.bytecode.BytecodeProvider;
 import org.graalvm.compiler.code.CompilationResult;
 import org.graalvm.compiler.core.GraalCompiler;
 import org.graalvm.compiler.core.common.CompilationIdentifier;
@@ -66,7 +69,7 @@ import jdk.vm.ci.code.CompilationRequest;
 import jdk.vm.ci.code.CompilationRequestResult;
 import jdk.vm.ci.hotspot.HotSpotCompilationRequest;
 import jdk.vm.ci.hotspot.HotSpotCompilationRequestResult;
-import jdk.vm.ci.hotspot.HotSpotJVMCIRuntimeProvider;
+import jdk.vm.ci.hotspot.HotSpotJVMCIRuntime;
 import jdk.vm.ci.meta.DefaultProfilingInfo;
 import jdk.vm.ci.meta.JavaMethod;
 import jdk.vm.ci.meta.ProfilingInfo;
@@ -77,13 +80,13 @@ import jdk.vm.ci.runtime.JVMCICompiler;
 
 public class HotSpotGraalCompiler implements GraalJVMCICompiler {
 
-    private final HotSpotJVMCIRuntimeProvider jvmciRuntime;
+    private final HotSpotJVMCIRuntime jvmciRuntime;
     private final HotSpotGraalRuntimeProvider graalRuntime;
     private final CompilationCounters compilationCounters;
     private final BootstrapWatchDog bootstrapWatchDog;
     private List<DebugHandlersFactory> factories;
 
-    HotSpotGraalCompiler(HotSpotJVMCIRuntimeProvider jvmciRuntime, HotSpotGraalRuntimeProvider graalRuntime, OptionValues options) {
+    HotSpotGraalCompiler(HotSpotJVMCIRuntime jvmciRuntime, HotSpotGraalRuntimeProvider graalRuntime, OptionValues options) {
         this.jvmciRuntime = jvmciRuntime;
         this.graalRuntime = graalRuntime;
         // It is sufficient to have one compilation counter object per Graal compiler object.
@@ -218,11 +221,18 @@ public class HotSpotGraalCompiler implements GraalJVMCICompiler {
         if (subst != null) {
             ResolvedJavaMethod substMethod = subst.getMethod();
             assert !substMethod.equals(method);
-            StructuredGraph graph = new StructuredGraph.Builder(options, debug, AllowAssumptions.YES).method(substMethod).compilationId(compilationId).build();
+            BytecodeProvider bytecodeProvider = subst.getOrigin();
+            // @formatter:off
+            StructuredGraph graph = new StructuredGraph.Builder(options, debug, AllowAssumptions.YES).
+                            method(substMethod).
+                            compilationId(compilationId).
+                            recordInlinedMethods(bytecodeProvider.shouldRecordMethodDependencies()).
+                            build();
+            // @formatter:on
             try (DebugContext.Scope scope = debug.scope("GetIntrinsicGraph", graph)) {
                 Plugins plugins = new Plugins(providers.getGraphBuilderPlugins());
                 GraphBuilderConfiguration config = GraphBuilderConfiguration.getSnippetDefault(plugins);
-                IntrinsicContext initialReplacementContext = new IntrinsicContext(method, substMethod, subst.getOrigin(), ROOT_COMPILATION);
+                IntrinsicContext initialReplacementContext = new IntrinsicContext(method, substMethod, bytecodeProvider, ROOT_COMPILATION);
                 new GraphBuilderPhase.Instance(providers.getMetaAccess(), providers.getStampProvider(), providers.getConstantReflection(), providers.getConstantFieldProvider(), config,
                                 OptimisticOptimizations.NONE, initialReplacementContext).apply(graph);
                 assert !graph.isFrozen();

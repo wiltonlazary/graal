@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -28,6 +30,7 @@ import java.util.BitSet;
 import java.util.TreeMap;
 
 import org.graalvm.compiler.code.CompilationResult;
+import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.compiler.core.common.util.TypeConversion;
 import org.graalvm.compiler.core.common.util.UnsafeArrayTypeWriter;
 import org.graalvm.compiler.options.Option;
@@ -584,9 +587,9 @@ class CollectingObjectReferenceVisitor implements ObjectReferenceVisitor {
 
     @Override
     public boolean visitObjectReference(Pointer objRef, boolean compressed) {
-        int idx = (int) (objRef.rawValue() / SubstrateReferenceMap.getSlotSizeInBytes());
-        assert !result.isIndexMarked(idx);
-        result.markReferenceAtIndex(idx, compressed);
+        int offset = NumUtil.safeToInt(objRef.rawValue());
+        assert !result.isOffsetMarked(offset);
+        result.markReferenceAtOffset(offset, compressed);
         return true;
     }
 }

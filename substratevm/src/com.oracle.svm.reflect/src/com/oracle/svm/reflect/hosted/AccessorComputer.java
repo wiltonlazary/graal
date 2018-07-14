@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -24,17 +26,23 @@ package com.oracle.svm.reflect.hosted;
 
 // Checkstyle: allow reflection
 
+import java.lang.reflect.Member;
+import java.lang.reflect.Proxy;
+
+import org.graalvm.nativeimage.ImageSingletons;
+
 import com.oracle.svm.core.UnsafeAccess;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.util.VMError;
-import java.lang.reflect.Member;
+import com.oracle.svm.reflect.helpers.ReflectionProxyHelper;
+
+import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
-import org.graalvm.nativeimage.ImageSingletons;
 
 public final class AccessorComputer implements RecomputeFieldValue.CustomFieldValueComputer {
 
     @Override
-    public Object compute(ResolvedJavaField original, ResolvedJavaField annotated, Object receiver) {
+    public Object compute(MetaAccessProvider metaAccess, ResolvedJavaField original, ResolvedJavaField annotated, Object receiver) {
         Member member = (Member) receiver;
         ReflectionSubstitution subst = ImageSingletons.lookup(ReflectionSubstitution.class);
         Class<?> proxyClass = subst.getProxyClass(member);
@@ -43,7 +51,10 @@ public final class AccessorComputer implements RecomputeFieldValue.CustomFieldVa
             throw VMError.shouldNotReachHere();
         }
         try {
-            return UnsafeAccess.UNSAFE.allocateInstance(proxyClass);
+            Proxy proxyInstance = (Proxy) UnsafeAccess.UNSAFE.allocateInstance(proxyClass);
+            ReflectionProxyHelper.setDefaultInvocationHandler(proxyInstance);
+            return proxyInstance;
+
         } catch (InstantiationException ex) {
             throw VMError.shouldNotReachHere(ex);
         }

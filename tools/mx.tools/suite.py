@@ -1,5 +1,5 @@
 suite = {
-    "mxversion": "5.128.5",
+    "mxversion": "5.175.2",
     "name": "tools",
     "defaultLicense" : "GPLv2-CPE",
 
@@ -24,7 +24,11 @@ suite = {
                 "TRUFFLE_PROFILER",
                 "NanoHTTPD",
                 "NanoHTTPD-WebSocket",
-                "org.json",
+                "TruffleJSON",
+            ],
+            "exports" : [
+              "<package-info>", # exports all packages containing package-info.java
+              "com.oracle.truffle.tools.chromeinspector.instrument to com.oracle.truffle.truffle_api"
             ],
             "javaCompliance" : "1.8",
             "checkstyle" : "com.oracle.truffle.api",
@@ -38,6 +42,7 @@ suite = {
             "dependencies" : [
                 "com.oracle.truffle.tools.chromeinspector",
                 "truffle:TRUFFLE_TEST",
+                "truffle:TRUFFLE_SL",
                 "mx:JUNIT",
             ],
             "javaCompliance" : "1.8",
@@ -51,6 +56,10 @@ suite = {
             "subDir" : "src",
             "sourceDirs" : ["src"],
             "dependencies" : ["truffle:TRUFFLE_API"],
+            "exports" : [
+              "<package-info>", # exports all packages containing package-info.java
+              "com.oracle.truffle.tools.profiler.impl to com.oracle.truffle.truffle_api",
+            ],
             "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "checkstyle" : "com.oracle.truffle.api",
             "javaCompliance" : "1.8",
@@ -96,22 +105,18 @@ suite = {
             "version" : "2.3.1",
           }
         },
-        "org.json" : {
-          "path" : "lib/json-20160810.jar",
+        "TruffleJSON" : {
           "urls" : [
-            "https://search.maven.org/remotecontent?filepath=org/json/json/20160810/json-20160810.jar",
+            "https://github.com/oracle/graal/releases/download/trufflejson-20180130/trufflejson-20180130.jar",
           ],
-          "sha1" : "aca5eb39e2a12fddd6c472b240afe9ebea3a6733",
-          "maven" : {
-            "groupId" : "org.json",
-            "artifactId" : "json",
-            "version" : "20160810",
-          }
+          "sha1" : "8819cea8bfe22c9c63f55465e296b3855ea41786",
         },
     },
 
     "distributions": {
         "CHROMEINSPECTOR": {
+            # This distribution defines a module.
+            "moduleName" : "com.oracle.truffle.tools.chromeinspector",
             "dependencies": ["com.oracle.truffle.tools.chromeinspector"],
             "distDependencies" : [
                 "truffle:TRUFFLE_API",
@@ -140,6 +145,8 @@ suite = {
             },
         },
         "TRUFFLE_PROFILER": {
+            # This distribution defines a module.
+            "moduleName" : "com.oracle.truffle.tools.profiler",
             "dependencies": [
                 "com.oracle.truffle.tools.profiler",
             ],

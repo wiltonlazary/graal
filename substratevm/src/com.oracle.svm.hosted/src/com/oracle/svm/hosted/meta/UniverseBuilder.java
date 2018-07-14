@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -1080,7 +1082,7 @@ public class UniverseBuilder {
         SubstrateReferenceMap referenceMap = new SubstrateReferenceMap();
         for (HostedField field : fields) {
             if (field.getType().getStorageKind() == JavaKind.Object && field.hasLocation() && field.getAnnotation(ExcludeFromReferenceMap.class) == null) {
-                referenceMap.markReferenceAtIndex(field.getLocation() / ConfigurationValues.getTarget().wordSize);
+                referenceMap.markReferenceAtOffset(field.getLocation(), true);
             }
         }
         if (type.isInstanceClass()) {
@@ -1090,8 +1092,7 @@ public class UniverseBuilder {
              */
             final int monitorOffset = instanceClass.getMonitorFieldOffset();
             if (monitorOffset != 0) {
-                final int monitorIndex = monitorOffset / ConfigurationValues.getTarget().wordSize;
-                referenceMap.markReferenceAtIndex(monitorIndex);
+                referenceMap.markReferenceAtOffset(monitorOffset, true);
             }
         }
         return referenceMap;

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -824,7 +826,21 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
         if (this.graph().hasValueProxies()) {
             if (trueSuccessor instanceof LoopExitNode && falseSuccessor instanceof LoopExitNode) {
                 assert ((LoopExitNode) trueSuccessor).loopBegin() == ((LoopExitNode) falseSuccessor).loopBegin();
-                assert trueSuccessor.usages().isEmpty() && falseSuccessor.usages().isEmpty();
+                /*
+                 * we can collapse all proxy nodes on one loop exit, the surviving one, which will
+                 * be the true successor
+                 */
+                if (falseSuccessor.anchored().isEmpty() && falseSuccessor.usages().isNotEmpty()) {
+                    for (Node n : falseSuccessor.usages().snapshot()) {
+                        assert n instanceof ProxyNode;
+                        ((ProxyNode) n).setProxyPoint((LoopExitNode) trueSuccessor);
+                    }
+                }
+                /*
+                 * The true successor (surviving loop exit) can have usages, namely proxy nodes, the
+                 * false successor however, must not have usages any more after the code above
+                 */
+                assert trueSuccessor.anchored().isEmpty() && falseSuccessor.usages().isEmpty();
                 return this.graph().addOrUnique(new ValueProxyNode(replacement, (LoopExitNode) trueSuccessor));
             }
         }

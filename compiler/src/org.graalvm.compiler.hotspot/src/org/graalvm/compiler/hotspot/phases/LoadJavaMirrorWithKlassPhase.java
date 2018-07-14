@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -114,7 +116,7 @@ public class LoadJavaMirrorWithKlassPhase extends BasePhase<PhaseContext> {
                     if (oopEncoding != null) {
                         stamp = HotSpotNarrowOopStamp.compressed((AbstractObjectStamp) stamp, oopEncoding);
                     }
-                    AddressNode address = graph.unique(new OffsetAddressNode(clazz, ConstantNode.forLong(typeField.offset(), graph)));
+                    AddressNode address = graph.unique(new OffsetAddressNode(clazz, ConstantNode.forLong(typeField.getOffset(), graph)));
                     ValueNode read = graph.unique(new FloatingReadNode(address, FINAL_LOCATION, null, stamp));
 
                     if (oopEncoding == null || ((HotSpotObjectConstant) constant).isCompressed()) {

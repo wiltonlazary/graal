@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -200,14 +202,15 @@ public abstract class PartialEvaluator {
         OptionValues options = TruffleCompilerOptions.getOptions();
         ResolvedJavaMethod rootMethod = rootForCallTarget(compilable);
         // @formatter:off
-        final StructuredGraph graph = new StructuredGraph.Builder(options, debug, allowAssumptions).
+        StructuredGraph.Builder builder = new StructuredGraph.Builder(options, debug, allowAssumptions).
                         name(name).
                         method(rootMethod).
                         speculationLog(log).
                         compilationId(compilationId).
-                        cancellable(cancellable).
-                        build();
+                        cancellable(cancellable);
         // @formatter:on
+        builder = customizeStructuredGraphBuilder(builder);
+        final StructuredGraph graph = builder.build();
 
         try (DebugContext.Scope s = debug.scope("CreateGraph", graph);
                         Indent indent = debug.logAndIndent("createGraph %s", graph);) {
@@ -229,6 +232,13 @@ public abstract class PartialEvaluator {
         }
 
         return graph;
+    }
+
+    /**
+     * Hook for subclasses: customize the StructuredGraph.
+     */
+    protected StructuredGraph.Builder customizeStructuredGraphBuilder(StructuredGraph.Builder builder) {
+        return builder;
     }
 
     /**

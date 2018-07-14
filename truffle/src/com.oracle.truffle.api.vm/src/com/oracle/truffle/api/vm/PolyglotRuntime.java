@@ -27,7 +27,6 @@ package com.oracle.truffle.api.vm;
 import static com.oracle.truffle.api.vm.VMAccessor.INSTRUMENT;
 import static com.oracle.truffle.api.vm.VMAccessor.LANGUAGE;
 import static com.oracle.truffle.api.vm.VMAccessor.NODES;
-import static com.oracle.truffle.api.vm.VMAccessor.SPI;
 
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -46,9 +45,9 @@ import org.graalvm.polyglot.Engine;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.InstrumentInfo;
+import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.impl.DispatchOutputStream;
 import com.oracle.truffle.api.nodes.LanguageInfo;
-import com.oracle.truffle.api.vm.LanguageCache.LoadedLanguage;
 
 /**
  * @since 0.25
@@ -104,7 +103,7 @@ public final class PolyglotRuntime {
         }
         this.automaticDispose = automaticDispose;
         this.languages = languageList;
-        this.instruments = createInstruments(InstrumentCache.load(SPI.allLoaders()));
+        this.instruments = createInstruments(InstrumentCache.load(VMAccessor.allLoaders()));
         for (Instrument instrument : instruments.values()) {
             instInfos.put(instrument.getId(), LANGUAGE.createInstrument(instrument, instrument.getId(), instrument.getName(), instrument.getVersion()));
         }
@@ -187,6 +186,7 @@ public final class PolyglotRuntime {
         final PolyglotEngineProfile engineProfile;
         final int languageId;
         final LanguageInfo language;
+        volatile TruffleLanguage<?> spi;
 
         OptionDescriptors options;
         volatile boolean initialized;
@@ -223,18 +223,18 @@ public final class PolyglotRuntime {
             return runtime;
         }
 
-        LanguageInfo getLanguageEnsureInitialized() {
-            if (!initialized) {
+        TruffleLanguage<?> getLanguageEnsureInitialized() {
+            if (spi == null) {
                 synchronized (this) {
-                    if (!initialized) {
+                    if (spi == null) {
                         initialized = true;
-                        LoadedLanguage loadedLanguage = cache.loadLanguage();
-                        LANGUAGE.initializeLanguage(language, loadedLanguage.getLanguage(), loadedLanguage.isSingleton());
-                        options = LANGUAGE.describeOptions(loadedLanguage.getLanguage(), cache.getId());
+                        spi = cache.loadLanguage();
+                        LANGUAGE.initializeLanguage(spi, language, this);
+                        options = LANGUAGE.describeOptions(spi, cache.getId());
                     }
                 }
             }
-            return language;
+            return spi;
         }
 
     }

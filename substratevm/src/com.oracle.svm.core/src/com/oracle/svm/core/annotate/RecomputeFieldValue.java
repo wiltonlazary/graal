@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -27,6 +29,7 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
+import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
 
 /**
@@ -110,14 +113,14 @@ public @interface RecomputeFieldValue {
         /**
          * Computes the new field value.
          *
-         * @param original The original field (if {@link RecomputeFieldValue} is used for an.
-         * @link{Alias field).
+         * @param original The original field (if {@link RecomputeFieldValue} is used for an
+         *            {@link Alias} field).
          * @param annotated The field annotated with {@link RecomputeFieldValue}.
          * @param receiver The original object for instance fields, or {@code null} for static
          *            fields.
          * @return The new field value.
          */
-        Object compute(ResolvedJavaField original, ResolvedJavaField annotated, Object receiver);
+        Object compute(MetaAccessProvider metaAccess, ResolvedJavaField original, ResolvedJavaField annotated, Object receiver);
     }
 
     /**

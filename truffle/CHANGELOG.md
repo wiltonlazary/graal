@@ -2,12 +2,42 @@
 
 This changelog summarizes major changes between Truffle versions relevant to languages implementors building upon the Truffle framework. The main focus is on APIs exported by Truffle.
 
+## Version 1.0.0 RC4
+
+* Added `TruffleLanguage.Env.isHostFunction`.
+* Added Java interop support for converting executable values to legacy functional interfaces without a `@FunctionalInterface` annotation.
+* Added `TruffleLogger.getLogger(String)` to obtain the root loger of a language or instrument.
+* Introduced per language [context policy](http://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/TruffleLanguage.ContextPolicy.html). Languages are encouraged to configure the most permissive policy that they can support. 
+* Changed default context policy from SHARED to EXCLUSIVE, i.e. there is one exclusive language instance per polyglot or inner context by default. This can be configured by the language 
+using the [context policy](http://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/TruffleLanguage.ContextPolicy.html).
+* TruffleInstrument.Env.lookup(LanguagInfo, Class) now requires to be entered in a context for the current thread.
+* Removed deprecated FindContextNode (deprecated since 0.25).
+* All languages now need to have a public zero argument constructor. Using a static singleton field is no longer supported.
+* Renamed and changed the return value of the method for TruffleLanguage.initializeMultiContext to TruffleLanguage.initializeMultipleContexts. The original method remains but is now deprecated.
+* Added [SourceSectionFilter#includes](http://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/instrumentation/SourceSectionFilter.html#includes-com.oracle.truffle.api.nodes.Node-)
+
+## Version 1.0.0 RC3
+
+* Removed deprecated ResultVerifier.getDefaultResultVerfier.
+* Deprecated `com.oracle.truffle.api.frame.FrameDescriptor.shallowCopy` and `com.oracle.truffle.api.frame.FrameSlot.getFrameDescriptor` 
+* Added [DebugValue#set](http://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/debug/DebugValue.html#set-java.lang.Object-) to set primitive values to a debug value.
+* Added support for [logging](http://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/TruffleLogger.html) in Truffle languages and instruments.
+
 ## Version 1.0.0 RC2
 
 * Added notification when [multiple language contexts](http://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/TruffleLanguage.html#initializeMultiContext--) were created for a language instance. Allows languages to invalidate assumptions only valid with a single context. Returning true also allows to enable caching of ASTs per language and not only per context.
 * Added [asBoxedGuestValue](http://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/TruffleLanguage.Env.html#asBoxedGuestValue-java.lang.Object-) method that allows to expose host members for primitive interop values.
 * Added default value `"inherit"` to [TruffleLanguage.Registration#version](http://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/TruffleLanguage.Registration.html#version--) which makes the language to inherit version from [Engine#getVersion](http://www.graalvm.org/truffle/javadoc/org/graalvm/polyglot/Engine.html#getVersion--). 
 * Changed default value of [TruffleInstrument.Registration#version](http://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/TruffleInstrument.Registration.html#version--) from `""` to `"inherit"` which makes the instrument to inherit version from [Engine#getVersion](http://www.graalvm.org/truffle/javadoc/org/graalvm/polyglot/Engine.html#getVersion--). An instrument previously not specifying any version will newly get version from Engine.
+* Added new annotation @IncomingConverter and @OutgoingConverter to declare methods for [generated wrappers](http://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/instrumentation/GenerateWrapper.html) that allow to convert values when they are exposed to or introduced by the instrumentation framework.
+* The documentation of [FrameDescriptor#getSize](http://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/frame/FrameDescriptor.html#getSize--) clarifies that it returns the size of an array which is needed for storing all the slots in it using their `FrameSlot#getIndex()` as a position in the array. (The number may be bigger than the number of slots, if some slots are removed.)
+* Added an `InstrumentExceptionsAreThrown` engine option to propagate exceptions thrown by instruments.
+* Added [Instrumenter.visitLoadedSourceSections](http://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/instrumentation/Instrumenter.html#visitLoadedSourceSections-com.oracle.truffle.api.instrumentation.SourceSectionFilter-com.oracle.truffle.api.instrumentation.LoadSourceSectionListener-) to be notified about loaded source sections that corresponds to a filter.
+* Added [DebugValue#canExecute](http://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/debug/DebugValue.html#canExecute--) to distinguish executable values and [DebugValue#getProperty](http://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/debug/DebugValue.html#getProperty-java.lang.String-) to get a property value by its name.
+* Removed deprecated `TruffleLanguage.Env.lookupSymbol` method.
+* All Truffle source objects are now automatically weakly internalized when created using the source builder. The source builder will now return the same instance for every source where it was previously just equal.
+* Added `Source.Builder.cached(boolean)` and `Source.isCached()` to configure caching behavior by source.
+* Removed deprecated `Source.getCode()` and `SourceSection.getCode`.
 
 ## Version 1.0.0 RC1
 

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -88,6 +90,33 @@ public class AMD64StringSubstitutions {
             return result + totalOffset;
         }
         return result;
+    }
+
+    // Only exists in JDK <= 8
+    @MethodSubstitution(isStatic = false, optional = true)
+    public static int indexOf(String source, int ch, int origFromIndex) {
+        int fromIndex = origFromIndex;
+        final int sourceCount = source.length();
+        if (fromIndex >= sourceCount) {
+            // Note: fromIndex might be near -1>>>1.
+            return -1;
+        }
+        if (fromIndex < 0) {
+            fromIndex = 0;
+        }
+
+        if (ch < Character.MIN_SUPPLEMENTARY_CODE_POINT) {
+            char[] sourceArray = StringSubstitutions.getValue(source);
+
+            Pointer sourcePointer = Word.objectToTrackedPointer(sourceArray).add(charArrayBaseOffset(INJECTED)).add(fromIndex * charArrayIndexScale(INJECTED));
+            int result = AMD64ArrayIndexOfNode.optimizedArrayIndexOf(sourcePointer, sourceCount - fromIndex, (char) ch, JavaKind.Char);
+            if (result != -1) {
+                return result + fromIndex;
+            }
+            return result;
+        } else {
+            return indexOf(source, ch, origFromIndex);
+        }
     }
 
     @MethodSubstitution(isStatic = false)

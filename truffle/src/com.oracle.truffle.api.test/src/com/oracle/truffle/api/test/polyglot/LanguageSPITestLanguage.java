@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -31,11 +33,12 @@ import java.util.function.Function;
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleLanguage;
+import com.oracle.truffle.api.TruffleLanguage.ContextPolicy;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.test.polyglot.LanguageSPITestLanguage.LanguageContext;
 
-@TruffleLanguage.Registration(id = LanguageSPITestLanguage.ID, name = LanguageSPITestLanguage.ID, version = "1.0", mimeType = LanguageSPITestLanguage.ID)
+@TruffleLanguage.Registration(id = LanguageSPITestLanguage.ID, name = LanguageSPITestLanguage.ID, version = "1.0", mimeType = LanguageSPITestLanguage.ID, contextPolicy = ContextPolicy.SHARED)
 public class LanguageSPITestLanguage extends TruffleLanguage<LanguageContext> {
 
     static final String ID = "LanguageSPITest";
@@ -67,19 +70,24 @@ public class LanguageSPITestLanguage extends TruffleLanguage<LanguageContext> {
 
     @Override
     protected CallTarget parse(ParsingRequest request) throws Exception {
-        getContext(); // We must have the context here
-        Object result = "null result";
-        if (runinside != null) {
-            try {
-                result = runinside.apply(getContext().env);
-            } finally {
-                runinside = null;
+        return Truffle.getRuntime().createCallTarget(new RootNode(this) {
+            @Override
+            public Object execute(VirtualFrame frame) {
+                getContext(); // We must have the context here
+                Object result = "null result";
+                if (runinside != null) {
+                    try {
+                        result = runinside.apply(getContext().env);
+                    } finally {
+                        runinside = null;
+                    }
+                }
+                if (result == null) {
+                    result = "null result";
+                }
+                return result;
             }
-        }
-        if (result == null) {
-            result = "null result";
-        }
-        return Truffle.getRuntime().createCallTarget(RootNode.createConstantNode(result));
+        });
     }
 
     @Override

@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -33,6 +35,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import com.oracle.svm.core.OS;
 import com.oracle.svm.core.posix.headers.PosixDirectives;
 import com.oracle.svm.core.util.InterruptImageBuilding;
 import com.oracle.svm.core.util.UserError;
@@ -129,8 +132,11 @@ public class CAnnotationProcessor extends CCompilerInvoker {
     }
 
     private Path compileQueryCode(Path queryFile) {
-        /* remove the '.c' from the end to get the binary name */
-        String binaryName = queryFile.toString().substring(0, queryFile.toString().length() - 2);
+        /* remove the '.c' or '.cpp' from the end to get the binary name */
+        String binaryName = queryFile.toString().substring(0, queryFile.toString().lastIndexOf("."));
+        if (OS.getCurrent() == OS.WINDOWS) {
+            binaryName = binaryName + ".exe";
+        }
         Path binary = Paths.get(binaryName);
         return compileAndParseError(codeCtx.getDirectives().getOptions(), queryFile.normalize(), binary.normalize());
     }

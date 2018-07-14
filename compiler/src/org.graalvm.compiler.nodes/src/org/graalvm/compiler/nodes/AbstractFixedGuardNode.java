@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -36,7 +38,7 @@ import org.graalvm.compiler.nodes.util.GraphUtil;
 
 import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.DeoptimizationReason;
-import jdk.vm.ci.meta.JavaConstant;
+import jdk.vm.ci.meta.SpeculationLog.Speculation;
 
 @NodeInfo
 public abstract class AbstractFixedGuardNode extends DeoptimizingFixedWithNextNode implements Simplifiable, GuardingNode, DeoptimizingGuard {
@@ -45,7 +47,7 @@ public abstract class AbstractFixedGuardNode extends DeoptimizingFixedWithNextNo
     @Input(InputType.Condition) protected LogicNode condition;
     protected DeoptimizationReason reason;
     protected DeoptimizationAction action;
-    protected JavaConstant speculation;
+    protected Speculation speculation;
     protected boolean negated;
     protected NodeSourcePosition noDeoptSuccessorPosition;
 
@@ -65,17 +67,18 @@ public abstract class AbstractFixedGuardNode extends DeoptimizingFixedWithNextNo
         this.negated = negated;
     }
 
-    protected AbstractFixedGuardNode(NodeClass<? extends AbstractFixedGuardNode> c, LogicNode condition, DeoptimizationReason deoptReason, DeoptimizationAction action, JavaConstant speculation,
+    protected AbstractFixedGuardNode(NodeClass<? extends AbstractFixedGuardNode> c, LogicNode condition, DeoptimizationReason deoptReason, DeoptimizationAction action, Speculation speculation,
                     boolean negated) {
         super(c, StampFactory.forVoid());
         this.action = action;
+        assert speculation != null;
         this.speculation = speculation;
         this.negated = negated;
         this.condition = condition;
         this.reason = deoptReason;
     }
 
-    protected AbstractFixedGuardNode(NodeClass<? extends AbstractFixedGuardNode> c, LogicNode condition, DeoptimizationReason deoptReason, DeoptimizationAction action, JavaConstant speculation,
+    protected AbstractFixedGuardNode(NodeClass<? extends AbstractFixedGuardNode> c, LogicNode condition, DeoptimizationReason deoptReason, DeoptimizationAction action, Speculation speculation,
                     boolean negated, NodeSourcePosition noDeoptSuccessorPosition) {
         this(c, condition, deoptReason, action, speculation, negated);
         this.noDeoptSuccessorPosition = noDeoptSuccessorPosition;
@@ -92,7 +95,7 @@ public abstract class AbstractFixedGuardNode extends DeoptimizingFixedWithNextNo
     }
 
     @Override
-    public JavaConstant getSpeculation() {
+    public Speculation getSpeculation() {
         return speculation;
     }
 

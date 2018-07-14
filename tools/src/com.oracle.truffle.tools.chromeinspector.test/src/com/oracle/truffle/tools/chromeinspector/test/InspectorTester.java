@@ -39,6 +39,7 @@ import org.graalvm.polyglot.Value;
 import com.oracle.truffle.tools.chromeinspector.TruffleExecutionContext;
 import com.oracle.truffle.tools.chromeinspector.server.ConnectionWatcher;
 import com.oracle.truffle.tools.chromeinspector.server.InspectServerSession;
+import com.oracle.truffle.tools.chromeinspector.types.ExceptionDetails;
 import com.oracle.truffle.tools.chromeinspector.types.RemoteObject;
 
 public final class InspectorTester {
@@ -50,9 +51,14 @@ public final class InspectorTester {
     }
 
     public static InspectorTester start(boolean suspend) throws InterruptedException {
+        return start(suspend, false, false);
+    }
+
+    public static InspectorTester start(boolean suspend, final boolean inspectInternal, final boolean inspectInitialization) throws InterruptedException {
         RemoteObject.resetIDs();
+        ExceptionDetails.resetIDs();
         TruffleExecutionContext.resetIDs();
-        InspectExecThread exec = new InspectExecThread(suspend);
+        InspectExecThread exec = new InspectExecThread(suspend, inspectInternal, inspectInitialization);
         exec.start();
         exec.initialized.acquire();
         return new InspectorTester(exec);
@@ -74,6 +80,7 @@ public final class InspectorTester {
         }
         exec.join();
         RemoteObject.resetIDs();
+        ExceptionDetails.resetIDs();
         TruffleExecutionContext.resetIDs();
         return exec.error;
     }
@@ -140,9 +147,57 @@ public final class InspectorTester {
         return true;
     }
 
+    public String receiveMessages(String... messageParts) throws InterruptedException {
+        int part = 0;
+        int pos = 0;
+        StringBuilder allMessages = new StringBuilder();
+        synchronized (exec.receivedMessages) {
+            do {
+                String messages;
+                do {
+                    messages = exec.receivedMessages.toString();
+                    if (messages.isEmpty()) {
+                        exec.receivedMessages.wait();
+                    } else {
+                        break;
+                    }
+                } while (true);
+                allMessages.append(messages);
+                if (part == 0) {
+                    int l = messageParts[0].length();
+                    if (allMessages.length() < l) {
+                        continue;
+                    }
+                    assertEquals(messageParts[0], allMessages.substring(0, l));
+                    pos = l;
+                    part++;
+                }
+                while (part < messageParts.length) {
+                    int index = allMessages.indexOf(messageParts[part], pos);
+                    if (index >= pos) {
+                        pos = index + messageParts[part].length();
+                        part++;
+                    } else {
+                        break;
+                    }
+                }
+                if (part < messageParts.length) {
+                    continue;
+                }
+                int end = pos - allMessages.length() + messages.length();
+                exec.receivedMessages.delete(0, end);
+                allMessages.delete(pos, allMessages.length());
+                break;
+            } while (exec.receivedMessages.delete(0, exec.receivedMessages.length()) != null);
+        }
+        return allMessages.toString();
+    }
+
     private static class InspectExecThread extends Thread implements InspectServerSession.MessageListener {
 
         private final boolean suspend;
+        private boolean inspectInternal = false;
+        private boolean inspectInitialization = false;
         private Context context;
         private InspectServerSession inspect;
         private ConnectionWatcher connectionWatcher;
@@ -155,20 +210,23 @@ public final class InspectorTester {
         private boolean catchError;
         private Throwable error;
 
-        InspectExecThread(boolean suspend) {
+        InspectExecThread(boolean suspend, final boolean inspectInternal, final boolean inspectInitialization) {
             super("Inspector Executor");
             this.suspend = suspend;
+            this.inspectInternal = inspectInternal;
+            this.inspectInitialization = inspectInitialization;
         }
 
         @Override
         public void run() {
             Engine engine = Engine.create();
-            InspectorTestInstrument.suspend = suspend;
             Instrument testInstrument = engine.getInstruments().get(InspectorTestInstrument.ID);
-            inspect = testInstrument.lookup(InspectServerSession.class);
+            InspectSessionInfoProvider sessionInfoProvider = testInstrument.lookup(InspectSessionInfoProvider.class);
+            InspectSessionInfo sessionInfo = sessionInfoProvider.getSessionInfo(suspend, inspectInternal, inspectInitialization);
+            inspect = sessionInfo.getInspectServerSession();
             try {
-                connectionWatcher = testInstrument.lookup(ConnectionWatcher.class);
-                contextId = testInstrument.lookup(Long.class);
+                connectionWatcher = sessionInfo.getConnectionWatcher();
+                contextId = sessionInfo.getId();
                 inspect.setMessageListener(this);
                 context = Context.newBuilder().engine(engine).allowAllAccess(true).build();
                 initialized.release();

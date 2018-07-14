@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -34,12 +36,11 @@ import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.serviceprovider.GraalServices;
 
 import jdk.vm.ci.hotspot.HotSpotJVMCIRuntime;
-import jdk.vm.ci.hotspot.HotSpotJVMCIRuntimeProvider;
 
 /**
  * An option for a configurable file name that can also open a {@link PrintStream} on the file. If
  * no value is given for the option, the stream will output to HotSpot's
- * {@link HotSpotJVMCIRuntimeProvider#getLogStream() log} stream
+ * {@link HotSpotJVMCIRuntime#getLogStream() log} stream
  */
 public class PrintStreamOptionKey extends OptionKey<String> {
 
@@ -63,9 +64,9 @@ public class PrintStreamOptionKey extends OptionKey<String> {
     }
 
     /**
-     * An output stream that redirects to {@link HotSpotJVMCIRuntimeProvider#getLogStream()}. The
-     * {@link HotSpotJVMCIRuntimeProvider#getLogStream()} value is only accessed the first time an
-     * IO operation is performed on the stream. This is required to break a deadlock in early JVMCI
+     * An output stream that redirects to {@link HotSpotJVMCIRuntime#getLogStream()}. The
+     * {@link HotSpotJVMCIRuntime#getLogStream()} value is only accessed the first time an IO
+     * operation is performed on the stream. This is required to break a deadlock in early JVMCI
      * initialization.
      */
     static class DelayedOutputStream extends OutputStream {
@@ -105,7 +106,7 @@ public class PrintStreamOptionKey extends OptionKey<String> {
 
     /**
      * Gets the print stream configured by this option. If no file is configured, the print stream
-     * will output to HotSpot's {@link HotSpotJVMCIRuntimeProvider#getLogStream() log} stream.
+     * will output to HotSpot's {@link HotSpotJVMCIRuntime#getLogStream() log} stream.
      */
     public PrintStream getStream(OptionValues options) {
         String nameTemplate = getValue(options);

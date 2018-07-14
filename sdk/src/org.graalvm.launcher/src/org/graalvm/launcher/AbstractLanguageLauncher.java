@@ -64,8 +64,6 @@ public abstract class AbstractLanguageLauncher extends Launcher {
         }
     }
 
-    // TODO: remove me: both of these are workarounds for other issues
-    protected static final boolean IN_GRAALVM = !Boolean.getBoolean("org.graalvm.launcher.standalone");
     protected static final boolean IS_LIBPOLYGLOT = Boolean.getBoolean("graalvm.libpolyglot");
 
     final void launch(List<String> args, Map<String, String> defaultOptions, boolean doNativeSetup) {
@@ -74,7 +72,7 @@ public abstract class AbstractLanguageLauncher extends Launcher {
             polyglotOptions = new HashMap<>();
         }
 
-        if (isAOT() && doNativeSetup && IN_GRAALVM) {
+        if (isAOT() && doNativeSetup) {
             assert nativeAccess != null;
             nativeAccess.setGraalVMProperties(getLanguageId());
         }
@@ -83,7 +81,7 @@ public abstract class AbstractLanguageLauncher extends Launcher {
 
         if (isAOT() && doNativeSetup && !IS_LIBPOLYGLOT) {
             assert nativeAccess != null;
-            nativeAccess.maybeExec(args, false, polyglotOptions, getDefaultVMType(), IN_GRAALVM);
+            nativeAccess.maybeExec(args, false, polyglotOptions, getDefaultVMType());
         }
 
         for (String arg : unrecognizedArgs) {
@@ -169,15 +167,19 @@ public abstract class AbstractLanguageLauncher extends Launcher {
         if (language == null) {
             throw abort(String.format("Unknown language: '%s'!", languageId));
         }
-        String implementationName = language.getImplementationName();
-        if (implementationName == null || implementationName.length() == 0) {
+        String languageImplementationName = language.getImplementationName();
+        if (languageImplementationName == null || languageImplementationName.length() == 0) {
             String languageName = language.getName();
             if (languageName == null || languageName.length() == 0) {
                 languageName = languageId;
             }
-            implementationName = "Graal " + languageName;
+            languageImplementationName = "Graal " + languageName;
         }
-        System.out.println(String.format("%s %s (GraalVM %s)", implementationName, language.getVersion(), engine.getVersion()));
+        String engineImplementationName = engine.getImplementationName();
+        if (isAOT()) {
+            engineImplementationName += " Native";
+        }
+        System.out.println(String.format("%s %s (%s %s)", languageImplementationName, language.getVersion(), engineImplementationName, engine.getVersion()));
     }
 
     protected void runVersionAction(VersionAction action, Engine engine) {

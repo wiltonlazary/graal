@@ -38,6 +38,12 @@ public class CommonConstants {
     public static final String CAP_OS_NAME = "os_name";
 
     /**
+     * Replaceable token for the path to the graalvm installation. The token can be used in
+     * messages.
+     */
+    public static final String TOKEN_GRAALVM_PATH = "graalvm_home"; // NOI18N
+
+    /**
      * Relative path for the component storage.
      */
     public static final String PATH_COMPONENT_STORAGE = "jre/lib/installer/components"; // NOI18N
@@ -46,5 +52,24 @@ public class CommonConstants {
 
     public static final String PATH_JRE_BIN = "jre/bin/"; // NOI18N
 
+    /**
+     * System property to specify catalog URL.
+     */
     public static final String SYSPROP_CATALOG_URL = "org.graalvm.component.catalog"; // NOI18N
+
+    /**
+     * Env variable that controls catalog URL.
+     */
+    public static final String ENV_CATALOG_URL = "GRAALVM_CATALOG"; // NOI18N
+
+    /**
+     * Warns the user to rebuild the polyglot image and/or libraries.
+     */
+    public static final boolean WARN_REBUILD_IMAGES = true;
+
+    /**
+     * Component ID prefix for graalvm core components. The prefix will be stripped from the
+     * display, if the component is not ambiguous.
+     */
+    public static final String GRAALVM_CORE_PREFIX = "org.graalvm."; // NOI18N
 }

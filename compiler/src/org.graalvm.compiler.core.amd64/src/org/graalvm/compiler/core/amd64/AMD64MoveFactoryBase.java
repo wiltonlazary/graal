@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -23,8 +25,8 @@
 
 package org.graalvm.compiler.core.amd64;
 
-import static org.graalvm.compiler.asm.amd64.AMD64Assembler.OperandSize.QWORD;
-import static org.graalvm.compiler.asm.amd64.AMD64Assembler.OperandSize.WORD;
+import static org.graalvm.compiler.asm.amd64.AMD64BaseAssembler.OperandSize.QWORD;
+import static org.graalvm.compiler.asm.amd64.AMD64BaseAssembler.OperandSize.WORD;
 
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.Equivalence;

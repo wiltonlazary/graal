@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -60,8 +62,8 @@ public class CoreFoundation {
     public static native void CFStringAppendCharacters(CFMutableStringRef theString, PointerBase chars, SignedWord numChars);
 
     /**
-     * @function CFStringNormalize Normalizes the string into the specified form as described in
-     *           Unicode Technical Report #15.
+     * Normalizes the string into the specified form as described in Unicode Technical Report #15.
+     * 
      * @param theString The string which is to be normalized. If this parameter is not a valid
      *            mutable CFString, the behavior is undefined.
      * @param theForm The form into which the string is to be normalized. If this parameter is not a

@@ -1,10 +1,12 @@
 /*
- * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -62,6 +64,7 @@ import com.oracle.objectfile.ObjectFile.RelocationKind;
 import com.oracle.objectfile.ObjectFile.Section;
 import com.oracle.objectfile.SectionName;
 import com.oracle.objectfile.macho.MachOObjectFile;
+import com.oracle.svm.core.Isolates;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.c.CConst;
 import com.oracle.svm.core.c.CGlobalDataImpl;
@@ -73,7 +76,6 @@ import com.oracle.svm.core.c.function.GraalIsolateHeader;
 import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.graal.code.CGlobalDataInfo;
 import com.oracle.svm.core.graal.code.CGlobalDataReference;
-import com.oracle.svm.core.posix.PosixIsolates;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.NativeImageOptions;
@@ -246,9 +248,10 @@ public abstract class NativeBootImage extends AbstractBootImage {
         int fileComparison = rm1.getDeclaringClass().getSourceFileName().compareTo(rm2.getDeclaringClass().getSourceFileName());
         if (fileComparison != 0) {
             return fileComparison;
-        } else {
+        } else if (rm1.getLineNumberTable() != null && rm2.getLineNumberTable() != null) {
             return rm1.getLineNumberTable().getLineNumber(0) - rm2.getLineNumberTable().getLineNumber(0);
         }
+        return 0;
     }
 
     private void writeMethodHeader(HostedMethod m, CSourceCodeWriter writer, boolean dynamic) {
@@ -373,15 +376,15 @@ public abstract class NativeBootImage extends AbstractBootImage {
                 heap.setReadOnlySection(heapSection.getName(), 0);
                 long writableSectionOffset = heap.getReadOnlySectionSize();
                 heap.setWritableSection(heapSection.getName(), writableSectionOffset);
-                defineDataSymbol(PosixIsolates.IMAGE_HEAP_BEGIN_SYMBOL_NAME, heapSection, 0);
-                defineDataSymbol(PosixIsolates.IMAGE_HEAP_END_SYMBOL_NAME, heapSection, heapSize);
-                defineDataSymbol(PosixIsolates.IMAGE_HEAP_WRITABLE_BEGIN_SYMBOL_NAME, heapSection, writableSectionOffset);
-                defineDataSymbol(PosixIsolates.IMAGE_HEAP_WRITABLE_END_SYMBOL_NAME, heapSection, writableSectionOffset + heap.getWritableSectionSize());
+                defineDataSymbol(Isolates.IMAGE_HEAP_BEGIN_SYMBOL_NAME, heapSection, 0);
+                defineDataSymbol(Isolates.IMAGE_HEAP_END_SYMBOL_NAME, heapSection, heapSize);
+                defineDataSymbol(Isolates.IMAGE_HEAP_WRITABLE_BEGIN_SYMBOL_NAME, heapSection, writableSectionOffset);
+                defineDataSymbol(Isolates.IMAGE_HEAP_WRITABLE_END_SYMBOL_NAME, heapSection, writableSectionOffset + heap.getWritableSectionSize());
 
                 final long relocatableOffset = heap.getReadOnlyRelocatablePartitionOffset();
                 final long relocatableSize = heap.getReadOnlyRelocatablePartitionSize();
-                defineDataSymbol(PosixIsolates.IMAGE_HEAP_RELOCATABLE_BEGIN_SYMBOL_NAME, heapSection, relocatableOffset);
-                defineDataSymbol(PosixIsolates.IMAGE_HEAP_RELOCATABLE_END_SYMBOL_NAME, heapSection, relocatableOffset + relocatableSize);
+                defineDataSymbol(Isolates.IMAGE_HEAP_RELOCATABLE_BEGIN_SYMBOL_NAME, heapSection, relocatableOffset);
+                defineDataSymbol(Isolates.IMAGE_HEAP_RELOCATABLE_END_SYMBOL_NAME, heapSection, relocatableOffset + relocatableSize);
             } else {
                 heapSectionBuffer = null;
                 heapSectionImpl = null;
@@ -403,7 +406,7 @@ public abstract class NativeBootImage extends AbstractBootImage {
                 heap.writeHeap(debug, heapSectionBuffer, heapSectionBuffer);
 
                 long firstRelocOffset = heap.getFirstRelocatablePointerOffsetInSection();
-                defineDataSymbol(PosixIsolates.IMAGE_HEAP_RELOCATABLE_FIRST_RELOC_POINTER_NAME, heapSection, firstRelocOffset);
+                defineDataSymbol(Isolates.IMAGE_HEAP_RELOCATABLE_FIRST_RELOC_POINTER_NAME, heapSection, firstRelocOffset);
                 assert ((ByteBuffer) heapSectionBuffer.getBuffer().asReadOnlyBuffer().position(0)).getLong((int) firstRelocOffset) == 0;
             } else {
                 assert heapSectionBuffer == null;
@@ -723,7 +726,7 @@ public abstract class NativeBootImage extends AbstractBootImage {
     }
 
     public NativeBootImage(NativeImageKind k, HostedUniverse universe, HostedMetaAccess metaAccess, NativeLibraries nativeLibs, NativeImageHeap heap, NativeImageCodeCache codeCache,
-                    List<HostedMethod> entryPoints, ClassLoader imageClassLoader) {
+                    List<HostedMethod> entryPoints, HostedMethod mainEntryPoint, ClassLoader imageClassLoader) {
         super(k, universe, metaAccess, nativeLibs, heap, codeCache, entryPoints, imageClassLoader);
 
         uniqueEntryPoints.addAll(entryPoints);
@@ -735,6 +738,10 @@ public abstract class NativeBootImage extends AbstractBootImage {
             if (objectFile == null) {
                 throw new Error("Unsupported objectfile format: " + ObjectFile.getNativeFormat());
             }
+        }
+
+        if (mainEntryPoint != null) {
+            objectFile.setMainEntryPoint(globalSymbolNameForMethod(mainEntryPoint));
         }
 
         objectFile.setByteOrder(ConfigurationValues.getTarget().arch.getByteOrder());

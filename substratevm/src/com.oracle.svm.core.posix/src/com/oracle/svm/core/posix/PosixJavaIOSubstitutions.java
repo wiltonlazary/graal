@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -107,6 +109,8 @@ import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.annotate.TargetElement;
+import com.oracle.svm.core.jdk.JDK8OrEarlier;
 import com.oracle.svm.core.posix.headers.Dirent.DIR;
 import com.oracle.svm.core.posix.headers.Dirent.dirent;
 import com.oracle.svm.core.posix.headers.Dirent.direntPointer;
@@ -147,7 +151,7 @@ final class Target_java_io_UnixFileSystem {
 
     @Substitute
     public int getBooleanAttributes0(File f) {
-        stat stat = StackValue.get(SizeOf.get(stat.class));
+        stat stat = StackValue.get(stat.class);
         try (CCharPointerHolder pathPin = CTypeConversion.toCString(f.getPath())) {
             CCharPointer pathPtr = pathPin.get();
             if (stat(pathPtr, stat) == 0) {
@@ -180,7 +184,7 @@ final class Target_java_io_UnixFileSystem {
 
     @Substitute
     private long getLength(File f) {
-        stat stat = StackValue.get(SizeOf.get(stat.class));
+        stat stat = StackValue.get(stat.class);
         try (CCharPointerHolder pathPin = CTypeConversion.toCString(f.getPath())) {
             CCharPointer pathPtr = pathPin.get();
             if (stat(pathPtr, stat) == 0) {
@@ -205,7 +209,7 @@ final class Target_java_io_UnixFileSystem {
 
         List<String> entries = new ArrayList<>();
         dirent dirent = StackValue.get(SizeOf.get(dirent.class) + PATH_MAX() + 1);
-        direntPointer resultDirent = StackValue.get(SizeOf.get(direntPointer.class));
+        direntPointer resultDirent = StackValue.get(direntPointer.class);
 
         while (readdir_r(dir, dirent, resultDirent) == 0 && !resultDirent.read().isNull()) {
             String name = CTypeConversion.toJavaString(dirent.d_name());
@@ -313,7 +317,7 @@ final class Target_java_io_UnixFileSystem {
 
     @Substitute
     public long getSpace(File f, int t) {
-        statvfs statvfs = StackValue.get(SizeOf.get(statvfs.class));
+        statvfs statvfs = StackValue.get(statvfs.class);
         LibC.memset(statvfs, WordFactory.zero(), WordFactory.unsigned(SizeOf.get(statvfs.class)));
 
         try (CCharPointerHolder pathPin = CTypeConversion.toCString(f.getPath())) {
@@ -336,7 +340,7 @@ final class Target_java_io_UnixFileSystem {
 
     @Substitute
     public boolean setReadOnly(File f) {
-        stat stat = StackValue.get(SizeOf.get(stat.class));
+        stat stat = StackValue.get(stat.class);
         try (CCharPointerHolder pathPin = CTypeConversion.toCString(f.getPath())) {
             CCharPointer pathPtr = pathPin.get();
             if (stat(pathPtr, stat) == 0) {
@@ -361,7 +365,7 @@ final class Target_java_io_UnixFileSystem {
             throw VMError.shouldNotReachHere("illegal access mode");
         }
 
-        stat stat = StackValue.get(SizeOf.get(stat.class));
+        stat stat = StackValue.get(stat.class);
         try (CCharPointerHolder pathPin = CTypeConversion.toCString(f.getPath())) {
             CCharPointer pathPtr = pathPin.get();
             if (stat(pathPtr, stat) == 0) {
@@ -403,7 +407,7 @@ final class Target_java_io_UnixFileSystem {
 
     @Substitute
     public long getLastModifiedTime(File f) {
-        stat stat = StackValue.get(SizeOf.get(stat.class));
+        stat stat = StackValue.get(stat.class);
         try (CCharPointerHolder pathPin = CTypeConversion.toCString(f.getPath())) {
             CCharPointer pathPtr = pathPin.get();
             if (stat(pathPtr, stat) == 0) {
@@ -415,11 +419,11 @@ final class Target_java_io_UnixFileSystem {
 
     @Substitute
     public boolean setLastModifiedTime(File f, long time) {
-        stat stat = StackValue.get(SizeOf.get(stat.class));
+        stat stat = StackValue.get(stat.class);
         try (CCharPointerHolder pathPin = CTypeConversion.toCString(f.getPath())) {
             CCharPointer pathPtr = pathPin.get();
             if (stat(pathPtr, stat) == 0) {
-                timeval timeval = StackValue.get(2, SizeOf.get(timeval.class));
+                timeval timeval = StackValue.get(2, timeval.class);
 
                 // preserve access time
                 timeval access = timeval.addressOf(0);
@@ -456,7 +460,8 @@ final class Target_java_io_FileInputStream {
         PosixUtils.fileOpen(name, fd, O_RDONLY());
     }
 
-    @Substitute
+    @Substitute //
+    @TargetElement(onlyWith = JDK8OrEarlier.class)
     private void close0() throws IOException {
         PosixUtils.fileClose(fd);
     }
@@ -472,11 +477,11 @@ final class Target_java_io_FileInputStream {
 
         SignedWord ret = WordFactory.zero();
         boolean av = false;
-        stat stat = StackValue.get(SizeOf.get(stat.class));
+        stat stat = StackValue.get(stat.class);
         if (fstat(handle, stat) >= 0) {
             int mode = stat.st_mode();
             if (Util_java_io_FileInputStream.isChr(mode) || Util_java_io_FileInputStream.isFifo(mode) || Util_java_io_FileInputStream.isSock(mode)) {
-                CIntPointer np = StackValue.get(SizeOf.get(CIntPointer.class));
+                CIntPointer np = StackValue.get(CIntPointer.class);
                 if (ioctl(handle, FIONREAD(), np) >= 0) {
                     ret = WordFactory.signed(np.read());
                     av = true;
@@ -554,7 +559,8 @@ final class Target_java_io_FileOutputStream {
         PosixUtils.fileOpen(name, SubstrateUtil.getFileDescriptor(KnownIntrinsics.unsafeCast(this, FileOutputStream.class)), O_WRONLY() | O_CREAT() | (append ? O_APPEND() : O_TRUNC()));
     }
 
-    @Substitute
+    @Substitute //
+    @TargetElement(onlyWith = JDK8OrEarlier.class)
     private void close0() throws IOException {
         PosixUtils.fileClose(SubstrateUtil.getFileDescriptor(KnownIntrinsics.unsafeCast(this, FileOutputStream.class)));
     }
@@ -637,7 +643,8 @@ final class Target_java_io_RandomAccessFile {
         PosixUtils.fileOpen(name, fd, flags);
     }
 
-    @Substitute
+    @Substitute //
+    @TargetElement(onlyWith = JDK8OrEarlier.class)
     private void close0() throws IOException {
         PosixUtils.fileClose(fd);
     }
@@ -717,7 +724,7 @@ final class Target_java_io_Console {
         /* Initialize the echo shut down hook, once. */
         Util_java_io_Console.addShutdownHook();
         // 052     struct termios tio;
-        final Termios.termios tio = StackValue.get(SizeOf.get(Termios.termios.class));
+        final Termios.termios tio = StackValue.get(Termios.termios.class);
         // 053     jboolean old;
         boolean old;
         // 054     int tty = fileno(stdin);
@@ -777,9 +784,16 @@ class Util_java_io_Console {
                     try {
                         /*
                          * Compare this code to the static initialization code of {@link
-                         * java.io.Console}.
+                         * java.io.Console}, except I am short-circuiting the trampoline through
+                         * {@link sun.misc.SharedSecrets#getJavaLangAccess()}.
                          */
-                        Target_sun_misc_SharedSecrets.getJavaLangAccess().registerShutdownHook(
+                        /*
+                         * The {@code add} method is declared in {@code
+                         * com.oracle.svm.core.jdk.Target_java_lang_Shutdown} rather than in {@code
+                         * com.oracle.svm.core.posix.Target_java_lang_Shutdown}, so I have to
+                         * fully-qualify the reference.
+                         */
+                        com.oracle.svm.core.jdk.Target_java_lang_Shutdown.add(
                                         0 /* shutdown hook invocation order */,
                                         false /* only register if shutdown is not in progress */,
                                         new Runnable() {/* hook */

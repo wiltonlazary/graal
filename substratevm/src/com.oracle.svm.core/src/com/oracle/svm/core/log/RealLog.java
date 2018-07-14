@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -30,7 +32,6 @@ import org.graalvm.compiler.word.Word;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.LogHandler;
 import org.graalvm.nativeimage.StackValue;
-import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
@@ -159,7 +160,7 @@ public class RealLog extends Log {
 
     @Override
     public Log character(char value) {
-        CCharPointer bytes = StackValue.get(SizeOf.get(CCharPointer.class));
+        CCharPointer bytes = StackValue.get(CCharPointer.class);
         bytes.write((byte) value);
         rawBytes(bytes, WordFactory.unsigned(1));
         return this;
@@ -198,7 +199,7 @@ public class RealLog extends Log {
 
         /* Enough space for 64 digits in binary format, and the '-' for a negative value. */
         final int chunkSize = Long.SIZE + 1;
-        CCharPointer bytes = StackValue.get(chunkSize, SizeOf.get(CCharPointer.class));
+        CCharPointer bytes = StackValue.get(chunkSize, CCharPointer.class);
         int charPos = chunkSize;
 
         boolean negative = signed && value < 0;

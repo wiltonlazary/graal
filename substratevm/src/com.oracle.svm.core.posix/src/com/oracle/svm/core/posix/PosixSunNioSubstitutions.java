@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -25,7 +27,6 @@ package com.oracle.svm.core.posix;
 import java.io.IOException;
 
 import org.graalvm.nativeimage.StackValue;
-import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -102,7 +103,7 @@ public final class PosixSunNioSubstitutions {
         @Substitute
         static void interrupt(int fd) throws IOException {
             // 096     int fakebuf[1];
-            CIntPointer fakebuf = StackValue.get(1, SizeOf.get(CIntPointer.class));
+            CIntPointer fakebuf = StackValue.get(1, CIntPointer.class);
             // 097     fakebuf[0] = 1;
             fakebuf.write(0, 1);
             // 098     if (write(fd, fakebuf, 1) < 0) {
@@ -126,7 +127,7 @@ public final class PosixSunNioSubstitutions {
             // 045     int remaining = timeout;
             int remaining = timeout;
             // 046     struct timeval t;
-            Time.timeval t = StackValue.get(SizeOf.get(Time.timeval.class));
+            Time.timeval t = StackValue.get(Time.timeval.class);
             // 047     int diff;
             long diff;
             // 048

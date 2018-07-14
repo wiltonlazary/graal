@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -42,6 +44,7 @@ import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.DeoptimizationReason;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
+import jdk.vm.ci.meta.SpeculationLog.Speculation;
 
 @NodeInfo(cycles = CYCLES_0, size = SIZE_0)
 public abstract class VirtualFrameAccessorNode extends FixedWithNextNode implements ControlFlowAnchored {
@@ -71,8 +74,8 @@ public abstract class VirtualFrameAccessorNode extends FixedWithNextNode impleme
          */
         LogicNode condition = LogicConstantNode.contradiction();
         tool.addNode(condition);
-        JavaConstant speculation = graph().getSpeculationLog().speculate(frame.getIntrinsifyAccessorsSpeculation());
-        tool.addNode(new FixedGuardNode(condition, DeoptimizationReason.RuntimeConstraint, DeoptimizationAction.InvalidateRecompile, speculation, false));
+        Speculation speculation = graph().getSpeculationLog().speculate(frame.getIntrinsifyAccessorsSpeculation());
+        tool.addNode(new FixedGuardNode(condition, DeoptimizationReason.RuntimeConstraint, DeoptimizationAction.InvalidateReprofile, speculation, false));
 
         if (getStackKind() == JavaKind.Void) {
             tool.delete();

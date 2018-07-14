@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -170,7 +172,7 @@ class TestHelper {
     }
 
     /* Methods tests all test values in combinational order. */
-    static void assertRuns(NodeFactory<? extends ValueNode> factory, Object[] testValues, Object[] result, ExecutionListener listener) {
+    static void assertRuns(NodeFactory<? extends ValueNode> factory, Object[] testValues, Object[] result, TestExecutionListener listener) {
         // test each run by its own.
         for (int i = 0; i < testValues.length; i++) {
             assertValue(createRoot(factory), 0, testValues[i], result[i], listener, true);
@@ -189,7 +191,7 @@ class TestHelper {
         }
     }
 
-    static void assertValue(TestRootNode<? extends ValueNode> root, int index, Object value, Object result, ExecutionListener listener, boolean last) {
+    static void assertValue(TestRootNode<? extends ValueNode> root, int index, Object value, Object result, TestExecutionListener listener, boolean last) {
         Object actualResult = null;
         if (result instanceof Class && Throwable.class.isAssignableFrom((Class<?>) result)) {
             try {
@@ -218,7 +220,7 @@ class TestHelper {
         }
     }
 
-    public static final class LogListener implements ExecutionListener {
+    public static final class LogListener implements TestExecutionListener {
 
         public void afterExecution(TestRootNode<? extends ValueNode> node, int index, Object value, Object expectedResult, Object actualResult, boolean last) {
             System.out.printf("Run %3d Node:%-20s Parameters: %10s Expected: %10s Result %10s%n", index, node.getNode().getClass().getSimpleName(), value, expectedResult, actualResult);
@@ -226,7 +228,7 @@ class TestHelper {
 
     }
 
-    interface ExecutionListener {
+    interface TestExecutionListener {
 
         void afterExecution(TestRootNode<? extends ValueNode> node, int index, Object value, Object expectedResult, Object actualResult, boolean last);
 

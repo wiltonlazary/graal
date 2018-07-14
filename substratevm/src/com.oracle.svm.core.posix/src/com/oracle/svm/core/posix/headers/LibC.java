@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,6 +24,8 @@
  */
 package com.oracle.svm.core.posix.headers;
 
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.function.CFunction;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CCharPointerPointer;
@@ -34,8 +38,9 @@ import com.oracle.svm.core.annotate.Uninterruptible;
 //Checkstyle: stop
 
 /**
- * Basic functions from the standard C library that we require to be present on all platforms.
+ * Basic functions from the standard C library that we require to be present on all Posix platforms.
  */
+@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 public class LibC {
 
     /**

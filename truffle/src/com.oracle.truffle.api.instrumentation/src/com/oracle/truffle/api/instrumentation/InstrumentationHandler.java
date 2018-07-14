@@ -58,7 +58,6 @@ import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleOptions;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.impl.Accessor;
-import com.oracle.truffle.api.impl.Accessor.Nodes;
 import com.oracle.truffle.api.impl.DispatchOutputStream;
 import com.oracle.truffle.api.instrumentation.ProbeNode.EventChainNode;
 import com.oracle.truffle.api.instrumentation.TruffleInstrument.Env;
@@ -357,8 +356,8 @@ final class InstrumentationHandler {
         }
     }
 
-    Instrumenter forLanguage(LanguageInfo info) {
-        return new LanguageClientInstrumenter<>(info);
+    Instrumenter forLanguage(TruffleLanguage<?> language) {
+        return new LanguageClientInstrumenter<>(language);
     }
 
     <T> EventBinding<T> addExecutionBinding(EventBinding.Source<T> binding) {
@@ -396,6 +395,20 @@ final class InstrumentationHandler {
         }
 
         return binding;
+    }
+
+    private void visitLoadedSourceSections(EventBinding.Source<?> binding) {
+        if (TRACE) {
+            trace("BEGIN: Visiting loaded source sections %s, %s%n", binding.getFilter(), binding.getElement());
+        }
+
+        if (!loadedRoots.isEmpty()) {
+            visitRoots(loadedRoots, new NotifyLoadedWithBindingVisitor(binding));
+        }
+
+        if (TRACE) {
+            trace("END: Visited loaded source sections %s, %s%n", binding.getFilter(), binding.getElement());
+        }
     }
 
     <T> EventBinding<T> addSourceBinding(EventBinding.Source<T> binding, boolean notifyLoaded) {
@@ -914,6 +927,10 @@ final class InstrumentationHandler {
         return addSourceSectionBinding(new EventBinding.Source<>(abstractInstrumenter, filter, null, listener, false), notifyLoaded);
     }
 
+    private void visitLoadedSourceSections(AbstractInstrumenter abstractInstrumenter, SourceSectionFilter filter, LoadSourceSectionListener listener) {
+        visitLoadedSourceSections(new EventBinding.Source<>(abstractInstrumenter, filter, null, listener, false));
+    }
+
     private <T> EventBinding<T> attachExecuteSourceListener(AbstractInstrumenter abstractInstrumenter, SourceSectionFilter filter, T listener, boolean notifyLoaded) {
         return addSourceExecutionBinding(new EventBinding.Source<>(abstractInstrumenter, filter, null, listener, false), notifyLoaded);
     }
@@ -984,9 +1001,7 @@ final class InstrumentationHandler {
         }
     }
 
-    Set<Class<?>> getProvidedTags(LanguageInfo language) {
-        Nodes nodesAccess = AccessorInstrumentHandler.nodesAccess();
-        TruffleLanguage<?> lang = nodesAccess.getLanguageSpi(language);
+    Set<Class<?>> getProvidedTags(TruffleLanguage<?> lang) {
         if (lang == null) {
             return Collections.emptySet();
         }
@@ -1002,7 +1017,7 @@ final class InstrumentationHandler {
     }
 
     Set<Class<?>> getProvidedTags(Node root) {
-        return getProvidedTags(root.getRootNode().getLanguageInfo());
+        return getProvidedTags(AccessorInstrumentHandler.nodesAccess().getLanguage(root.getRootNode()));
     }
 
     @SuppressWarnings("deprecation")
@@ -1605,9 +1620,11 @@ final class InstrumentationHandler {
     final class LanguageClientInstrumenter<T> extends AbstractInstrumenter {
 
         private final LanguageInfo languageInfo;
+        private final TruffleLanguage<?> language;
 
-        LanguageClientInstrumenter(LanguageInfo info) {
-            this.languageInfo = info;
+        LanguageClientInstrumenter(TruffleLanguage<?> language) {
+            this.language = language;
+            this.languageInfo = AccessorInstrumentHandler.langAccess().getLanguageInfo(language);
         }
 
         @Override
@@ -1638,7 +1655,7 @@ final class InstrumentationHandler {
 
         @Override
         void verifyFilter(SourceSectionFilter filter) {
-            Set<Class<?>> providedTags = getProvidedTags(languageInfo);
+            Set<Class<?>> providedTags = getProvidedTags(language);
             // filters must not reference tags not declared in @RequiredTags
             Set<Class<?>> referencedTags = filter.getReferencedTags();
             if (!providedTags.containsAll(referencedTags)) {
@@ -1654,11 +1671,9 @@ final class InstrumentationHandler {
                     sep = ", ";
                 }
                 builder.append("}");
-                Nodes langAccess = AccessorInstrumentHandler.nodesAccess();
-                TruffleLanguage<?> lang = langAccess.getLanguageSpi(languageInfo);
                 throw new IllegalArgumentException(String.format("The attached filter %s references the following tags %s which are not declared as provided by the language. " +
                                 "To fix this annotate the language class %s with @%s(%s).",
-                                filter, missingTags, lang.getClass().getName(), ProvidedTags.class.getSimpleName(), builder));
+                                filter, missingTags, language.getClass().getName(), ProvidedTags.class.getSimpleName(), builder));
             }
         }
 
@@ -1767,6 +1782,12 @@ final class InstrumentationHandler {
         public <T extends LoadSourceSectionListener> EventBinding<T> attachLoadSourceSectionListener(SourceSectionFilter filter, T listener, boolean notifyLoaded) {
             verifyFilter(filter);
             return InstrumentationHandler.this.attachSourceSectionListener(this, filter, listener, notifyLoaded);
+        }
+
+        @Override
+        public void visitLoadedSourceSections(SourceSectionFilter filter, LoadSourceSectionListener listener) {
+            verifyFilter(filter);
+            InstrumentationHandler.this.visitLoadedSourceSections(this, filter, listener);
         }
 
         @Override
@@ -2092,11 +2113,11 @@ final class InstrumentationHandler {
             }
 
             @Override
-            public void collectEnvServices(Set<Object> collectTo, Object languageShared, LanguageInfo info) {
+            public void collectEnvServices(Set<Object> collectTo, Object languageShared, TruffleLanguage<?> language) {
                 InstrumentationHandler instrumentationHandler = (InstrumentationHandler) engineAccess().getInstrumentationHandler(languageShared);
-                Instrumenter instrumenter = instrumentationHandler.forLanguage(info);
+                Instrumenter instrumenter = instrumentationHandler.forLanguage(language);
                 collectTo.add(instrumenter);
-                AllocationReporter allocationReporter = instrumentationHandler.getAllocationReporter(info);
+                AllocationReporter allocationReporter = instrumentationHandler.getAllocationReporter(AccessorInstrumentHandler.langAccess().getLanguageInfo(language));
                 collectTo.add(allocationReporter);
             }
 

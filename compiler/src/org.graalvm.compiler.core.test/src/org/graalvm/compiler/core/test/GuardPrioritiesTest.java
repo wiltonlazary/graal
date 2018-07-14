@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -47,6 +49,8 @@ import org.graalvm.compiler.phases.schedule.SchedulePhase;
 import org.graalvm.compiler.phases.tiers.HighTierContext;
 import org.junit.Test;
 
+import jdk.vm.ci.meta.SpeculationLog;
+
 public class GuardPrioritiesTest extends GraphScheduleTest {
     private int[] array;
     private int size;
@@ -71,9 +75,10 @@ public class GuardPrioritiesTest extends GraphScheduleTest {
         Iterator<GuardNode> iterator = guards.iterator();
         GuardNode g1 = iterator.next();
         GuardNode g2 = iterator.next();
-        assertTrue("There should be one guard with speculation, the other one without", g1.getSpeculation().isNull() ^ g2.getSpeculation().isNull());
-        GuardNode withSpeculation = g1.getSpeculation().isNull() ? g2 : g1;
-        GuardNode withoutSpeculation = g1.getSpeculation().isNull() ? g1 : g2;
+        assertTrue("There should be one guard with speculation, the other one without",
+                        (g1.getSpeculation().equals(SpeculationLog.NO_SPECULATION)) ^ (g2.getSpeculation().equals(SpeculationLog.NO_SPECULATION)));
+        GuardNode withSpeculation = g1.getSpeculation().equals(SpeculationLog.NO_SPECULATION) ? g2 : g1;
+        GuardNode withoutSpeculation = g1.getSpeculation().equals(SpeculationLog.NO_SPECULATION) ? g1 : g2;
 
         assertOrderedAfterSchedule(graph, SchedulePhase.SchedulingStrategy.EARLIEST_WITH_GUARD_ORDER, withSpeculation, withoutSpeculation);
     }
@@ -109,9 +114,9 @@ public class GuardPrioritiesTest extends GraphScheduleTest {
         new SchedulePhase(SchedulePhase.SchedulingStrategy.EARLIEST_WITH_GUARD_ORDER).apply(graph);
         for (GuardNode g1 : graph.getNodes(GuardNode.TYPE)) {
             for (GuardNode g2 : graph.getNodes(GuardNode.TYPE)) {
-                if (g1.getSpeculation().isNull() ^ g2.getSpeculation().isNull()) {
-                    GuardNode withSpeculation = g1.getSpeculation().isNull() ? g2 : g1;
-                    GuardNode withoutSpeculation = g1.getSpeculation().isNull() ? g1 : g2;
+                if (g1.getSpeculation().equals(SpeculationLog.NO_SPECULATION) ^ g2.getSpeculation().equals(SpeculationLog.NO_SPECULATION)) {
+                    GuardNode withSpeculation = g1.getSpeculation().equals(SpeculationLog.NO_SPECULATION) ? g2 : g1;
+                    GuardNode withoutSpeculation = g1.getSpeculation().equals(SpeculationLog.NO_SPECULATION) ? g1 : g2;
 
                     if (withoutSpeculation.isNegated() && withoutSpeculation.getCondition() instanceof IsNullNode) {
                         IsNullNode isNullNode = (IsNullNode) withoutSpeculation.getCondition();

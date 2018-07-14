@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -32,7 +34,6 @@ import static org.graalvm.compiler.lir.LIRInstruction.OperandFlag.REG;
 
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
-import java.util.EnumSet;
 
 import org.graalvm.compiler.asm.Label;
 import org.graalvm.compiler.asm.amd64.AMD64Address;
@@ -125,10 +126,9 @@ public final class AMD64ArrayCompareToOp extends AMD64LIRInstruction {
         return arch.getFeatures().contains(CPUFeature.AVX2);
     }
 
-    private static boolean supportsAVX512VLBW(TargetDescription target) {
-        AMD64 arch = (AMD64) target.arch;
-        EnumSet<CPUFeature> features = arch.getFeatures();
-        return features.contains(CPUFeature.AVX512BW) && features.contains(CPUFeature.AVX512VL);
+    private static boolean supportsAVX512VLBW(@SuppressWarnings("unused") TargetDescription target) {
+        // TODO Add EVEX encoder in our assembler.
+        return false;
     }
 
     @Override
@@ -330,7 +330,7 @@ public final class AMD64ArrayCompareToOp extends AMD64LIRInstruction {
                     // k7 == 11..11, if operands equal, otherwise k7 has some 0
                     masm.evpcmpeqb(k7, vec1, new AMD64Address(str2, result, scale), AvxVectorLen.AVX_512bit);
                 } else {
-                    masm.vpmovzxbw(vec1, new AMD64Address(str1, result, scale1), AvxVectorLen.AVX_512bit);
+                    masm.evpmovzxbw(vec1, new AMD64Address(str1, result, scale1), AvxVectorLen.AVX_512bit);
                     // k7 == 11..11, if operands equal, otherwise k7 has some 0
                     masm.evpcmpeqb(k7, vec1, new AMD64Address(str2, result, scale2), AvxVectorLen.AVX_512bit);
                 }
@@ -350,7 +350,7 @@ public final class AMD64ArrayCompareToOp extends AMD64LIRInstruction {
                 masm.vmovdqu(vec1, new AMD64Address(str1, result, scale));
                 masm.vpxor(vec1, vec1, new AMD64Address(str2, result, scale));
             } else {
-                masm.vpmovzxbw(vec1, new AMD64Address(str1, result, scale1), AvxVectorLen.AVX_256bit);
+                masm.vpmovzxbw(vec1, new AMD64Address(str1, result, scale1));
                 masm.vpxor(vec1, vec1, new AMD64Address(str2, result, scale2));
             }
             masm.vptest(vec1, vec1);

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -160,7 +162,13 @@ public final class HotSpotGraalCompilerFactory extends HotSpotJVMCICompilerFacto
     }
 
     @Override
-    public CompilationLevel adjustCompilationLevel(Class<?> declaringClass, String name, String signature, boolean isOsr, CompilationLevel level) {
+    public CompilationLevel adjustCompilationLevel(Object declaringClassObject, String name, String signature, boolean isOsr, CompilationLevel level) {
+        if (declaringClassObject instanceof String) {
+            // This must be SVM mode in which case only GraalCompileC1Only matters since Graal and
+            // JVMCI are already compiled.
+            return checkGraalCompileOnlyFilter((String) declaringClassObject, name, signature, level);
+        }
+        Class<?> declaringClass = (Class<?>) declaringClassObject;
         return adjustCompilationLevelInternal(declaringClass, name, signature, level);
     }
 

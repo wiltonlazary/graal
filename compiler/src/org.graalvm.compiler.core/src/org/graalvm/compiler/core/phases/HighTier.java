@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -76,12 +78,16 @@ public class HighTier extends PhaseSuite<HighTierContext> {
         appendPhase(canonicalizer);
 
         if (NodeCounterPhase.Options.NodeCounters.getValue(options)) {
-            appendPhase(new NodeCounterPhase());
+            appendPhase(new NodeCounterPhase(NodeCounterPhase.Stage.INIT));
         }
 
         if (Options.Inline.getValue(options)) {
             appendPhase(new InliningPhase(canonicalizer));
             appendPhase(new DeadCodeEliminationPhase(Optional));
+        }
+
+        if (NodeCounterPhase.Options.NodeCounters.getValue(options)) {
+            appendPhase(new NodeCounterPhase(NodeCounterPhase.Stage.EARLY));
         }
 
         if (OptConvertDeoptsToGuards.getValue(options)) {
@@ -117,6 +123,10 @@ public class HighTier extends PhaseSuite<HighTierContext> {
         }
 
         appendPhase(new RemoveValueProxyPhase());
+
+        if (NodeCounterPhase.Options.NodeCounters.getValue(options)) {
+            appendPhase(new NodeCounterPhase(NodeCounterPhase.Stage.LATE));
+        }
 
         appendPhase(new LoweringPhase(canonicalizer, LoweringTool.StandardLoweringStage.HIGH_TIER));
     }

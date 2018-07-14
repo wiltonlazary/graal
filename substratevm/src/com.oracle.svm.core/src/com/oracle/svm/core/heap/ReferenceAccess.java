@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -31,6 +33,7 @@ import org.graalvm.nativeimage.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.AlwaysInline;
@@ -87,7 +90,6 @@ final class ReferenceAccessImpl implements ReferenceAccess {
     @AlwaysInline("Performance")
     @Uninterruptible(reason = "for uninterruptible callers", mayBeInlined = true)
     public Word readObjectAsUntrackedPointer(Pointer p, boolean compressed) {
-        assert !compressed || haveCompressedReferences();
         Object obj = readObjectAt(p, compressed);
         return Word.objectToUntrackedPointer(obj);
     }
@@ -96,10 +98,9 @@ final class ReferenceAccessImpl implements ReferenceAccess {
     @AlwaysInline("Performance")
     @Uninterruptible(reason = "for uninterruptible callers", mayBeInlined = true)
     public Object readObjectAt(Pointer p, boolean compressed) {
-        assert !compressed || haveCompressedReferences();
         Word w = (Word) p;
         if (compressed) {
-            return ObjectAccess.readObject(null, p);
+            return ObjectAccess.readObject(WordFactory.nullPointer(), p);
         } else {
             return w.readObject(0);
         }
@@ -109,10 +110,9 @@ final class ReferenceAccessImpl implements ReferenceAccess {
     @AlwaysInline("Performance")
     @Uninterruptible(reason = "for uninterruptible callers", mayBeInlined = true)
     public void writeObjectAt(Pointer p, Object value, boolean compressed) {
-        assert !compressed || haveCompressedReferences();
         Word w = (Word) p;
         if (compressed) {
-            ObjectAccess.writeObject(null, p, value);
+            ObjectAccess.writeObject(WordFactory.nullPointer(), p, value);
         } else {
             // this overload has no uncompression semantics
             w.writeObject(0, value);
@@ -123,7 +123,6 @@ final class ReferenceAccessImpl implements ReferenceAccess {
     @AlwaysInline("Performance")
     @Uninterruptible(reason = "for uninterruptible callers", mayBeInlined = true)
     public void writeObjectBarrieredAt(Object object, UnsignedWord offsetInObject, Object value, boolean compressed) {
-        assert compressed || !haveCompressedReferences() : "Heap object must contain only compressed references";
         BarrieredAccess.writeObject(object, offsetInObject, value);
     }
 

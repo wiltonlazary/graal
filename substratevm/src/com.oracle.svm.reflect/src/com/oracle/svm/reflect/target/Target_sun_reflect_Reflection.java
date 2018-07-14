@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,14 +24,11 @@
  */
 package com.oracle.svm.reflect.target;
 
-// Checkstyle: allow reflection
-
-import com.oracle.svm.reflect.hosted.ReflectionFeature;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
-import sun.reflect.Reflection;
+import com.oracle.svm.reflect.hosted.ReflectionFeature;
 
-@TargetClass(value = Reflection.class, onlyWith = ReflectionFeature.IsEnabled.class)
+@TargetClass(classNameProvider = Package_jdk_internal_reflect.class, className = "Reflection", onlyWith = ReflectionFeature.IsEnabled.class)
 public final class Target_sun_reflect_Reflection {
 
     @Substitute

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -233,9 +235,6 @@ final class MacroOption {
         private static Map<MacroOptionKind, Map<String, MacroOption>> collectMacroOptions(Path rootDir) throws IOException {
             Map<MacroOptionKind, Map<String, MacroOption>> result = new HashMap<>();
             for (MacroOptionKind kind : MacroOptionKind.values()) {
-                if (kind.subdir.isEmpty()) {
-                    continue;
-                }
                 Path optionDir = rootDir.resolve(kind.subdir);
                 Map<String, MacroOption> collectedOptions = Collections.emptyMap();
                 if (Files.isDirectory(optionDir)) {
@@ -248,20 +247,17 @@ final class MacroOption {
             return result;
         }
 
-        Registry(Path rootDir) {
-            addMacroOptionRoot(rootDir);
+        Registry() {
+            for (MacroOptionKind kind : MacroOptionKind.values()) {
+                supported.put(kind, new HashMap<>());
+            }
         }
 
         void addMacroOptionRoot(Path rootDir) {
             /* Discover MacroOptions and add to supported */
             try {
                 collectMacroOptions(rootDir).forEach((optionKind, optionMap) -> {
-                    Map<String, MacroOption> existingOptionMap = supported.get(optionKind);
-                    if (existingOptionMap == null) {
-                        supported.put(optionKind, optionMap);
-                    } else {
-                        existingOptionMap.putAll(optionMap);
-                    }
+                    supported.get(optionKind).putAll(optionMap);
                 });
             } catch (IOException e) {
                 throw new InvalidMacroException("Error while discovering supported MacroOptions in " + rootDir + ": " + e.getMessage());

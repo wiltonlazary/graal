@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,7 +24,8 @@
  */
 package org.graalvm.compiler.hotspot.replacements;
 
-import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.arrayBaseOffset;
+import static org.graalvm.compiler.hotspot.GraalHotSpotVMConfigBase.INJECTED_METAACCESS;
+import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.getArrayBaseOffset;
 
 import org.graalvm.compiler.api.replacements.ClassSubstitution;
 import org.graalvm.compiler.api.replacements.MethodSubstitution;
@@ -47,7 +50,7 @@ public class CRC32CSubstitutions {
 
     @MethodSubstitution
     static int updateBytes(int crc, byte[] b, int off, int end) {
-        Word bufAddr = WordFactory.unsigned(ComputeObjectAddressNode.get(b, arrayBaseOffset(JavaKind.Byte) + off));
+        Word bufAddr = WordFactory.unsigned(ComputeObjectAddressNode.get(b, getArrayBaseOffset(INJECTED_METAACCESS, JavaKind.Byte) + off));
         return updateBytesCRC32(UPDATE_BYTES_CRC32C, crc, bufAddr, end - off);
     }
 

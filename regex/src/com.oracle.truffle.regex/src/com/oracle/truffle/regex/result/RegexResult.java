@@ -57,20 +57,21 @@ import com.oracle.truffle.regex.runtime.RegexResultStartArrayObject;
 public abstract class RegexResult implements RegexLanguageObject {
 
     public static final RegexResult NO_MATCH = new RegexResult(null, "NULL", 0) {
+
+        @Override
+        public String toString() {
+            return "NO_MATCH";
+        }
     };
 
     private final RegexObject regex;
     private final Object input;
     private final int groupCount;
-    private final RegexResultStartArrayObject startArrayObject;
-    private final RegexResultEndArrayObject endArrayObject;
 
     public RegexResult(RegexObject regex, Object input, int groupCount) {
         this.regex = regex;
         this.input = input;
         this.groupCount = groupCount;
-        startArrayObject = new RegexResultStartArrayObject(this);
-        endArrayObject = new RegexResultEndArrayObject(this);
     }
 
     public final RegexObject getCompiledRegex() {
@@ -86,11 +87,13 @@ public abstract class RegexResult implements RegexLanguageObject {
     }
 
     public final RegexResultStartArrayObject getStartArrayObject() {
-        return startArrayObject;
+        // this allocation should get virtualized and optimized away by graal
+        return new RegexResultStartArrayObject(this);
     }
 
     public final RegexResultEndArrayObject getEndArrayObject() {
-        return endArrayObject;
+        // this allocation should get virtualized and optimized away by graal
+        return new RegexResultEndArrayObject(this);
     }
 
     public static boolean isInstance(TruffleObject object) {

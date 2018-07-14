@@ -1,12 +1,14 @@
 #
 # ----------------------------------------------------------------------------------------------------
 #
-# Copyright (c) 2007, 2016, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2018, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License version 2 only, as
-# published by the Free Software Foundation.
+# published by the Free Software Foundation.  Oracle designates this
+# particular file as subject to the "Classpath" exception as provided
+# by Oracle in the LICENSE file that accompanied this code.
 #
 # This code is distributed in the hope that it will be useful, but WITHOUT
 # ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -104,19 +106,19 @@ def hsdis(args, copyToDir=None):
     libpattern = mx.add_lib_suffix('hsdis-' + mx.get_arch() + '-' + mx.get_os() + '-%s')
 
     sha1s = {
-        'att/hsdis-amd64-windows-%s.dll' : 'bcbd535a9568b5075ab41e96205e26a2bac64f72',
-        'att/hsdis-amd64-linux-%s.so' : '36a0b8e30fc370727920cc089f104bfb9cd508a0',
-        'att/hsdis-amd64-darwin-%s.dylib' : 'c1865e9a58ca773fdc1c5eea0a4dfda213420ffb',
-        'intel/hsdis-amd64-windows-%s.dll' : '6a388372cdd5fe905c1a26ced614334e405d1f30',
-        'intel/hsdis-amd64-linux-%s.so' : '0d031013db9a80d6c88330c42c983fbfa7053193',
-        'intel/hsdis-amd64-darwin-%s.dylib' : '67f6d23cbebd8998450a88b5bef362171f66f11a',
+        'att-hsdis-amd64-windows-%s.dll' : 'bcbd535a9568b5075ab41e96205e26a2bac64f72',
+        'att-hsdis-amd64-linux-%s.so' : '36a0b8e30fc370727920cc089f104bfb9cd508a0',
+        'att-hsdis-amd64-darwin-%s.dylib' : 'c1865e9a58ca773fdc1c5eea0a4dfda213420ffb',
+        'intel-hsdis-amd64-windows-%s.dll' : '6a388372cdd5fe905c1a26ced614334e405d1f30',
+        'intel-hsdis-amd64-linux-%s.so' : '0d031013db9a80d6c88330c42c983fbfa7053193',
+        'intel-hsdis-amd64-darwin-%s.dylib' : '67f6d23cbebd8998450a88b5bef362171f66f11a',
         'hsdis-sparcv9-solaris-%s.so': '970640a9af0bd63641f9063c11275b371a59ee60',
         'hsdis-sparcv9-linux-%s.so': '0c375986d727651dee1819308fbbc0de4927d5d9',
         'hsdis-aarch64-linux-%s.so': 'fcc9b70ac91c00db8a50b0d4345490a68e3743e1',
     }
 
     if flavor:
-        flavoredLib = flavor + "/" + libpattern
+        flavoredLib = flavor + "-" + libpattern
     else:
         flavoredLib = libpattern
     if flavoredLib not in sha1s:
@@ -128,7 +130,7 @@ def hsdis(args, copyToDir=None):
     path = join(_suite.get_output_root(), lib)
     if not exists(path):
         sha1path = path + '.sha1'
-        mx.download_file_with_sha1('hsdis', path, ['https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/hsdis/' + lib], sha1, sha1path, True, True, sources=False)
+        mx.download_file_with_sha1('hsdis', path, ['https://github.com/oracle/graal/releases/download/hsdis-20180108/' + lib], sha1, sha1path, True, True, sources=False)
 
     overwrite = True
     if copyToDir is None:

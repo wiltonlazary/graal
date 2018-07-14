@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,6 +24,8 @@
  */
 package com.oracle.svm.core.deopt;
 
+import static com.oracle.svm.core.snippets.KnownIntrinsics.convertUnknownValue;
+
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -33,6 +37,12 @@ import jdk.vm.ci.meta.SpeculationLog;
 public class SubstrateSpeculationLog implements SpeculationLog {
 
     private final ConcurrentMap<SpeculationReason, Boolean> failedSpeculations = new ConcurrentHashMap<>();
+
+    public static final class SubstrateSpeculation extends Speculation {
+        public SubstrateSpeculation(SpeculationReason reason) {
+            super(reason);
+        }
+    }
 
     public void addFailedSpeculation(SpeculationReason speculation) {
         failedSpeculations.put(speculation, Boolean.TRUE);
@@ -49,15 +59,20 @@ public class SubstrateSpeculationLog implements SpeculationLog {
     }
 
     @Override
-    public JavaConstant speculate(SpeculationReason reason) {
+    public Speculation speculate(SpeculationReason reason) {
         if (!maySpeculate(reason)) {
             throw new IllegalArgumentException("Cannot make speculation with reason " + reason + " as it is known to fail");
         }
-        return SubstrateObjectConstant.forObject(reason);
+        return new SubstrateSpeculation(reason);
     }
 
     @Override
     public boolean hasSpeculations() {
         return true;
+    }
+
+    @Override
+    public Speculation lookupSpeculation(JavaConstant constant) {
+        return new SubstrateSpeculation((SpeculationReason) convertUnknownValue(SubstrateObjectConstant.asObject(constant), Object.class));
     }
 }

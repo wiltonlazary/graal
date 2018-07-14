@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -141,6 +143,11 @@ public class ComputedValueField implements ReadableJavaField, ComputedValue {
     }
 
     @Override
+    public int getOffset() {
+        return original.getOffset();
+    }
+
+    @Override
     public boolean isInternal() {
         return original.isInternal();
     }
@@ -236,7 +243,7 @@ public class ComputedValueField implements ReadableJavaField, ComputedValue {
                     CustomFieldValueComputer computer = (CustomFieldValueComputer) constructor.newInstance(constructorArgs);
 
                     Object receiverValue = receiver == null ? null : originalSnippetReflection.asObject(Object.class, receiver);
-                    result = originalSnippetReflection.forBoxed(annotated.getJavaKind(), computer.compute(original, annotated, receiverValue));
+                    result = originalSnippetReflection.forBoxed(annotated.getJavaKind(), computer.compute(hMetaAccess, original, annotated, receiverValue));
                     assert result.getJavaKind() == annotated.getJavaKind();
                 } catch (InvocationTargetException | InstantiationException | IllegalAccessException ex) {
                     throw shouldNotReachHere("Error performing field recomputation for alias " + annotated.format("%H.%n"), ex);

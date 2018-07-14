@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -69,12 +71,20 @@ public final class LoadFieldNode extends AccessFieldNode implements Canonicaliza
     private final Stamp uncheckedStamp;
 
     protected LoadFieldNode(StampPair stamp, ValueNode object, ResolvedJavaField field) {
-        super(TYPE, stamp.getTrustedStamp(), object, field);
+        this(stamp, object, field, field.isVolatile());
+    }
+
+    protected LoadFieldNode(StampPair stamp, ValueNode object, ResolvedJavaField field, boolean volatileAccess) {
+        super(TYPE, stamp.getTrustedStamp(), object, field, volatileAccess);
         this.uncheckedStamp = stamp.getUncheckedStamp();
     }
 
     public static LoadFieldNode create(Assumptions assumptions, ValueNode object, ResolvedJavaField field) {
-        return new LoadFieldNode(StampFactory.forDeclaredType(assumptions, field.getType(), false), object, field);
+        return create(assumptions, object, field, field.isVolatile());
+    }
+
+    public static LoadFieldNode create(Assumptions assumptions, ValueNode object, ResolvedJavaField field, boolean volatileAccess) {
+        return new LoadFieldNode(StampFactory.forDeclaredType(assumptions, field.getType(), false), object, field, volatileAccess);
     }
 
     public static ValueNode create(ConstantFieldProvider constantFields, ConstantReflectionProvider constantReflection, MetaAccessProvider metaAccess,
@@ -202,7 +212,7 @@ public final class LoadFieldNode extends AccessFieldNode implements Canonicaliza
 
     @Override
     public NodeCycles estimatedNodeCycles() {
-        if (field.isVolatile()) {
+        if (isVolatile()) {
             return CYCLES_2;
         }
         return super.estimatedNodeCycles();

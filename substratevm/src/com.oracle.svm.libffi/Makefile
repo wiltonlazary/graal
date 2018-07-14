@@ -4,7 +4,9 @@
 #
 # This code is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License version 2 only, as
-# published by the Free Software Foundation.
+# published by the Free Software Foundation.  Oracle designates this
+# particular file as subject to the "Classpath" exception as provided
+# by Oracle in the LICENSE file that accompanied this code.
 #
 # This code is distributed in the hope that it will be useful, but WITHOUT
 # ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -86,10 +88,26 @@ libffi-3.2.1/configure: ${LIBFFI_SRC}
 	$(QUIETLY) touch $@
 
 else
-all:
+
+all: ${TARGET} ${HEADERFILES}
+
+${TARGET}:
 	echo "Building libffi on Windows is not currently supported"
 	$(shell mkdir -p ${TARGET})
 	$(shell touch ${TARGET}/libffi.a)
-	$(shell mkdir -p `dirname ${HEADERFILES}`)
-	$(shell touch ${HEADERFILES})
+
+${TARGET}/include/trufflenfi.h: ${TRUFFLE_NFI}/include/trufflenfi.h
+	$(QUIETLY) mkdir -p ${TARGET}/include
+	$(QUIETLY) cp $< $@
+	$(QUIETLY) touch $@
+
+${TARGET}/include/svm_libffi.h: include/svm_libffi.h
+	$(QUIETLY) mkdir -p ${TARGET}/include
+	$(QUIETLY) cp $< $@
+	$(QUIETLY) touch $@
+
+${TARGET}/include/ffi.h ${TARGET}/include/ffitarget.h: 
+	$(QUIETLY) mkdir -p ${TARGET}/include
+	$(QUIETLY) touch $@
+
 endif

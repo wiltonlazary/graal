@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -29,8 +31,8 @@ import static jdk.vm.ci.meta.Value.ILLEGAL;
 import static org.graalvm.compiler.hotspot.HotSpotForeignCallLinkage.JUMP_ADDRESS;
 import static org.graalvm.compiler.hotspot.HotSpotForeignCallLinkage.RegisterEffect.PRESERVES_REGISTERS;
 import static org.graalvm.compiler.hotspot.HotSpotForeignCallLinkage.Transition.LEAF;
-import static org.graalvm.compiler.hotspot.replacements.CRC32Substitutions.UPDATE_BYTES_CRC32;
 import static org.graalvm.compiler.hotspot.replacements.CRC32CSubstitutions.UPDATE_BYTES_CRC32C;
+import static org.graalvm.compiler.hotspot.replacements.CRC32Substitutions.UPDATE_BYTES_CRC32;
 import static org.graalvm.word.LocationIdentity.any;
 
 import org.graalvm.compiler.core.common.LIRKind;
@@ -47,7 +49,7 @@ import jdk.vm.ci.code.CallingConvention;
 import jdk.vm.ci.code.CodeCacheProvider;
 import jdk.vm.ci.code.RegisterValue;
 import jdk.vm.ci.code.TargetDescription;
-import jdk.vm.ci.hotspot.HotSpotJVMCIRuntimeProvider;
+import jdk.vm.ci.hotspot.HotSpotJVMCIRuntime;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.PlatformKind;
 import jdk.vm.ci.meta.Value;
@@ -56,7 +58,7 @@ public class AArch64HotSpotForeignCallsProvider extends HotSpotHostForeignCallsP
 
     private final Value[] nativeABICallerSaveRegisters;
 
-    public AArch64HotSpotForeignCallsProvider(HotSpotJVMCIRuntimeProvider jvmciRuntime, HotSpotGraalRuntimeProvider runtime, MetaAccessProvider metaAccess, CodeCacheProvider codeCache,
+    public AArch64HotSpotForeignCallsProvider(HotSpotJVMCIRuntime jvmciRuntime, HotSpotGraalRuntimeProvider runtime, MetaAccessProvider metaAccess, CodeCacheProvider codeCache,
                     WordTypes wordTypes, Value[] nativeABICallerSaveRegisters) {
         super(jvmciRuntime, runtime, metaAccess, codeCache, wordTypes);
         this.nativeABICallerSaveRegisters = nativeABICallerSaveRegisters;

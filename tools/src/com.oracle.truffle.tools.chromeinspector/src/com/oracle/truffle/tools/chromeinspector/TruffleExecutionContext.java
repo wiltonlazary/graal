@@ -38,9 +38,9 @@ import com.oracle.truffle.api.debug.DebugException;
 import com.oracle.truffle.api.debug.DebugValue;
 import com.oracle.truffle.api.instrumentation.TruffleInstrument;
 
-import com.oracle.truffle.tools.chromeinspector.instrument.Enabler;
 import com.oracle.truffle.tools.chromeinspector.instrument.SourceLoadInstrument;
 import com.oracle.truffle.tools.chromeinspector.server.CommandProcessException;
+import com.oracle.truffle.tools.chromeinspector.types.CallArgument;
 import com.oracle.truffle.tools.chromeinspector.types.RemoteObject;
 
 /**
@@ -56,6 +56,8 @@ public final class TruffleExecutionContext {
     private final List<Listener> listeners = Collections.synchronizedList(new ArrayList<>(3));
     private final long id = LAST_ID.incrementAndGet();
     private final boolean[] runPermission = new boolean[]{false};
+    private final boolean inspectInternal;
+    private final boolean inspectInitialization;
 
     private volatile DebuggerSuspendedInfo suspendedInfo;
     private volatile SuspendedThreadExecutor suspendThreadExecutor;
@@ -65,14 +67,20 @@ public final class TruffleExecutionContext {
     private volatile String lastMimeType = "text/javascript";   // Default JS
     private volatile String lastLanguage = "js";
 
-    private TruffleExecutionContext(String name, TruffleInstrument.Env env, PrintWriter err) {
+    public TruffleExecutionContext(String name, boolean inspectInternal, boolean inspectInitialization, TruffleInstrument.Env env, PrintWriter err) {
         this.name = name;
+        this.inspectInternal = inspectInternal;
+        this.inspectInitialization = inspectInitialization;
         this.env = env;
         this.err = err;
     }
 
-    public static TruffleExecutionContext create(String name, TruffleInstrument.Env env, PrintWriter err) {
-        return new TruffleExecutionContext(name, env, err);
+    public boolean isInspectInternal() {
+        return inspectInternal;
+    }
+
+    public boolean isInspectInitialization() {
+        return inspectInitialization;
     }
 
     public TruffleInstrument.Env getEnv() {
@@ -95,11 +103,12 @@ public final class TruffleExecutionContext {
         }
     }
 
-    public ScriptsHandler getScriptsHandler() {
+    public ScriptsHandler acquireScriptsHandler() {
         if (sch == null) {
             InstrumentInfo instrumentInfo = getEnv().getInstruments().get(SourceLoadInstrument.ID);
-            getEnv().lookup(instrumentInfo, Enabler.class).enable();
-            sch = getEnv().lookup(instrumentInfo, ScriptsHandler.Provider.class).getScriptsHandler();
+            SourceLoadInstrument sli = getEnv().lookup(instrumentInfo, SourceLoadInstrument.class);
+            sli.enable(inspectInternal);
+            sch = sli.getScriptsHandler();
             schCounter = new AtomicInteger(0);
         }
         schCounter.incrementAndGet();
@@ -109,7 +118,7 @@ public final class TruffleExecutionContext {
     public void releaseScriptsHandler() {
         if (schCounter.decrementAndGet() == 0) {
             InstrumentInfo instrumentInfo = getEnv().getInstruments().get(SourceLoadInstrument.ID);
-            getEnv().lookup(instrumentInfo, Enabler.class).disable();
+            getEnv().lookup(instrumentInfo, SourceLoadInstrument.class).disable();
             sch = null;
             schCounter = null;
         }
@@ -152,11 +161,21 @@ public final class TruffleExecutionContext {
         return ro;
     }
 
+    void setValue(DebugValue debugValue, CallArgument newValue) {
+        String objectId = newValue.getObjectId();
+        if (objectId != null) {
+            RemoteObject obj = getRemoteObjectsHandler().getRemote(objectId);
+            debugValue.set(obj.getDebugValue());
+        } else {
+            debugValue.set(newValue.getPrimitiveValue());
+        }
+    }
+
     void setSuspendThreadExecutor(SuspendedThreadExecutor suspendThreadExecutor) {
         this.suspendThreadExecutor = suspendThreadExecutor;
     }
 
-    <T> T executeInSuspendThread(SuspendThreadExecutable<T> executable) throws NoSuspendedThreadException, GuestLanguageException, CommandProcessException {
+    <T> T executeInSuspendThread(SuspendThreadExecutable<T> executable) throws NoSuspendedThreadException, CommandProcessException {
         CompletableFuture<T> cf = new CompletableFuture<>();
         suspendThreadExecutor.execute(new CancellableRunnable() {
             @Override
@@ -168,6 +187,12 @@ public final class TruffleExecutionContext {
                 } catch (ThreadDeath td) {
                     cf.completeExceptionally(td);
                     throw td;
+                } catch (DebugException dex) {
+                    if (!dex.isInternalError()) {
+                        cf.complete(executable.processException(dex));
+                    } else {
+                        cf.completeExceptionally(dex);
+                    }
                 } catch (Throwable t) {
                     cf.completeExceptionally(t);
                 }
@@ -183,9 +208,6 @@ public final class TruffleExecutionContext {
             params = cf.get();
         } catch (ExecutionException ex) {
             Throwable cause = ex.getCause();
-            if (cause instanceof DebugException && !((DebugException) cause).isInternalError()) {
-                throw new GuestLanguageException((DebugException) cause);
-            }
             if (cause instanceof CommandProcessException) {
                 throw (CommandProcessException) cause;
             }
@@ -230,6 +252,16 @@ public final class TruffleExecutionContext {
         LAST_ID.set(0);
     }
 
+    public void reset() {
+        this.suspendedInfo = null;
+        this.suspendThreadExecutor = null;
+        this.roh = null;
+        assert sch == null;
+        synchronized (runPermission) {
+            runPermission[0] = false;
+        }
+    }
+
     public interface Listener {
 
         void contextCreated(long id, String name);
@@ -262,19 +294,11 @@ public final class TruffleExecutionContext {
         static void raiseResuming() throws NoSuspendedThreadException {
             throw new NoSuspendedThreadException("<Resuming...>");
         }
-    }
 
-    /** A checked variant of DebugException. */
-    static final class GuestLanguageException extends Exception {
-
-        private static final long serialVersionUID = 7386388514508637851L;
-
-        private GuestLanguageException(DebugException truffleException) {
-            super(truffleException);
-        }
-
-        DebugException getDebugException() {
-            return (DebugException) getCause();
+        @Override
+        public synchronized Throwable fillInStackTrace() {
+            return this;
         }
     }
+
 }

@@ -92,14 +92,18 @@ public final class PolyglotLauncher extends Launcher {
     }
 
     protected static void printVersion(Engine engine) {
-        System.out.println("GraalVM polyglot launcher " + engine.getVersion());
+        String engineImplementationName = engine.getImplementationName();
+        if (isAOT()) {
+            engineImplementationName += " Native";
+        }
+        System.out.println(String.format("%s polyglot launcher %s", engineImplementationName, engine.getVersion()));
     }
 
     private void launch(String[] args) {
         List<String> arguments = new ArrayList<>(Arrays.asList(args));
         if (isAOT()) {
-            nativeAccess.maybeExec(arguments, true, Collections.emptyMap(), VMType.Native, true);
             nativeAccess.setGraalVMProperties(null);
+            nativeAccess.maybeExec(arguments, true, Collections.emptyMap(), VMType.Native);
         }
 
         Map<String, String> options = new HashMap<>();

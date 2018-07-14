@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -291,12 +293,9 @@ public abstract class ObjectScanner {
     }
 
     private boolean checkCorrectClassloaders(WorklistEntry entry, Object valueObj) {
-        boolean result = valueObj.getClass().getClassLoader() == null ||
-                        valueObj.getClass().getClassLoader() == Thread.currentThread().getContextClassLoader() ||
-                        valueObj.getClass().getClassLoader() == ClassLoader.getSystemClassLoader() ||
-                        valueObj.getClass().getClassLoader() == ClassLoader.getSystemClassLoader().getParent();
+        boolean result = bb.isValidClassLoader(valueObj);
         if (!result) {
-            System.err.println("detected an invalid object from previous compilations: " + valueObj.toString());
+            System.err.println("detected an object that originates from previous compilations: " + valueObj.toString());
             Object reason = entry.getReason();
             while (reason instanceof WorklistEntry) {
                 Object value = bb.getSnippetReflectionProvider().asObject(Object.class, ((WorklistEntry) reason).constant);

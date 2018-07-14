@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -26,8 +28,6 @@ package org.graalvm.compiler.hotspot.replacements.arraycopy;
 import static org.graalvm.compiler.nodeinfo.InputType.Memory;
 import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_UNKNOWN;
 import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_UNKNOWN;
-import static jdk.vm.ci.hotspot.HotSpotJVMCIRuntimeProvider.getArrayBaseOffset;
-import static jdk.vm.ci.hotspot.HotSpotJVMCIRuntimeProvider.getArrayIndexScale;
 
 import org.graalvm.compiler.core.common.spi.ForeignCallDescriptor;
 import org.graalvm.compiler.core.common.type.Stamp;
@@ -63,6 +63,7 @@ import org.graalvm.word.LocationIdentity;
 import jdk.vm.ci.code.CodeUtil;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
+import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.PrimitiveConstant;
 
 @NodeInfo(allowedUsageTypes = {Memory}, cycles = CYCLES_UNKNOWN, size = SIZE_UNKNOWN)
@@ -140,26 +141,26 @@ public final class ArrayCopyCallNode extends AbstractMemoryCheckpoint implements
         return elementKind;
     }
 
-    private ValueNode computeBase(ValueNode base, ValueNode pos) {
+    private ValueNode computeBase(LoweringTool tool, ValueNode base, ValueNode pos) {
         FixedWithNextNode basePtr = graph().add(new GetObjectAddressNode(base));
         graph().addBeforeFixed(this, basePtr);
         Stamp wordStamp = StampFactory.forKind(runtime.getTarget().wordJavaKind);
         ValueNode wordPos = IntegerConvertNode.convert(pos, wordStamp, graph(), NodeView.DEFAULT);
-        int shift = CodeUtil.log2(getArrayIndexScale(elementKind));
+        int shift = CodeUtil.log2(tool.getMetaAccess().getArrayIndexScale(elementKind));
         ValueNode scaledIndex = graph().unique(new LeftShiftNode(wordPos, ConstantNode.forInt(shift, graph())));
-        ValueNode offset = graph().unique(new AddNode(scaledIndex, ConstantNode.forIntegerStamp(wordStamp, getArrayBaseOffset(elementKind), graph())));
+        ValueNode offset = graph().unique(new AddNode(scaledIndex, ConstantNode.forIntegerStamp(wordStamp, tool.getMetaAccess().getArrayBaseOffset(elementKind), graph())));
         return graph().unique(new OffsetAddressNode(basePtr, offset));
     }
 
     @Override
     public void lower(LoweringTool tool) {
         if (graph().getGuardsStage().areFrameStatesAtDeopts()) {
-            updateAlignedDisjoint();
+            updateAlignedDisjoint(tool.getMetaAccess());
             ForeignCallDescriptor desc = HotSpotHostForeignCallsProvider.lookupArraycopyDescriptor(elementKind, isAligned(), isDisjoint(), isUninitialized(),
                             locationIdentity.equals(LocationIdentity.any()));
             StructuredGraph graph = graph();
-            ValueNode srcAddr = computeBase(getSource(), getSourcePosition());
-            ValueNode destAddr = computeBase(getDestination(), getDestinationPosition());
+            ValueNode srcAddr = computeBase(tool, getSource(), getSourcePosition());
+            ValueNode destAddr = computeBase(tool, getDestination(), getDestinationPosition());
             ValueNode len = getLength();
             if (len.stamp(NodeView.DEFAULT).getStackKind() != JavaKind.Long) {
                 len = IntegerConvertNode.convert(len, StampFactory.forKind(JavaKind.Long), graph(), NodeView.DEFAULT);
@@ -223,11 +224,11 @@ public final class ArrayCopyCallNode extends AbstractMemoryCheckpoint implements
         return uninitialized;
     }
 
-    boolean isHeapWordAligned(JavaConstant value, JavaKind kind) {
-        return (getArrayBaseOffset(kind) + (long) value.asInt() * getArrayIndexScale(kind)) % runtime.getVMConfig().heapWordSize == 0;
+    boolean isHeapWordAligned(MetaAccessProvider metaAccess, JavaConstant value, JavaKind kind) {
+        return (metaAccess.getArrayBaseOffset(kind) + (long) value.asInt() * metaAccess.getArrayIndexScale(kind)) % runtime.getVMConfig().heapWordSize == 0;
     }
 
-    public void updateAlignedDisjoint() {
+    public void updateAlignedDisjoint(MetaAccessProvider metaAccess) {
         JavaKind componentKind = elementKind;
         if (srcPos == destPos) {
             // Can treat as disjoint
@@ -237,7 +238,7 @@ public final class ArrayCopyCallNode extends AbstractMemoryCheckpoint implements
         PrimitiveConstant constantDst = (PrimitiveConstant) destPos.stamp(NodeView.DEFAULT).asConstant();
         if (constantSrc != null && constantDst != null) {
             if (!aligned) {
-                aligned = isHeapWordAligned(constantSrc, componentKind) && isHeapWordAligned(constantDst, componentKind);
+                aligned = isHeapWordAligned(metaAccess, constantSrc, componentKind) && isHeapWordAligned(metaAccess, constantDst, componentKind);
             }
             if (constantSrc.asInt() >= constantDst.asInt()) {
                 // low to high copy so treat as disjoint

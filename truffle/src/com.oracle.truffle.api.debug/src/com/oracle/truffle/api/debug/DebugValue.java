@@ -75,6 +75,17 @@ public abstract class DebugValue {
     public abstract void set(DebugValue value) throws DebugException;
 
     /**
+     * Sets a primitive value. Strings and boxed Java primitive types are considered primitive.
+     * Throws an {@link IllegalStateException} if the value is not writable and
+     * {@link IllegalArgumentException} if the value is not primitive.
+     *
+     * @param primitiveValue a primitive value to set
+     * @throws DebugException when guest language code throws an exception
+     * @since 1.0
+     */
+    public abstract void set(Object primitiveValue) throws DebugException;
+
+    /**
      * Converts the debug value into a Java type. Class conversions which are always supported:
      * <ul>
      * <li>{@link String}.class converts the value to its language specific string representation.
@@ -167,6 +178,7 @@ public abstract class DebugValue {
      * @return a collection of property values, or </code>null</code> when the value does not have
      *         any concept of properties.
      * @throws DebugException when guest language code throws an exception
+     * @throws IllegalStateException if the value is not {@link #isReadable() readable}
      * @since 0.19
      */
     public final Collection<DebugValue> getProperties() throws DebugException {
@@ -197,11 +209,41 @@ public abstract class DebugValue {
         return properties;
     }
 
-    /*
-     * TODO future API: Find a property value based on a String name. In general, not all properties
-     * may have String names. Use this for lookup of a value of some known String-based property.
-     * DebugValue findProperty(String name)
+    /**
+     * Get a property value by its name.
+     *
+     * @param name name of a property
+     * @return the property value, or <code>null</code> if the property does not exist.
+     * @throws DebugException when guest language code throws an exception
+     * @throws IllegalStateException if the value is not {@link #isReadable() readable}
+     * @since 1.0
      */
+    public final DebugValue getProperty(String name) throws DebugException {
+        if (!isReadable()) {
+            throw new IllegalStateException("Value is not readable");
+        }
+        Object value = get();
+        if (value instanceof TruffleObject) {
+            TruffleObject object = (TruffleObject) value;
+            try {
+                int keyInfo = ForeignAccess.sendKeyInfo(getDebugger().getMessageNodes().keyInfo, object, name);
+                if (!KeyInfo.isExisting(keyInfo)) {
+                    return null;
+                } else {
+                    Map.Entry<Object, Object> entry = new ObjectStructures.TruffleEntry(getDebugger().getMessageNodes(), object, name);
+                    return new DebugValue.PropertyValue(getDebugger(), resolveLanguage(), keyInfo, entry, null);
+                }
+            } catch (Throwable ex) {
+                if (ex instanceof TruffleException) {
+                    throw new DebugException(getDebugger(), (TruffleException) ex, resolveLanguage(), null, true, null);
+                } else {
+                    throw ex;
+                }
+            }
+        } else {
+            return null;
+        }
+    }
 
     /**
      * Returns <code>true</code> if this value represents an array, <code>false</code> otherwise.
@@ -307,6 +349,22 @@ public abstract class DebugValue {
             return env.findSourceLocation(languageInfo, obj);
         } else {
             return null;
+        }
+    }
+
+    /**
+     * Returns <code>true</code> if this value can be executed (represents a guest language
+     * function), else <code>false</code>.
+     *
+     * @since 1.0
+     */
+    public final boolean canExecute() throws DebugException {
+        Object value = get();
+        if (value instanceof TruffleObject) {
+            TruffleObject to = (TruffleObject) value;
+            return ObjectStructures.canExecute(getDebugger().getMessageNodes(), to);
+        } else {
+            return false;
         }
     }
 
@@ -442,6 +500,11 @@ public abstract class DebugValue {
         }
 
         @Override
+        public void set(Object primitiveValue) {
+            throw new IllegalStateException("Value is not writable");
+        }
+
+        @Override
         public String getName() {
             return name;
         }
@@ -483,7 +546,7 @@ public abstract class DebugValue {
             this(debugger, language, ForeignAccess.sendKeyInfo(Message.KEY_INFO.createNode(), object, property.getKey()), property, scope);
         }
 
-        private PropertyValue(Debugger debugger, LanguageInfo preferredLanguage, int keyInfo, Map.Entry<Object, Object> property, DebugScope scope) {
+        PropertyValue(Debugger debugger, LanguageInfo preferredLanguage, int keyInfo, Map.Entry<Object, Object> property, DebugScope scope) {
             super(debugger, preferredLanguage, (property.getKey() instanceof String) ? (String) property.getKey() : null, null);
             this.keyInfo = keyInfo;
             this.property = property;
@@ -551,6 +614,21 @@ public abstract class DebugValue {
             checkValid();
             try {
                 property.setValue(value.get());
+            } catch (Throwable ex) {
+                if (ex instanceof TruffleException) {
+                    throw new DebugException(getDebugger(), (TruffleException) ex, resolveLanguage(), null, true, null);
+                } else {
+                    throw ex;
+                }
+            }
+        }
+
+        @Override
+        public void set(Object primitiveValue) {
+            checkValid();
+            checkPrimitive(primitiveValue);
+            try {
+                property.setValue(primitiveValue);
             } catch (Throwable ex) {
                 if (ex instanceof TruffleException) {
                     throw new DebugException(getDebugger(), (TruffleException) ex, resolveLanguage(), null, true, null);
@@ -644,6 +722,21 @@ public abstract class DebugValue {
         }
 
         @Override
+        public void set(Object primitiveValue) {
+            checkValid();
+            checkPrimitive(primitiveValue);
+            try {
+                map.put(getName(), primitiveValue);
+            } catch (Throwable ex) {
+                if (ex instanceof TruffleException) {
+                    throw new DebugException(getDebugger(), (TruffleException) ex, resolveLanguage(), null, true, null);
+                } else {
+                    throw ex;
+                }
+            }
+        }
+
+        @Override
         DebugValue createAsInLanguage(LanguageInfo language) {
             return new PropertyNamedValue(getDebugger(), language, keyInfo, map, getName(), scope);
         }
@@ -654,6 +747,21 @@ public abstract class DebugValue {
             }
         }
 
+    }
+
+    private static void checkPrimitive(Object value) {
+        Class<?> clazz;
+        if (value == null || !((clazz = value.getClass()) == Byte.class ||
+                        clazz == Short.class ||
+                        clazz == Integer.class ||
+                        clazz == Long.class ||
+                        clazz == Float.class ||
+                        clazz == Double.class ||
+                        clazz == Character.class ||
+                        clazz == Boolean.class ||
+                        clazz == String.class)) {
+            throw new IllegalArgumentException(value + " is not primitive.");
+        }
     }
 
 }

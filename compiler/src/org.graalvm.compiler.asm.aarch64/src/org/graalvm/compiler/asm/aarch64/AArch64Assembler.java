@@ -5,7 +5,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -63,6 +65,9 @@ import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.FMOV
 import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.FMSUB;
 import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.FMUL;
 import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.FNEG;
+import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.FRINTM;
+import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.FRINTN;
+import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.FRINTP;
 import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.FRINTZ;
 import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.FSQRT;
 import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.FSUB;
@@ -99,6 +104,7 @@ import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.STR;
 import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.STXR;
 import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.SUB;
 import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.SUBS;
+import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.SWP;
 import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.TBZ;
 import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.TBNZ;
 import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.Instruction.UBFM;
@@ -516,6 +522,7 @@ public abstract class AArch64Assembler extends Assembler {
 
         CAS(0x08A07C00),
         LDADD(0x38200000),
+        SWP(0x38208000),
 
         ADR(0x00000000),
         ADRP(0x80000000),
@@ -578,6 +585,9 @@ public abstract class AArch64Assembler extends Assembler {
         FSQRT(0x00018000),
         FNEG(0x00010000),
 
+        FRINTM(0x00050000),
+        FRINTN(0x00040000),
+        FRINTP(0x00048000),
         FRINTZ(0x00058000),
 
         FADD(0x00002000),
@@ -1379,6 +1389,30 @@ public abstract class AArch64Assembler extends Assembler {
     }
 
     private void loadAndAddInstruction(Instruction instr, Register rs, Register rt, Register rn, int log2TransferSize, boolean acquire, boolean release) {
+        assert log2TransferSize >= 0 && log2TransferSize < 4;
+        assert rt.getRegisterCategory().equals(CPU) && rs.getRegisterCategory().equals(CPU) && !rs.equals(rt);
+        int transferSizeEncoding = log2TransferSize << LoadStoreTransferSizeOffset;
+        emitInt(transferSizeEncoding | instr.encoding | rs2(rs) | rn(rn) | rt(rt) | (acquire ? 1 : 0) << LDADDAcquireOffset | (release ? 1 : 0) << LDADDReleaseOffset);
+    }
+
+    /**
+     * Atomic swap. This reads a value from an address rn, stores the value in rt, and then stores
+     * the value in rs back at address rn.
+     *
+     * @param size size of operand to read from memory. Must be 8, 16, 32, or 64.
+     * @param rs general purpose register to be stored. May not be null.
+     * @param rt general purpose register to be loaded. May not be null.
+     * @param rn general purpose register or stack pointer holding an address from which to load.
+     * @param acquire boolean value signifying if the load should use acquire semantics.
+     * @param release boolean value signifying if the store should use release semantics.
+     */
+    public void swp(int size, Register rs, Register rt, Register rn, boolean acquire, boolean release) {
+        assert size == 8 || size == 16 || size == 32 || size == 64;
+        int transferSize = NumUtil.log2Ceil(size / 8);
+        swapInstruction(SWP, rs, rt, rn, transferSize, acquire, release);
+    }
+
+    private void swapInstruction(Instruction instr, Register rs, Register rt, Register rn, int log2TransferSize, boolean acquire, boolean release) {
         assert log2TransferSize >= 0 && log2TransferSize < 4;
         assert rt.getRegisterCategory().equals(CPU) && rs.getRegisterCategory().equals(CPU) && !rs.equals(rt);
         int transferSizeEncoding = log2TransferSize << LoadStoreTransferSizeOffset;
@@ -2474,6 +2508,39 @@ public abstract class AArch64Assembler extends Assembler {
      */
     protected void frintz(int size, Register dst, Register src) {
         fpDataProcessing1Source(FRINTZ, dst, src, floatFromSize(size));
+    }
+
+    /**
+     * Rounds floating-point to integral. Rounds towards nearest with ties to even.
+     *
+     * @param size register size.
+     * @param dst floating point register. May not be null.
+     * @param src floating point register. May not be null.
+     */
+    public void frintn(int size, Register dst, Register src) {
+        fpDataProcessing1Source(FRINTN, dst, src, floatFromSize(size));
+    }
+
+    /**
+     * Rounds floating-point to integral. Rounds towards minus infinity.
+     *
+     * @param size register size.
+     * @param dst floating point register. May not be null.
+     * @param src floating point register. May not be null.
+     */
+    public void frintm(int size, Register dst, Register src) {
+        fpDataProcessing1Source(FRINTM, dst, src, floatFromSize(size));
+    }
+
+    /**
+     * Rounds floating-point to integral. Rounds towards plus infinity.
+     *
+     * @param size register size.
+     * @param dst floating point register. May not be null.
+     * @param src floating point register. May not be null.
+     */
+    public void frintp(int size, Register dst, Register src) {
+        fpDataProcessing1Source(FRINTP, dst, src, floatFromSize(size));
     }
 
     /* Floating-point Arithmetic (1 source) (5.7.6) */

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,11 +24,15 @@
  */
 package org.graalvm.compiler.replacements.amd64;
 
-import org.graalvm.compiler.api.replacements.ClassSubstitution;
-import org.graalvm.compiler.api.replacements.MethodSubstitution;
-import org.graalvm.compiler.replacements.nodes.ArrayCompareToNode;
-
 import jdk.vm.ci.meta.JavaKind;
+import org.graalvm.compiler.api.replacements.ClassSubstitution;
+import org.graalvm.compiler.api.replacements.Fold;
+import org.graalvm.compiler.api.replacements.Fold.InjectedParameter;
+import org.graalvm.compiler.api.replacements.MethodSubstitution;
+import org.graalvm.compiler.core.common.spi.ArrayOffsetProvider;
+import org.graalvm.compiler.replacements.nodes.ArrayCompareToNode;
+import org.graalvm.compiler.word.Word;
+import org.graalvm.word.Pointer;
 
 // JaCoCo Exclude
 
@@ -37,6 +43,14 @@ import jdk.vm.ci.meta.JavaKind;
  */
 @ClassSubstitution(className = "java.lang.StringLatin1", optional = true)
 public class AMD64StringLatin1Substitutions {
+
+    @Fold
+    static int byteArrayBaseOffset(@InjectedParameter ArrayOffsetProvider arrayOffsetProvider) {
+        return arrayOffsetProvider.arrayBaseOffset(JavaKind.Byte);
+    }
+
+    /** Marker value for the {@link InjectedParameter} injected parameter. */
+    static final ArrayOffsetProvider INJECTED = null;
 
     /**
      * @param value is byte[]
@@ -56,4 +70,25 @@ public class AMD64StringLatin1Substitutions {
         return ArrayCompareToNode.compareTo(value, other, value.length, other.length, JavaKind.Byte, JavaKind.Char);
     }
 
+    @MethodSubstitution(optional = true)
+    public static int indexOf(byte[] value, int ch, int origFromIndex) {
+        int fromIndex = origFromIndex;
+        if (ch >>> 8 != 0) {
+            // search value must be a byte value
+            return -1;
+        }
+        int length = value.length;
+        if (fromIndex < 0) {
+            fromIndex = 0;
+        } else if (fromIndex >= length) {
+            // Note: fromIndex might be near -1>>>1.
+            return -1;
+        }
+        Pointer sourcePointer = Word.objectToTrackedPointer(value).add(byteArrayBaseOffset(INJECTED)).add(fromIndex);
+        int result = AMD64ArrayIndexOfNode.optimizedArrayIndexOf(sourcePointer, length - fromIndex, (char) ch, JavaKind.Byte);
+        if (result != -1) {
+            return result + fromIndex;
+        }
+        return result;
+    }
 }

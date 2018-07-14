@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 import org.graalvm.component.installer.CommandInput;
 import org.graalvm.component.installer.Commands;
+import static org.graalvm.component.installer.Commands.LONG_OPTION_LIST_FILES;
 import static org.graalvm.component.installer.Commands.OPTION_LIST_FILES;
 import static org.graalvm.component.installer.CommonConstants.CAP_GRAALVM_VERSION;
 import org.graalvm.component.installer.ComponentParam;
@@ -48,6 +49,7 @@ public abstract class QueryCommandBase implements InstallerCommand {
 
     static {
         BASE_OPTIONS.put(OPTION_LIST_FILES, ""); // NOI18N
+        BASE_OPTIONS.put(LONG_OPTION_LIST_FILES, OPTION_LIST_FILES); // NOI18N
     }
 
     @Override
@@ -96,10 +98,19 @@ public abstract class QueryCommandBase implements InstallerCommand {
         this.verbose = verbose;
     }
 
+    protected ComponentRegistry initRegistry() {
+        if (input.optValue(Commands.OPTION_CATALOG) != null ||
+                        input.optValue(Commands.OPTION_FOREIGN_CATALOG) != null) {
+            return input.getRegistry();
+        } else {
+            return input.getLocalRegistry();
+        }
+    }
+
     @Override
     public void init(CommandInput commandInput, Feedback feedBack) {
         this.input = commandInput;
-        this.registry = commandInput.getRegistry();
+        this.registry = initRegistry();
         this.feedback = feedBack;
         listFiles = commandInput.optValue(OPTION_LIST_FILES) != null;
         verbose = commandInput.optValue(Commands.OPTION_VERBOSE) != null;
@@ -135,16 +146,20 @@ public abstract class QueryCommandBase implements InstallerCommand {
         return s == null ? feedback.l10n("LIST_MetadataUnknown") : s;
     }
 
+    protected String shortenComponentId(ComponentInfo info) {
+        return registry.shortenComponentId(info);
+    }
+
     @SuppressWarnings("unused")
     void printDetails(ComponentParam param, ComponentInfo info) {
         if (printTable) {
             String line = String.format(feedback.l10n("LIST_ComponentShortList"),
-                            info.getId(), info.getVersionString(), info.getName());
+                            shortenComponentId(info), info.getVersionString(), info.getName());
             feedback.verbatimOut(line, false);
             return;
         } else {
             feedback.output("LIST_ComponentBasicInfo",
-                            info.getId(), info.getVersionString(), info.getName(),
+                            shortenComponentId(info), info.getVersionString(), info.getName(),
                             findRequiredGraalVMVersion(info));
         }
     }

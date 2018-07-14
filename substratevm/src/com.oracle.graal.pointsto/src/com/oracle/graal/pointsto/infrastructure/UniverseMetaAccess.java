@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -39,6 +41,8 @@ import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
+import jdk.vm.ci.meta.SpeculationLog;
+import jdk.vm.ci.meta.SpeculationLog.Speculation;
 
 public class UniverseMetaAccess implements WrappedMetaAccess {
 
@@ -126,7 +130,27 @@ public class UniverseMetaAccess implements WrappedMetaAccess {
     }
 
     @Override
+    public int getArrayBaseOffset(JavaKind elementKind) {
+        return wrapped.getArrayBaseOffset(elementKind);
+    }
+
+    @Override
+    public int getArrayIndexScale(JavaKind elementKind) {
+        return wrapped.getArrayIndexScale(elementKind);
+    }
+
+    @Override
     public long getMemorySize(JavaConstant constant) {
+        throw unimplemented();
+    }
+
+    @Override
+    public JavaConstant encodeSpeculation(Speculation speculation) {
+        throw unimplemented();
+    }
+
+    @Override
+    public Speculation decodeSpeculation(JavaConstant constant, SpeculationLog speculationLog) {
         throw unimplemented();
     }
 }

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -39,9 +41,20 @@ public class StringBenchmark extends BenchmarkBase {
     @State(Scope.Benchmark)
     public static class BenchState {
         char ch1 = 'Q';
+        String ch1string = "Q";
         char ch2 = 'X';
         String s1 = "Qu";
         String s2 = "ne";
+
+        String longString;
+
+        public BenchState() {
+            String str = "ab";
+            for (int i = 0; i < 15; i++) {
+                str = str + str;
+            }
+            longString = str + "xx";
+        }
 
         // Checkstyle: stop
         String lorem = "Lorem ipsum dolor sit amet, consectetur adipisici elit, sed eiusmod tempor incidunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquid ex ea commodi consequat. Quis aute iure reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint obcaecat cupiditat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.";
@@ -53,6 +66,18 @@ public class StringBenchmark extends BenchmarkBase {
     @Warmup(iterations = 5)
     public int indexOfChar(BenchState state) {
         return state.lorem.indexOf(state.ch1);
+    }
+
+    @Benchmark
+    @Warmup(iterations = 5)
+    public int indexOfSingleCharString(BenchState state) {
+        return state.lorem.indexOf(state.ch1string);
+    }
+
+    @Benchmark
+    @Warmup(iterations = 5)
+    public int indexOfSingleCharStringLong(BenchState state) {
+        return state.longString.indexOf('x');
     }
 
     @Benchmark

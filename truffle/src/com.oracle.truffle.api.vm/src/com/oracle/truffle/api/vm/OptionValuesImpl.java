@@ -36,7 +36,7 @@ import org.graalvm.options.OptionDescriptors;
 import org.graalvm.options.OptionKey;
 import org.graalvm.options.OptionValues;
 
-class OptionValuesImpl implements OptionValues {
+final class OptionValuesImpl implements OptionValues {
 
     private static final float FUZZY_MATCH_THRESHOLD = 0.7F;
 
@@ -54,6 +54,61 @@ class OptionValuesImpl implements OptionValues {
         this.engine = engine;
         this.descriptors = descriptors;
         this.values = new HashMap<>();
+    }
+
+    @Override
+    public int hashCode() {
+        int result = 31 + descriptors.hashCode();
+        result = 31 * result + engine.hashCode();
+        result = 31 * result + values.hashCode();
+        return result;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (!(obj instanceof OptionValues)) {
+            return super.equals(obj);
+        } else {
+            if (this == obj) {
+                return true;
+            }
+            OptionValues other = ((OptionValues) obj);
+            if (getDescriptors().equals(other.getDescriptors())) {
+                if (!hasSetOptions() && !other.hasSetOptions()) {
+                    return true;
+                }
+                if (other instanceof OptionValuesImpl) {
+                    // faster comparison that only depends on the set values
+                    for (OptionKey<?> key : values.keySet()) {
+                        if (hasBeenSet(key) || other.hasBeenSet(key)) {
+                            if (!get(key).equals(other.get(key))) {
+                                return false;
+                            }
+                        }
+                    }
+                    for (OptionKey<?> key : ((OptionValuesImpl) other).values.keySet()) {
+                        if (hasBeenSet(key) || other.hasBeenSet(key)) {
+                            if (!get(key).equals(other.get(key))) {
+                                return false;
+                            }
+                        }
+                    }
+                    return true;
+                } else {
+                    // slow comparison for arbitrary option values
+                    for (OptionDescriptor descriptor : getDescriptors()) {
+                        OptionKey<?> key = descriptor.getKey();
+                        if (hasBeenSet(key) || other.hasBeenSet(key)) {
+                            if (!get(key).equals(other.get(key))) {
+                                return false;
+                            }
+                        }
+                    }
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 
     public void putAll(Map<String, String> providedValues) {
@@ -115,7 +170,20 @@ class OptionValuesImpl implements OptionValues {
     }
 
     RuntimeException failNotFound(String key) {
-        throw failNotFound(engine == null ? descriptors : engine.getAllOptions(), key);
+        OptionDescriptors allOptions;
+        Exception errorOptions = null;
+        try {
+            allOptions = engine == null ? this.descriptors : this.engine.getAllOptions();
+        } catch (Exception e) {
+            errorOptions = e;
+            allOptions = this.descriptors;
+        }
+        RuntimeException error = failNotFound(allOptions, key);
+        if (errorOptions != null) {
+            error.addSuppressed(errorOptions);
+        }
+
+        throw error;
     }
 
     static RuntimeException failNotFound(OptionDescriptors allOptions, String key) {

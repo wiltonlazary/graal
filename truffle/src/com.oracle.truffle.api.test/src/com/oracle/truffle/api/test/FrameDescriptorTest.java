@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,23 +24,24 @@
  */
 package com.oracle.truffle.api.test;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
-
-import org.junit.Test;
-
 import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.Truffle;
+import com.oracle.truffle.api.TruffleRuntime;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.FrameSlot;
 import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.api.frame.FrameSlotTypeException;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import org.junit.Test;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class FrameDescriptorTest {
 
@@ -47,7 +50,7 @@ public class FrameDescriptorTest {
     private FrameSlot s3;
 
     @Test
-    public void localsDefaultValue() throws Exception {
+    public void localsDefaultValue() throws FrameSlotTypeException {
         Object defaultValue = "default";
         FrameDescriptor d = new FrameDescriptor(defaultValue);
         s1 = d.addFrameSlot("v1");
@@ -77,7 +80,7 @@ public class FrameDescriptorTest {
     }
 
     @Test
-    public void copy() throws Exception {
+    public void copy() {
         Object defaultValue = "default";
         FrameDescriptor d = new FrameDescriptor(defaultValue);
         s1 = d.addFrameSlot("v1", "i1", FrameSlotKind.Boolean);
@@ -108,7 +111,7 @@ public class FrameDescriptorTest {
         assertEquals(first.getKind(), FrameSlotKind.Float);
         assertEquals(first.getIndex(), 1);
 
-        FrameDescriptor copy = d.shallowCopy();
+        FrameDescriptor copy = getShallowCopy(d);
 
         assertEquals(2, copy.getSize());
         final FrameSlot firstCopy = copy.getSlots().get(1);
@@ -116,9 +119,28 @@ public class FrameDescriptorTest {
         assertEquals("Kind is copied", firstCopy.getKind(), FrameSlotKind.Float);
         assertEquals(firstCopy.getIndex(), 1);
 
+        Assumption originalVersion = d.getVersion();
+        Assumption copyVersion = copy.getVersion();
         firstCopy.setKind(FrameSlotKind.Int);
         assertEquals("Kind is changed", firstCopy.getKind(), FrameSlotKind.Int);
         assertEquals("Kind is changed in original too!", first.getKind(), FrameSlotKind.Int);
+        assertNotEquals("Kind was changed, therefore original's version has to be updated", originalVersion, d.getVersion());
+        assertNotEquals("Kind was changed, therefore copy's version has to be updated", copyVersion, copy.getVersion());
+
+        originalVersion = d.getVersion();
+        copyVersion = copy.getVersion();
+        d.addFrameSlot("v3", "i5", FrameSlotKind.Byte);
+        assertNotEquals("A slot was added to original, its version has to be updated", originalVersion, d.getVersion());
+        assertEquals("A slot was added to original but not in the copy, its version has remain", copyVersion, copy.getVersion());
+        originalVersion = d.getVersion();
+        d.removeFrameSlot("v3");
+        assertNotEquals("A slot was removed from original, its version has to be updated", originalVersion, d.getVersion());
+        assertEquals("A slot was removed from original but not from the copy, its version has remain", copyVersion, copy.getVersion());
+    }
+
+    @SuppressWarnings("deprecation")
+    private static FrameDescriptor getShallowCopy(FrameDescriptor d) {
+        return d.shallowCopy();
     }
 
     @Test
@@ -148,7 +170,6 @@ public class FrameDescriptorTest {
 
         // remove slot
         d.removeFrameSlot("v3");
-        assertEquals(2, d.getSize());
         assertFalse(version.isValid());
         version = d.getVersion();
         assertTrue(version.isValid());
@@ -183,5 +204,40 @@ public class FrameDescriptorTest {
             }
         }
         d.getNotInFrameAssumption("v4");
+    }
+
+    @Test
+    public void removeFrameSlot() throws FrameSlotTypeException {
+        TruffleRuntime runtime = Truffle.getRuntime();
+        FrameDescriptor frameDescriptor = new FrameDescriptor();
+        FrameSlot slot1 = frameDescriptor.addFrameSlot("var1", FrameSlotKind.Object);
+        FrameSlot slot2 = frameDescriptor.addFrameSlot("var2", FrameSlotKind.Object);
+        Frame frame = runtime.createMaterializedFrame(new Object[0], frameDescriptor);
+        frame.setObject(slot1, "a");
+        frame.setObject(slot2, "b");
+        assertEquals("a", frame.getObject(slot1));
+        assertEquals("b", frame.getObject(slot2));
+        assertEquals(2, frameDescriptor.getSize());
+        assertEquals(2, getShallowCopy(frameDescriptor).getSize());
+
+        frameDescriptor.removeFrameSlot("var1");
+        assertNull(frameDescriptor.findFrameSlot("var1"));
+        assertEquals("b", frame.getObject(slot2));
+        assertEquals(2, frameDescriptor.getSize());
+        assertEquals(1, frameDescriptor.copy().getSize());
+
+        FrameSlot slot3 = frameDescriptor.addFrameSlot("var3", FrameSlotKind.Object);
+        FrameSlot slot4 = frameDescriptor.addFrameSlot("var4", FrameSlotKind.Object);
+        assertEquals("b", frame.getObject(slot2));
+        assertEquals(null, frame.getObject(slot3));
+        assertEquals(null, frame.getObject(slot4));
+        assertEquals(4, frameDescriptor.getSize());
+        assertEquals(3, frameDescriptor.copy().getSize());
+
+        frame.setObject(slot3, "c");
+        frame.setObject(slot4, "d");
+        assertEquals("b", frame.getObject(slot2));
+        assertEquals("c", frame.getObject(slot3));
+        assertEquals("d", frame.getObject(slot4));
     }
 }

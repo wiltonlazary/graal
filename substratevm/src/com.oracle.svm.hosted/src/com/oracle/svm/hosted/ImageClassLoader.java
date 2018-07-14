@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -100,15 +102,17 @@ public final class ImageClassLoader {
         this.classLoader = classLoader;
     }
 
-    /** A public factory method that accepts a gr8964Tracing parameter. */
     public static ImageClassLoader create(Platform platform, String[] classpathAll, ClassLoader classLoader) {
         ArrayList<String> classpathFiltered = new ArrayList<>(classpathAll.length);
         classpathFiltered.addAll(Arrays.asList(classpathAll));
 
-        /* The Graal SDK is on the boot class path, and it contains annotated types. */
-        for (String s : System.getProperty("sun.boot.class.path").split(File.pathSeparator)) {
-            if (s.contains("graal-sdk")) {
-                classpathFiltered.add(s);
+        /* If the Graal SDK is on the boot class path, and it contains annotated types. */
+        final String sunBootClassPath = System.getProperty("sun.boot.class.path");
+        if (sunBootClassPath != null) {
+            for (String s : sunBootClassPath.split(File.pathSeparator)) {
+                if (s.contains("graal-sdk")) {
+                    classpathFiltered.add(s);
+                }
             }
         }
 

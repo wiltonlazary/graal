@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -53,6 +55,8 @@ import javax.tools.Diagnostic.Kind;
 import com.oracle.truffle.api.dsl.GeneratedBy;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.instrumentation.GenerateWrapper;
+import com.oracle.truffle.api.instrumentation.GenerateWrapper.IncomingConverter;
+import com.oracle.truffle.api.instrumentation.GenerateWrapper.OutgoingConverter;
 import com.oracle.truffle.api.instrumentation.InstrumentableNode;
 import com.oracle.truffle.api.instrumentation.ProbeNode;
 import com.oracle.truffle.api.nodes.Node;
@@ -154,7 +158,6 @@ public final class InstrumentableProcessor extends AbstractProcessor {
                             emitError(element, String.format("Classes annotated with @%s must extend %s.", GenerateWrapper.class.getSimpleName(), Node.class.getSimpleName()));
                             continue;
                         }
-
                     }
 
                     AnnotationMirror generateWrapperMirror = ElementUtils.findAnnotationMirror(element.getAnnotationMirrors(), context.getType(GenerateWrapper.class));
@@ -459,30 +462,64 @@ public final class InstrumentableProcessor extends AbstractProcessor {
         List<ExecutableElement> wrappedMethods = new ArrayList<>();
         List<ExecutableElement> wrappedExecuteMethods = new ArrayList<>();
         List<? extends Element> elementList = context.getEnvironment().getElementUtils().getAllMembers(sourceType);
+
+        ExecutableElement genericExecuteDelegate = null;
         for (ExecutableElement method : ElementFilter.methodsIn(elementList)) {
-            Set<Modifier> modifiers = method.getModifiers();
-            if (modifiers.contains(Modifier.FINAL)) {
-                continue;
-            }
-            Modifier visibility = ElementUtils.getVisibility(modifiers);
-            if (visibility == Modifier.PRIVATE) {
-                continue;
-            }
-
-            String methodName = method.getSimpleName().toString();
-
-            if (methodName.startsWith(EXECUTE_METHOD_PREFIX)) {
+            if (isExecuteMethod(method) && isOverridable(method)) {
                 VariableElement firstParam = method.getParameters().isEmpty() ? null : method.getParameters().get(0);
                 if (topLevelClass && (firstParam == null || !ElementUtils.isAssignable(firstParam.asType(), context.getType(VirtualFrame.class)))) {
                     emitError(e, String.format("Wrapped execute method %s must have VirtualFrame as first parameter.", method.getSimpleName().toString()));
                     return null;
                 }
+                if (ElementUtils.isObject(method.getReturnType()) && method.getParameters().size() == 1 && genericExecuteDelegate == null) {
+                    genericExecuteDelegate = method;
+                }
+            }
+        }
+
+        for (ExecutableElement method : ElementFilter.methodsIn(elementList)) {
+            if (!isOverridable(method)) {
+                continue;
+            }
+
+            String methodName = method.getSimpleName().toString();
+            if (methodName.startsWith(EXECUTE_METHOD_PREFIX)) {
                 wrappedExecuteMethods.add(method);
             } else {
-                if (modifiers.contains(Modifier.ABSTRACT) && !methodName.equals("getSourceSection") //
-                                && !methodName.equals(METHOD_GET_NODE_COST)) {
+                if (method.getModifiers().contains(Modifier.ABSTRACT) && !methodName.equals("getSourceSection") //
+                                && !methodName.equals(METHOD_GET_NODE_COST) && !method.getThrownTypes().contains(context.getType(UnexpectedResultException.class))) {
                     wrappedMethods.add(method);
                 }
+            }
+        }
+
+        ExecutableElement incomingConverterMethod = null;
+        ExecutableElement outgoingConverterMethod = null;
+
+        for (ExecutableElement method : ElementFilter.methodsIn(elementList)) {
+            IncomingConverter incomingConverter = method.getAnnotation(IncomingConverter.class);
+            OutgoingConverter outgoingConverter = method.getAnnotation(OutgoingConverter.class);
+
+            if (incomingConverter != null) {
+                if (incomingConverterMethod != null) {
+                    emitError(sourceType, String.format("Only one @%s method allowed, found multiple.", IncomingConverter.class.getSimpleName()));
+                    return null;
+                }
+                if (!verifyConverter(method, IncomingConverter.class)) {
+                    continue;
+                }
+                incomingConverterMethod = method;
+            }
+
+            if (outgoingConverter != null) {
+                if (outgoingConverterMethod != null) {
+                    emitError(sourceType, String.format("Only one @%s method allowed, found multiple.", OutgoingConverter.class.getSimpleName()));
+                    return null;
+                }
+                if (!verifyConverter(method, OutgoingConverter.class)) {
+                    continue;
+                }
+                outgoingConverterMethod = method;
             }
         }
 
@@ -497,7 +534,8 @@ public final class InstrumentableProcessor extends AbstractProcessor {
             }
         });
 
-        for (ExecutableElement executeMethod : wrappedExecuteMethods) {
+        for (ExecutableElement method : wrappedExecuteMethods) {
+            ExecutableElement executeMethod = method;
             CodeExecutableElement wrappedExecute = CodeExecutableElement.clone(processingEnv, executeMethod);
             wrappedExecute.getModifiers().remove(Modifier.ABSTRACT);
             wrappedExecute.getAnnotationMirrors().clear();
@@ -512,9 +550,15 @@ public final class InstrumentableProcessor extends AbstractProcessor {
 
             CodeTreeBuilder builder = wrappedExecute.createBuilder();
             TypeMirror returnTypeMirror = executeMethod.getReturnType();
-            boolean returnVoid = ElementUtils.isVoid(returnTypeMirror);
+            boolean executeReturnsVoid = ElementUtils.isVoid(returnTypeMirror);
+            if (executeReturnsVoid && genericExecuteDelegate != null && executeMethod.getParameters().size() == genericExecuteDelegate.getParameters().size()) {
+                executeMethod = genericExecuteDelegate;
+                returnTypeMirror = genericExecuteDelegate.getReturnType();
+                executeReturnsVoid = false;
+            }
+
             String returnName;
-            if (!returnVoid) {
+            if (!executeReturnsVoid) {
                 returnName = "returnValue";
                 builder.declaration(returnTypeMirror, returnName, (CodeTree) null);
             } else {
@@ -523,6 +567,10 @@ public final class InstrumentableProcessor extends AbstractProcessor {
             builder.startFor().startGroup().string(";;").end().end().startBlock();
             builder.declaration("boolean", VAR_RETURN_CALLED, "false");
             builder.startTryBlock();
+            if (wrappedExecute.getThrownTypes().contains(context.getType(UnexpectedResultException.class))) {
+                builder.startTryBlock();
+            }
+
             builder.startStatement().startCall(FIELD_PROBE, METHOD_ON_ENTER).string(frameParameterName).end().end();
 
             CodeTreeBuilder callDelegate = builder.create();
@@ -531,20 +579,34 @@ public final class InstrumentableProcessor extends AbstractProcessor {
                 callDelegate.string(parameter.getSimpleName().toString());
             }
             callDelegate.end();
-            if (returnVoid) {
+            if (executeReturnsVoid) {
                 builder.statement(callDelegate.build());
             } else {
                 builder.startStatement().string(returnName).string(" = ").tree(callDelegate.build()).end();
             }
 
             builder.startStatement().string(VAR_RETURN_CALLED).string(" = true").end();
-            builder.startStatement().startCall(FIELD_PROBE, METHOD_ON_RETURN_VALUE).string(frameParameterName).string(returnName).end().end();
+
+            builder.startStatement().startCall(FIELD_PROBE, METHOD_ON_RETURN_VALUE).string(frameParameterName);
+            if (outgoingConverterMethod == null || executeReturnsVoid) {
+                builder.string(returnName);
+            } else {
+                builder.tree(createCallConverter(outgoingConverterMethod, frameParameterName, CodeTreeBuilder.singleString(returnName)));
+            }
+            builder.end().end();
+
             builder.statement("break");
             if (wrappedExecute.getThrownTypes().contains(context.getType(UnexpectedResultException.class))) {
                 builder.end().startCatchBlock(context.getType(UnexpectedResultException.class), "e");
                 builder.startStatement().string(VAR_RETURN_CALLED).string(" = true").end();
-                builder.startStatement().startCall(FIELD_PROBE, METHOD_ON_RETURN_VALUE).string(frameParameterName).string("e.getResult()").end().end();
-                builder.startThrow().string("e").end();
+                builder.startStatement().startCall(FIELD_PROBE, METHOD_ON_RETURN_VALUE).string(frameParameterName);
+                if (outgoingConverterMethod == null || executeReturnsVoid) {
+                    builder.string("e.getResult()");
+                } else {
+                    builder.tree(createCallConverter(outgoingConverterMethod, frameParameterName, CodeTreeBuilder.singleString("e.getResult()")));
+                }
+                builder.end().end();
+                builder.startThrow().string("e").end().end();
             }
             builder.end().startCatchBlock(context.getType(Throwable.class), "t");
             CodeTreeBuilder callExOrUnwind = builder.create();
@@ -553,8 +615,8 @@ public final class InstrumentableProcessor extends AbstractProcessor {
             builder.startIf().string("result == ").string(CONSTANT_REENTER).end();
             builder.startBlock();
             builder.statement("continue");
-            builder.end().startElseIf();
-            if (returnVoid) {
+            if (ElementUtils.isVoid(wrappedExecute.getReturnType())) {
+                builder.end().startElseIf();
                 builder.string("result != null").end();
                 builder.startBlock();
                 builder.statement("break");
@@ -562,31 +624,53 @@ public final class InstrumentableProcessor extends AbstractProcessor {
                 boolean objectReturnType = "java.lang.Object".equals(ElementUtils.getQualifiedName(returnTypeMirror)) && returnTypeMirror.getKind() != TypeKind.ARRAY;
                 boolean throwsUnexpectedResult = wrappedExecute.getThrownTypes().contains(context.getType(UnexpectedResultException.class));
                 if (objectReturnType || !throwsUnexpectedResult) {
+                    builder.end().startElseIf();
                     builder.string("result != null").end();
                     builder.startBlock();
                     builder.startStatement().string(returnName).string(" = ");
                     if (!objectReturnType) {
                         builder.string("(").string(ElementUtils.getSimpleName(returnTypeMirror)).string(") ");
                     }
-                    builder.string("result").end();
+                    if (incomingConverterMethod == null) {
+                        builder.string("result");
+                    } else {
+                        builder.tree(createCallConverter(incomingConverterMethod, frameParameterName, CodeTreeBuilder.singleString("result")));
+                    }
+                    builder.end();
                     builder.statement("break");
                 } else { // can throw UnexpectedResultException
+                    builder.end();
+
+                    if (incomingConverterMethod != null) {
+                        builder.startIf().string("result != null").end().startBlock();
+                        builder.startStatement();
+                        builder.string("result = ");
+                        builder.tree(createCallConverter(incomingConverterMethod, frameParameterName, CodeTreeBuilder.singleString("result")));
+                        builder.end();
+                        builder.end();
+                    }
+
+                    builder.startIf();
                     builder.string("result").instanceOf(boxed(returnTypeMirror, context.getEnvironment().getTypeUtils())).end();
                     builder.startBlock();
+
                     builder.startStatement().string(returnName).string(" = ");
                     builder.string("(").string(ElementUtils.getSimpleName(returnTypeMirror)).string(") ");
-                    builder.string("result").end();
+                    builder.string("result");
+                    builder.end();
                     builder.statement("break");
                     builder.end();
                     builder.startElseIf().string("result != null").end();
                     builder.startBlock();
-                    builder.startThrow().string("new UnexpectedResultException(result)").end();
+                    builder.startThrow().startNew(context.getType(UnexpectedResultException.class));
+                    builder.string("result");
+                    builder.end().end(); // new, throw
                 }
             }
             builder.end();
             builder.startThrow().string("t").end();
             builder.end(2);
-            if (!returnVoid) {
+            if (!ElementUtils.isVoid(wrappedExecute.getReturnType())) {
                 builder.startReturn().string(returnName).end();
             }
 
@@ -613,6 +697,95 @@ public final class InstrumentableProcessor extends AbstractProcessor {
         }
 
         return wrapperType;
+    }
+
+    private static boolean isExecuteMethod(ExecutableElement method) {
+        String methodName = method.getSimpleName().toString();
+        if (!methodName.startsWith(EXECUTE_METHOD_PREFIX)) {
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean isOverridable(ExecutableElement method) {
+        Set<Modifier> modifiers = method.getModifiers();
+        if (modifiers.contains(Modifier.FINAL)) {
+            return false;
+        }
+        Modifier visibility = ElementUtils.getVisibility(modifiers);
+        if (visibility == Modifier.PRIVATE) {
+            return false;
+        }
+        return true;
+    }
+
+    private static CodeTree createCallConverter(ExecutableElement converterMethod, String frameParameterName, CodeTree returnName) {
+        CodeTreeBuilder builder = CodeTreeBuilder.createBuilder();
+
+        if (converterMethod.getModifiers().contains(Modifier.STATIC)) {
+            builder.startStaticCall(converterMethod);
+        } else {
+            builder.startCall("this." + FIELD_DELEGATE, converterMethod.getSimpleName().toString());
+        }
+
+        if (converterMethod.getParameters().size() == 1) {
+            builder.tree(returnName);
+        } else {
+            // should be verified
+            if (converterMethod.getParameters().size() != 2) {
+                throw new AssertionError();
+            }
+            builder.string(frameParameterName);
+            builder.tree(returnName);
+        }
+        builder.end();
+        return builder.build();
+    }
+
+    private boolean verifyConverter(ExecutableElement method, Class<?> annotationClass) {
+        if (method.getModifiers().contains(Modifier.PRIVATE)) {
+            emitError(method, String.format("Method annotated with @%s must not be private.", annotationClass.getSimpleName()));
+            return false;
+        }
+
+        if (method.getModifiers().contains(Modifier.ABSTRACT)) {
+            emitError(method, String.format("Method annotated with @%s must not be abstract.", annotationClass.getSimpleName()));
+            return false;
+        }
+
+        TypeMirror frameClass = ProcessorContext.getInstance().getDeclaredType(VirtualFrame.class);
+        TypeMirror objectClass = ProcessorContext.getInstance().getDeclaredType(Object.class);
+
+        boolean valid = true;
+        if (method.getParameters().size() == 1) {
+            TypeMirror firstType = method.getParameters().get(0).asType();
+            if (!ElementUtils.typeEquals(firstType, objectClass)) {
+                valid = false;
+            }
+        } else if (method.getParameters().size() == 2) {
+            TypeMirror firstType = method.getParameters().get(0).asType();
+            if (!ElementUtils.typeEquals(firstType, frameClass)) {
+                valid = false;
+            }
+            TypeMirror secondType = method.getParameters().get(1).asType();
+            if (!ElementUtils.typeEquals(secondType, objectClass)) {
+                valid = false;
+            }
+        } else {
+            valid = false;
+        }
+
+        if (!ElementUtils.typeEquals(method.getReturnType(), objectClass)) {
+            valid = false;
+        }
+
+        if (!valid) {
+            emitError(method, String.format("Invalid @%s method signature. Must be either " +
+                            "Object converter(Object) or Object converter(%s, Object)", annotationClass.getSimpleName(), VirtualFrame.class.getSimpleName()));
+            return false;
+        }
+
+        return true;
     }
 
     private static TypeMirror boxed(TypeMirror type, Types types) {

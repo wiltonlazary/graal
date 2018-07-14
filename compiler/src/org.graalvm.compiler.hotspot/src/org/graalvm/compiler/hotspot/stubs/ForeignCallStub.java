@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -57,7 +59,7 @@ import org.graalvm.compiler.word.Word;
 import org.graalvm.compiler.word.WordTypes;
 import org.graalvm.word.LocationIdentity;
 
-import jdk.vm.ci.hotspot.HotSpotJVMCIRuntimeProvider;
+import jdk.vm.ci.hotspot.HotSpotJVMCIRuntime;
 import jdk.vm.ci.hotspot.HotSpotSignature;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaMethod;
@@ -78,7 +80,7 @@ import jdk.vm.ci.meta.Signature;
  */
 public class ForeignCallStub extends Stub {
 
-    private final HotSpotJVMCIRuntimeProvider jvmciRuntime;
+    private final HotSpotJVMCIRuntime jvmciRuntime;
 
     /**
      * The target of the call.
@@ -103,7 +105,7 @@ public class ForeignCallStub extends Stub {
      *            be re-executed.
      * @param killedLocations the memory locations killed by the stub call
      */
-    public ForeignCallStub(OptionValues options, HotSpotJVMCIRuntimeProvider runtime, HotSpotProviders providers, long address, ForeignCallDescriptor descriptor, boolean prependThread,
+    public ForeignCallStub(OptionValues options, HotSpotJVMCIRuntime runtime, HotSpotProviders providers, long address, ForeignCallDescriptor descriptor, boolean prependThread,
                     Transition transition,
                     boolean reexecutable,
                     LocationIdentity... killedLocations) {

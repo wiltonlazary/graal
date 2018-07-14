@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -25,6 +27,7 @@ package com.oracle.svm.core.graal.nodes;
 import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_2;
 import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_2;
 
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.meta.CompressedNullConstant;
 import com.oracle.svm.core.meta.CompressibleConstant;
 import jdk.vm.ci.meta.Constant;
@@ -56,6 +59,17 @@ public final class SubstrateCompressionNode extends CompressionNode {
     }
 
     @Override
+    public JavaConstant nullConstant() {
+        if (SubstrateOptions.UseLinearPointerCompression.getValue()) {
+            /*
+             * Return null constant prior to the compression op.
+             */
+            return op == CompressionOp.Uncompress ? CompressedNullConstant.COMPRESSED_NULL : JavaConstant.NULL_POINTER;
+        }
+        return super.nullConstant();
+    }
+
+    @Override
     protected Constant compress(Constant c) {
         if (JavaConstant.NULL_POINTER.equals(c)) {
             return CompressedNullConstant.COMPRESSED_NULL;
@@ -76,5 +90,10 @@ public final class SubstrateCompressionNode extends CompressionNode {
     @Override
     protected Stamp mkStamp(Stamp input) {
         return SubstrateNarrowOopStamp.mkStamp(op, input, encoding);
+    }
+
+    @Override
+    public boolean mayNullCheckSkipConversion() {
+        return !SubstrateOptions.UseLinearPointerCompression.getValue();
     }
 }

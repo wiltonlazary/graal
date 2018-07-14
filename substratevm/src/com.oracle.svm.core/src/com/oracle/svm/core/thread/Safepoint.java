@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -103,11 +105,11 @@ import com.oracle.svm.core.util.VMError;
  * that timer has expired, a timer callback is executed and {@link #safepointRequested} is reset
  * with a value that estimates the number of safepoint checks during the intended timer interval.
  * When an actual safepoint is requested, the master overwrites each slave's
- * {@link #safepointRequested} with {@value SafepointRequestValues#ENTER} so it becomes 0 on the
- * next decrement. When no timer is active on a thread, its {@link #safepointRequested} value is
- * reset to {@value SafepointRequestValues#RESET}. Because {@link #safepointRequested} still
- * eventually decrements to 0, threads can very infrequently call {@link #slowPathSafepointCheck()}
- * without cause.
+ * {@link #safepointRequested} with {@link SafepointRequestValues#ENTER} so it becomes 0 on the next
+ * decrement. When no timer is active on a thread, its {@link #safepointRequested} value is reset to
+ * {@link SafepointRequestValues#RESET}. Because {@link #safepointRequested} still eventually
+ * decrements to 0, threads can very infrequently call {@link #slowPathSafepointCheck()} without
+ * cause.
  *
  * @see SafepointCheckNode
  */

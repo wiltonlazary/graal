@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -39,13 +41,15 @@ import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.StructuredGraph.AllowAssumptions;
 import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
 import org.graalvm.compiler.options.OptionValues;
+import org.graalvm.compiler.phases.PhaseSuite;
 import org.graalvm.compiler.phases.common.CanonicalizerPhase;
 import org.graalvm.compiler.phases.common.DeadCodeEliminationPhase;
+import org.graalvm.compiler.phases.tiers.HighTierContext;
 import org.graalvm.compiler.phases.tiers.PhaseContext;
-import org.graalvm.compiler.truffle.compiler.TruffleCompilerImpl;
 import org.graalvm.compiler.truffle.common.TruffleCompilerOptions;
 import org.graalvm.compiler.truffle.common.TruffleCompilerRuntime;
 import org.graalvm.compiler.truffle.common.TruffleDebugJavaMethod;
+import org.graalvm.compiler.truffle.compiler.TruffleCompilerImpl;
 import org.graalvm.compiler.truffle.runtime.DefaultInliningPolicy;
 import org.graalvm.compiler.truffle.runtime.OptimizedCallTarget;
 import org.graalvm.compiler.truffle.runtime.TruffleInlining;
@@ -54,16 +58,20 @@ import org.junit.Assert;
 
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.Truffle;
+import com.oracle.truffle.api.nodes.ControlFlowException;
 import com.oracle.truffle.api.nodes.RootNode;
 
+import jdk.vm.ci.code.BailoutException;
 import jdk.vm.ci.meta.SpeculationLog;
 
 public abstract class PartialEvaluationTest extends GraalCompilerTest {
     protected final TruffleCompilerImpl truffleCompiler;
+    private final PhaseSuite<HighTierContext> suite;
 
     public PartialEvaluationTest() {
         beforeInitialization();
         this.truffleCompiler = (TruffleCompilerImpl) TruffleCompilerRuntime.getRuntime().newTruffleCompiler();
+        this.suite = truffleCompiler.createGraphBuilderSuite();
     }
 
     /**
@@ -97,12 +105,30 @@ public abstract class PartialEvaluationTest extends GraalCompilerTest {
 
     protected OptimizedCallTarget assertPartialEvalEquals(String methodName, RootNode root, Object[] arguments) {
         final OptimizedCallTarget compilable = (OptimizedCallTarget) Truffle.getRuntime().createCallTarget(root);
-        CompilationIdentifier compilationId = getCompilationId(compilable);
-        StructuredGraph actual = partialEval(compilable, arguments, AllowAssumptions.YES, compilationId);
-        truffleCompiler.compilePEGraph(actual, methodName, null, compilable, asCompilationRequest(compilationId), null);
-        removeFrameStates(actual);
-        StructuredGraph expected = parseForComparison(methodName, actual.getDebug());
-        Assert.assertEquals(getCanonicalGraphString(expected, true, true), getCanonicalGraphString(actual, true, true));
+
+        BailoutException lastBailout = null;
+        for (int i = 0; i < 10; i++) {
+            try {
+                CompilationIdentifier compilationId = getCompilationId(compilable);
+                StructuredGraph actual = partialEval(compilable, arguments, AllowAssumptions.YES, compilationId);
+                truffleCompiler.compilePEGraph(actual, methodName, suite, compilable, asCompilationRequest(compilationId), null);
+                removeFrameStates(actual);
+                StructuredGraph expected = parseForComparison(methodName, actual.getDebug());
+                removeFrameStates(expected);
+
+                assertEquals(expected, actual, true, true);
+                return compilable;
+            } catch (BailoutException e) {
+                if (e.isPermanent()) {
+                    throw e;
+                }
+                lastBailout = e;
+                continue;
+            }
+        }
+        if (lastBailout != null) {
+            throw lastBailout;
+        }
         return compilable;
     }
 
@@ -125,9 +151,18 @@ public abstract class PartialEvaluationTest extends GraalCompilerTest {
     @SuppressWarnings("try")
     protected StructuredGraph partialEval(OptimizedCallTarget compilable, Object[] arguments, AllowAssumptions allowAssumptions, CompilationIdentifier compilationId) {
         // Executed AST so that all classes are loaded and initialized.
-        compilable.call(arguments);
-        compilable.call(arguments);
-        compilable.call(arguments);
+        try {
+            compilable.call(arguments);
+        } catch (IgnoreError e) {
+        }
+        try {
+            compilable.call(arguments);
+        } catch (IgnoreError e) {
+        }
+        try {
+            compilable.call(arguments);
+        } catch (IgnoreError e) {
+        }
 
         OptionValues options = TruffleCompilerOptions.getOptions();
         DebugContext debug = getDebugContext(options);
@@ -158,5 +193,13 @@ public abstract class PartialEvaluationTest extends GraalCompilerTest {
         } catch (Throwable e) {
             throw debug.handle(e);
         }
+    }
+
+    /**
+     * Error ignored when running before partially evaluating a root node.
+     */
+    @SuppressWarnings("serial")
+    protected static final class IgnoreError extends ControlFlowException {
+
     }
 }

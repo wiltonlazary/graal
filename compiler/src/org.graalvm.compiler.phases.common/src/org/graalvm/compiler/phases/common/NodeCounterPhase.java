@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -33,6 +35,18 @@ import org.graalvm.compiler.phases.tiers.PhaseContext;
 
 public class NodeCounterPhase extends BasePhase<PhaseContext> {
 
+    private Stage stage;
+
+    public NodeCounterPhase(Stage stage) {
+        this.stage = stage;
+    }
+
+    public enum Stage {
+        INIT,
+        EARLY,
+        LATE
+    }
+
     public static class Options {
         // @formatter:off
         @Option(help = "Counts the number of instances of each node class.", type = OptionType.Debug)
@@ -42,9 +56,11 @@ public class NodeCounterPhase extends BasePhase<PhaseContext> {
 
     @Override
     protected void run(StructuredGraph graph, PhaseContext context) {
+
         for (Node node : graph.getNodes()) {
-            DebugContext.counter("NodeCounter_%s",
-                            node.getNodeClass().getClazz().getSimpleName()).increment(node.getDebug());
+            String nodeName = node.getNodeClass().getClazz().getSimpleName();
+
+            DebugContext.counter("NodeCounter_%s_%s", this.stage, nodeName).increment(node.getDebug());
         }
     }
 }

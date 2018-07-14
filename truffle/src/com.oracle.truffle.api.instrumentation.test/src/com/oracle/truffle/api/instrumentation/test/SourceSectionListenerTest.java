@@ -94,9 +94,8 @@ public class SourceSectionListenerTest extends AbstractInstrumentationTest {
         assertSections(impl.query(statementFilter), sourceSections1[0], sourceSections2[0]);
         assertSections(impl.query(exprFilter), sourceSections1[2], sourceSections1[3], sourceSections2[2]);
 
-        engine.close(); // disables the instrument
-        engine = null;
-        engine = getEngine();
+        teardown();
+        setup();
 
         SourceSection[] sourceSections3 = sections("STATEMENT(EXPRESSION, EXPRESSION, EXPRESSION)", "STATEMENT(EXPRESSION, EXPRESSION, EXPRESSION)", "EXPRESSION");
         Source source3 = sourceSections3[0].getSource();
@@ -209,6 +208,34 @@ public class SourceSectionListenerTest extends AbstractInstrumentationTest {
             return instrumenter.querySourceSections(filter);
         }
 
+    }
+
+    @Test
+    public void testVisitLoadedSourceSections() throws IOException {
+        SourceSection[] sourceSections = sections("STATEMENT(EXPRESSION)\n", "STATEMENT(EXPRESSION)", "EXPRESSION");
+        run(sourceSections[0].getSource());
+        TestVisitLoadedSourceSections test = engine.getInstruments().get("testVisitLoadedSourceSections").lookup(TestVisitLoadedSourceSections.class);
+        assertEvents(test.visitedEvents, sourceSections);
+        // No more sections visited
+        run("EXPRESSION(EXPRESSION,EXPRESSION)");
+        Assert.assertEquals(sourceSections.length, test.visitedEvents.size());
+    }
+
+    @Registration(id = "testVisitLoadedSourceSections", services = {TestVisitLoadedSourceSections.class, Object.class})
+    public static class TestVisitLoadedSourceSections extends TruffleInstrument {
+
+        List<LoadSourceSectionEvent> visitedEvents = new ArrayList<>();
+
+        @Override
+        protected void onCreate(Env env) {
+            env.getInstrumenter().visitLoadedSourceSections(SourceSectionFilter.ANY, new LoadSourceSectionListener() {
+                @Override
+                public void onLoad(LoadSourceSectionEvent event) {
+                    visitedEvents.add(event);
+                }
+            });
+            env.registerService(this);
+        }
     }
 
     @Test

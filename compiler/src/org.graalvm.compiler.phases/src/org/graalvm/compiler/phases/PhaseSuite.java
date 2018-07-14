@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -87,7 +89,7 @@ public class PhaseSuite<C> extends BasePhase<C> {
      * Returns a {@link ListIterator} at the position of the last phase in the suite. If the suite
      * has no phases then it will return an empty iterator.
      */
-    private ListIterator<BasePhase<? super C>> findLastPhase() {
+    public ListIterator<BasePhase<? super C>> findLastPhase() {
         ListIterator<BasePhase<? super C>> it = phases.listIterator();
         while (it.hasNext()) {
             it.next();

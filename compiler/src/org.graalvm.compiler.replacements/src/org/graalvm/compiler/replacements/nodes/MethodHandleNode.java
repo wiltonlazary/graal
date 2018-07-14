@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -60,7 +62,6 @@ import jdk.vm.ci.meta.Assumptions;
 import jdk.vm.ci.meta.Assumptions.AssumptionResult;
 import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.DeoptimizationReason;
-import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.MethodHandleAccessProvider;
@@ -68,6 +69,8 @@ import jdk.vm.ci.meta.MethodHandleAccessProvider.IntrinsicMethod;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
+import jdk.vm.ci.meta.SpeculationLog;
+import jdk.vm.ci.meta.SpeculationLog.Speculation;
 
 /**
  * Node for invocation methods defined on the class {@link MethodHandle}.
@@ -327,7 +330,7 @@ public final class MethodHandleNode extends MacroStateSplitNode implements Simpl
                         AnchoringNode guardAnchor = adder.getGuardAnchor();
                         DeoptimizationReason reason = DeoptimizationReason.ClassCastException;
                         DeoptimizationAction action = DeoptimizationAction.InvalidateRecompile;
-                        JavaConstant speculation = JavaConstant.NULL_POINTER;
+                        Speculation speculation = SpeculationLog.NO_SPECULATION;
                         GuardingNode guard;
                         if (guardAnchor == null) {
                             FixedGuardNode fixedGuard = adder.add(new FixedGuardNode(inst, reason, action, speculation, false));

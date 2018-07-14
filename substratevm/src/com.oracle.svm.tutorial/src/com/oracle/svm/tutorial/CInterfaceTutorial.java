@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -190,7 +192,7 @@ public class CInterfaceTutorial {
     @CEntryPoint(name = "java_entry_point")
     protected static void javaEntryPoint(@SuppressWarnings("unused") IsolateThread thread, MyData data) {
         /* Allocate a C structure in our stack frame. */
-        MyData copy = StackValue.get(SizeOf.get(MyData.class));
+        MyData copy = StackValue.get(MyData.class);
 
         /* Get the size of a C structure. */
         int dataSize = SizeOf.get(MyData.class);

@@ -35,6 +35,7 @@ import java.util.Map;
 import org.graalvm.component.installer.CommandInput;
 import org.graalvm.component.installer.Commands;
 import org.graalvm.component.installer.CommonConstants;
+import static org.graalvm.component.installer.CommonConstants.WARN_REBUILD_IMAGES;
 import org.graalvm.component.installer.model.ComponentRegistry;
 import org.graalvm.component.installer.Feedback;
 import org.graalvm.component.installer.InstallerCommand;
@@ -49,6 +50,10 @@ public class UninstallCommand implements InstallerCommand {
         OPTIONS.put(Commands.OPTION_DRY_RUN, "");
         OPTIONS.put(Commands.OPTION_FORCE, "");
         OPTIONS.put(Commands.OPTION_IGNORE_FAILURES, "");
+
+        OPTIONS.put(Commands.LONG_OPTION_DRY_RUN, Commands.OPTION_DRY_RUN);
+        OPTIONS.put(Commands.LONG_OPTION_FORCE, Commands.OPTION_FORCE);
+        OPTIONS.put(Commands.LONG_OPTION_IGNORE_FAILURES, Commands.OPTION_IGNORE_FAILURES);
     }
 
     private final Map<String, ComponentInfo> toUninstall = new LinkedHashMap<>();
@@ -89,7 +94,7 @@ public class UninstallCommand implements InstallerCommand {
             if (toUninstall.containsKey(compId)) {
                 continue;
             }
-            ComponentInfo info = input.getLocalRegistry().loadSingleComponent(compId, true);
+            ComponentInfo info = input.getLocalRegistry().loadSingleComponent(compId.toLowerCase(), true);
             if (info == null) {
                 throw feedback.failure("UNINSTALL_UnknownComponentId", null, compId);
             }
@@ -111,9 +116,9 @@ public class UninstallCommand implements InstallerCommand {
                 }
             }
         } finally {
-            if (rebuildPolyglot) {
+            if (rebuildPolyglot && WARN_REBUILD_IMAGES) {
                 Path p = Paths.get(CommonConstants.PATH_JRE_BIN);
-                feedback.output("INSTALL_RebuildPolyglotNeeded", File.separator, input.getGraalHomePath().resolve(p));
+                feedback.output("INSTALL_RebuildPolyglotNeeded", File.separator, input.getGraalHomePath().resolve(p).normalize());
             }
         }
         return 0;

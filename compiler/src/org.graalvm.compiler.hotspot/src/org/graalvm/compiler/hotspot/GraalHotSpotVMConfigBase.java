@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -28,6 +30,7 @@ import org.graalvm.compiler.api.replacements.Fold.InjectedParameter;
 import jdk.vm.ci.common.JVMCIError;
 import jdk.vm.ci.hotspot.HotSpotVMConfigAccess;
 import jdk.vm.ci.hotspot.HotSpotVMConfigStore;
+import jdk.vm.ci.meta.MetaAccessProvider;
 
 /**
  * This is a source with different versions for various JDKs.
@@ -50,6 +53,7 @@ public abstract class GraalHotSpotVMConfigBase extends HotSpotVMConfigAccess {
      * {@link GraalHotSpotVMConfig} parameter to a {@linkplain Fold foldable} method.
      */
     public static final GraalHotSpotVMConfig INJECTED_VMCONFIG = null;
+    public static final MetaAccessProvider INJECTED_METAACCESS = null;
 
     public final String osName = getHostOSName();
     public final String osArch = getHostArchitectureName();

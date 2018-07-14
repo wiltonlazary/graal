@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,7 +24,8 @@
  */
 package org.graalvm.compiler.hotspot.replacements;
 
-import static jdk.vm.ci.hotspot.HotSpotJVMCIRuntimeProvider.getArrayBaseOffset;
+import static org.graalvm.compiler.hotspot.GraalHotSpotVMConfigBase.INJECTED_METAACCESS;
+import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.getArrayBaseOffset;
 import static org.graalvm.compiler.serviceprovider.GraalServices.Java8OrEarlier;
 
 import org.graalvm.compiler.api.replacements.ClassSubstitution;
@@ -64,8 +67,8 @@ public class SHA5Substitutions {
     static void implCompress0(Object receiver, byte[] buf, int ofs) {
         Object realReceiver = PiNode.piCastNonNull(receiver, shaClass);
         Object state = RawLoadNode.load(realReceiver, stateOffset, JavaKind.Object, LocationIdentity.any());
-        Word bufAddr = WordFactory.unsigned(ComputeObjectAddressNode.get(buf, getArrayBaseOffset(JavaKind.Byte) + ofs));
-        Word stateAddr = WordFactory.unsigned(ComputeObjectAddressNode.get(state, getArrayBaseOffset(JavaKind.Int)));
+        Word bufAddr = WordFactory.unsigned(ComputeObjectAddressNode.get(buf, getArrayBaseOffset(INJECTED_METAACCESS, JavaKind.Byte) + ofs));
+        Word stateAddr = WordFactory.unsigned(ComputeObjectAddressNode.get(state, getArrayBaseOffset(INJECTED_METAACCESS, JavaKind.Int)));
         HotSpotBackend.sha5ImplCompressStub(bufAddr, stateAddr);
     }
 }

@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -64,11 +66,9 @@ import static org.graalvm.compiler.hotspot.HotSpotForeignCallLinkage.Transition.
 import static org.graalvm.compiler.hotspot.HotSpotForeignCallLinkage.Transition.SAFEPOINT;
 import static org.graalvm.compiler.hotspot.HotSpotForeignCallLinkage.Transition.STACK_INSPECTABLE_LEAF;
 import static org.graalvm.compiler.hotspot.HotSpotHostBackend.DEOPTIMIZATION_HANDLER;
+import static org.graalvm.compiler.hotspot.HotSpotHostBackend.ENABLE_STACK_RESERVED_ZONE;
+import static org.graalvm.compiler.hotspot.HotSpotHostBackend.THROW_DELAYED_STACKOVERFLOW_ERROR;
 import static org.graalvm.compiler.hotspot.HotSpotHostBackend.UNCOMMON_TRAP_HANDLER;
-import static org.graalvm.compiler.hotspot.meta.DefaultHotSpotLoweringProvider.RuntimeCalls.CREATE_ARRAY_STORE_EXCEPTION;
-import static org.graalvm.compiler.hotspot.meta.DefaultHotSpotLoweringProvider.RuntimeCalls.CREATE_CLASS_CAST_EXCEPTION;
-import static org.graalvm.compiler.hotspot.meta.DefaultHotSpotLoweringProvider.RuntimeCalls.CREATE_NULL_POINTER_EXCEPTION;
-import static org.graalvm.compiler.hotspot.meta.DefaultHotSpotLoweringProvider.RuntimeCalls.CREATE_OUT_OF_BOUNDS_EXCEPTION;
 import static org.graalvm.compiler.hotspot.replacements.AssertionSnippets.ASSERTION_VM_MESSAGE_C;
 import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.MARK_WORD_LOCATION;
 import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.TLAB_END_LOCATION;
@@ -112,6 +112,7 @@ import org.graalvm.compiler.hotspot.HotSpotGraalRuntimeProvider;
 import org.graalvm.compiler.hotspot.stubs.ArrayStoreExceptionStub;
 import org.graalvm.compiler.hotspot.stubs.ClassCastExceptionStub;
 import org.graalvm.compiler.hotspot.stubs.CreateExceptionStub;
+import org.graalvm.compiler.hotspot.stubs.DivisionByZeroExceptionStub;
 import org.graalvm.compiler.hotspot.stubs.ExceptionHandlerStub;
 import org.graalvm.compiler.hotspot.stubs.NewArrayStub;
 import org.graalvm.compiler.hotspot.stubs.NewInstanceStub;
@@ -121,6 +122,7 @@ import org.graalvm.compiler.hotspot.stubs.Stub;
 import org.graalvm.compiler.hotspot.stubs.UnwindExceptionToCallerStub;
 import org.graalvm.compiler.hotspot.stubs.VerifyOopStub;
 import org.graalvm.compiler.nodes.NamedLocationIdentity;
+import org.graalvm.compiler.nodes.extended.BytecodeExceptionNode.BytecodeExceptionKind;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.word.Word;
 import org.graalvm.compiler.word.WordTypes;
@@ -128,7 +130,6 @@ import org.graalvm.word.LocationIdentity;
 
 import jdk.vm.ci.code.CodeCacheProvider;
 import jdk.vm.ci.hotspot.HotSpotJVMCIRuntime;
-import jdk.vm.ci.hotspot.HotSpotJVMCIRuntimeProvider;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MetaAccessProvider;
 
@@ -143,7 +144,7 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
     public static final ForeignCallDescriptor NOTIFY = new ForeignCallDescriptor("object_notify", boolean.class, Object.class);
     public static final ForeignCallDescriptor NOTIFY_ALL = new ForeignCallDescriptor("object_notifyAll", boolean.class, Object.class);
 
-    public HotSpotHostForeignCallsProvider(HotSpotJVMCIRuntimeProvider jvmciRuntime, HotSpotGraalRuntimeProvider runtime, MetaAccessProvider metaAccess, CodeCacheProvider codeCache,
+    public HotSpotHostForeignCallsProvider(HotSpotJVMCIRuntime jvmciRuntime, HotSpotGraalRuntimeProvider runtime, MetaAccessProvider metaAccess, CodeCacheProvider codeCache,
                     WordTypes wordTypes) {
         super(jvmciRuntime, runtime, metaAccess, codeCache, wordTypes);
     }
@@ -252,6 +253,12 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
         registerForeignCall(UNCOMMON_TRAP_HANDLER, c.uncommonTrapStub, NativeCall, PRESERVES_REGISTERS, LEAF_NOFP, REEXECUTABLE, NO_LOCATIONS);
         registerForeignCall(IC_MISS_HANDLER, c.inlineCacheMissStub, NativeCall, PRESERVES_REGISTERS, LEAF_NOFP, REEXECUTABLE, NO_LOCATIONS);
 
+        if (c.enableStackReservedZoneAddress != 0) {
+            assert c.throwDelayedStackOverflowErrorEntry != 0 : "both must exist";
+            registerForeignCall(ENABLE_STACK_RESERVED_ZONE, c.enableStackReservedZoneAddress, NativeCall, DESTROYS_REGISTERS, LEAF_NOFP, REEXECUTABLE, NO_LOCATIONS);
+            registerForeignCall(THROW_DELAYED_STACKOVERFLOW_ERROR, c.throwDelayedStackOverflowErrorEntry, NativeCall, DESTROYS_REGISTERS, LEAF_NOFP, REEXECUTABLE, NO_LOCATIONS);
+        }
+
         registerForeignCall(JAVA_TIME_MILLIS, c.javaTimeMillisAddress, NativeCall, DESTROYS_REGISTERS, LEAF_NOFP, REEXECUTABLE, NO_LOCATIONS);
         registerForeignCall(JAVA_TIME_NANOS, c.javaTimeNanosAddress, NativeCall, DESTROYS_REGISTERS, LEAF_NOFP, REEXECUTABLE, NO_LOCATIONS);
         registerForeignCall(SIN.foreignCallDescriptor, c.arithmeticSinAddress, NativeCall, DESTROYS_REGISTERS, LEAF, REEXECUTABLE, NO_LOCATIONS);
@@ -285,10 +292,13 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
         link(new ExceptionHandlerStub(options, providers, foreignCalls.get(EXCEPTION_HANDLER)));
         link(new UnwindExceptionToCallerStub(options, providers, registerStubCall(UNWIND_EXCEPTION_TO_CALLER, NOT_REEXECUTABLE, SAFEPOINT, any())));
         link(new VerifyOopStub(options, providers, registerStubCall(VERIFY_OOP, REEXECUTABLE, LEAF_NOFP, NO_LOCATIONS)));
-        link(new ArrayStoreExceptionStub(options, providers, registerStubCall(CREATE_ARRAY_STORE_EXCEPTION, REEXECUTABLE, SAFEPOINT, any())));
-        link(new ClassCastExceptionStub(options, providers, registerStubCall(CREATE_CLASS_CAST_EXCEPTION, REEXECUTABLE, SAFEPOINT, any())));
-        link(new NullPointerExceptionStub(options, providers, registerStubCall(CREATE_NULL_POINTER_EXCEPTION, REEXECUTABLE, SAFEPOINT, any())));
-        link(new OutOfBoundsExceptionStub(options, providers, registerStubCall(CREATE_OUT_OF_BOUNDS_EXCEPTION, REEXECUTABLE, SAFEPOINT, any())));
+
+        EnumMap<BytecodeExceptionKind, ForeignCallDescriptor> exceptionRuntimeCalls = DefaultHotSpotLoweringProvider.RuntimeCalls.runtimeCalls;
+        link(new ArrayStoreExceptionStub(options, providers, registerStubCall(exceptionRuntimeCalls.get(BytecodeExceptionKind.ARRAY_STORE), REEXECUTABLE, SAFEPOINT, any())));
+        link(new ClassCastExceptionStub(options, providers, registerStubCall(exceptionRuntimeCalls.get(BytecodeExceptionKind.CLASS_CAST), REEXECUTABLE, SAFEPOINT, any())));
+        link(new NullPointerExceptionStub(options, providers, registerStubCall(exceptionRuntimeCalls.get(BytecodeExceptionKind.NULL_POINTER), REEXECUTABLE, SAFEPOINT, any())));
+        link(new OutOfBoundsExceptionStub(options, providers, registerStubCall(exceptionRuntimeCalls.get(BytecodeExceptionKind.OUT_OF_BOUNDS), REEXECUTABLE, SAFEPOINT, any())));
+        link(new DivisionByZeroExceptionStub(options, providers, registerStubCall(exceptionRuntimeCalls.get(BytecodeExceptionKind.DIVISION_BY_ZERO), REEXECUTABLE, SAFEPOINT, any())));
 
         linkForeignCall(options, providers, IDENTITY_HASHCODE, c.identityHashCodeAddress, PREPEND_THREAD, SAFEPOINT, NOT_REEXECUTABLE, MARK_WORD_LOCATION);
         linkForeignCall(options, providers, REGISTER_FINALIZER, c.registerFinalizerAddress, PREPEND_THREAD, SAFEPOINT, NOT_REEXECUTABLE, any());

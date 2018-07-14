@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -22,6 +24,7 @@
  */
 package com.oracle.svm.core.jdk;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
@@ -108,7 +111,7 @@ public final class Resources {
         return ImageSingletons.lookup(ResourcesSupport.class).resources.get(name);
     }
 
-    public static URL createURL(String name, InputStream is) {
+    public static URL createURL(String name, byte[] resourceBytes) {
         class Conn extends URLConnection {
             Conn(URL url) {
                 super(url);
@@ -120,7 +123,7 @@ public final class Resources {
 
             @Override
             public InputStream getInputStream() throws IOException {
-                return is;
+                return new ByteArrayInputStream(resourceBytes);
             }
         }
 

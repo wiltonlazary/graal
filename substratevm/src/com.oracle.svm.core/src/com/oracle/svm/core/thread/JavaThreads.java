@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -28,6 +30,7 @@ import static com.oracle.svm.core.SubstrateOptions.MultiThreaded;
 import static com.oracle.svm.core.snippets.KnownIntrinsics.readCallerStackPointer;
 import static com.oracle.svm.core.snippets.KnownIntrinsics.readReturnAddress;
 
+import java.lang.Thread.UncaughtExceptionHandler;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Field;
@@ -40,7 +43,6 @@ import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.compiler.core.common.SuppressFBWarnings;
@@ -64,6 +66,7 @@ import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.heap.FeebleReferenceList;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.jdk.StackTraceBuilder;
+import com.oracle.svm.core.jdk.UninterruptibleUtils.AtomicReference;
 import com.oracle.svm.core.locks.VMMutex;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.option.XOptions;
@@ -412,7 +415,7 @@ public abstract class JavaThreads {
 
     protected abstract void start0(Thread thread, long stackSize);
 
-    protected abstract void setNativeName(Thread thread, String name);
+    protected abstract void setNativeName(String name);
 
     protected abstract void yield();
 
@@ -460,13 +463,38 @@ public abstract class JavaThreads {
              * Internal frames from the VMOperation handling show up in the stack traces, but we are
              * OK with that.
              */
-            StackTraceBuilder stackTraceBuilder = new StackTraceBuilder();
+            StackTraceBuilder stackTraceBuilder = new StackTraceBuilder(false);
             JavaStackWalker.walkCurrentThread(readCallerStackPointer(), readReturnAddress(), stackTraceBuilder);
             return stackTraceBuilder.getTrace();
         } else {
-            StackTraceBuilder stackTraceBuilder = new StackTraceBuilder();
+            StackTraceBuilder stackTraceBuilder = new StackTraceBuilder(false);
             JavaStackWalker.walkThread(thread, stackTraceBuilder);
             return stackTraceBuilder.getTrace();
+        }
+    }
+
+    /** If there is an uncaught exception handler, call it. */
+    public static void dispatchUncaughtException(Thread thread, Throwable throwable) {
+        /* Get the uncaught exception handler for the Thread, or the default one. */
+        UncaughtExceptionHandler handler = thread.getUncaughtExceptionHandler();
+        if (handler == null) {
+            handler = Thread.getDefaultUncaughtExceptionHandler();
+        }
+        if (handler != null) {
+            try {
+                handler.uncaughtException(thread, throwable);
+            } catch (Throwable t) {
+                /*
+                 * The JavaDoc for {@code Thread.UncaughtExceptionHandler.uncaughtException} says
+                 * the VM ignores any exceptions thrown.
+                 */
+            }
+        } else {
+            /* If no uncaught exception handler is present, then just report the throwable. */
+            /* Checkstyle: stop (printStackTrace below is going to write to System.err too). */
+            System.err.print("Exception in thread \"" + Thread.currentThread().getName() + "\" ");
+            // Checkstyle: resume
+            throwable.printStackTrace();
         }
     }
 
@@ -538,7 +566,7 @@ final class Target_java_lang_Thread {
     @Inject @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.NewInstance, declClass = AtomicReference.class)//
     AtomicReference<ParkEvent> sleepParkEvent;
 
-    @Delete //
+    @Alias//
     private ClassLoader contextClassLoader;
 
     @Alias//
@@ -586,15 +614,13 @@ final class Target_java_lang_Thread {
     native void setPriority(int newPriority);
 
     @Substitute
-    @SuppressWarnings("static-method")
     public ClassLoader getContextClassLoader() {
-        /* null indicates the system class loader */
-        return null;
+        return contextClassLoader;
     }
 
     @Substitute
     public void setContextClassLoader(ClassLoader cl) {
-        // noop
+        contextClassLoader = cl;
     }
 
     /** Replace "synchronized" modifier with delegation to an atomic increment. */
@@ -664,6 +690,7 @@ final class Target_java_lang_Thread {
 
         this.group = g;
         this.daemon = parent.isDaemon();
+        contextClassLoader = parent.getContextClassLoader();
         this.priority = parent.getPriority();
         this.target = target;
         setPriority(priority);
@@ -728,8 +755,9 @@ final class Target_java_lang_Thread {
     }
 
     @Substitute
+    @SuppressWarnings({"static-method"})
     protected void setNativeName(String name) {
-        JavaThreads.singleton().setNativeName(JavaThreads.fromTarget(this), name);
+        JavaThreads.singleton().setNativeName(name);
     }
 
     @Substitute
@@ -817,7 +845,7 @@ final class Target_java_lang_Thread {
     private StackTraceElement[] getStackTrace() {
         if (JavaThreads.fromTarget(this) == Thread.currentThread()) {
             /* We can walk our own stack without a VMOperation. */
-            StackTraceBuilder stackTraceBuilder = new StackTraceBuilder();
+            StackTraceBuilder stackTraceBuilder = new StackTraceBuilder(false);
             JavaStackWalker.walkCurrentThread(KnownIntrinsics.readCallerStackPointer(), KnownIntrinsics.readReturnAddress(), stackTraceBuilder);
             return stackTraceBuilder.getTrace();
 

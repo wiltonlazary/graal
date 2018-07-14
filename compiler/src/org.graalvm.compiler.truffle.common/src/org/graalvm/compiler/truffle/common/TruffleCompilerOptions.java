@@ -4,7 +4,9 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -126,6 +128,9 @@ public class TruffleCompilerOptions {
     @Option(help = "Restrict compilation to comma-separated list of includes (or excludes prefixed with tilde)", type = OptionType.Debug)
     public static final OptionKey<String> TruffleCompileOnly = new OptionKey<>(null);
 
+    @Option(help = "Enable or disable truffle compilation.", type = OptionType.Debug)
+    public static final OptionKey<Boolean> TruffleCompilation = new OptionKey<>(true);
+
     @Option(help = "Compile immediately to test truffle compiler", type = OptionType.Debug)
     public static final OptionKey<Boolean> TruffleCompileImmediately = new OptionKey<>(false);
 
@@ -183,7 +188,7 @@ public class TruffleCompilerOptions {
     @Option(help = "Propagate info about a polymorphic specialize through maximum this many call targets", type = OptionType.Debug)
     public static final OptionKey<Integer> TruffleExperimentalSplittingMaxPropagationDepth = new OptionKey<>(5);
 
-    @Option(help = "Use the splitting strategy that relies on language implementations reporting polymorpic specializations. Disables forced splits.", type = OptionType.Expert)
+    @Option(help = "Use the splitting strategy that relies on language implementations reporting polymorphic specializations. Disables forced splits.", type = OptionType.Expert)
     public static final OptionKey<Boolean> TruffleExperimentalSplitting = new OptionKey<>(false);
 
     @Option(help = "Used for debugging the splitting implementation. Prints splitting summary directly to stdout on shutdown", type = OptionType.Expert)
@@ -226,13 +231,13 @@ public class TruffleCompilerOptions {
     @Option(help = "Print all polymorphic and generic nodes after each compilation", type = OptionType.Debug)
     public static final OptionKey<Boolean> TraceTruffleCompilationPolymorphism = new OptionKey<>(false);
 
-    @Option(help = "Print all polymorphic and generic nodes after each compilation", type = OptionType.Debug)
+    @Option(help = "Print the entire AST after each compilation", type = OptionType.Debug)
     public static final OptionKey<Boolean> TraceTruffleCompilationAST = new OptionKey<>(false);
 
     @Option(help = "Print the inlined call tree for each compiled method", type = OptionType.Debug)
     public static final OptionKey<Boolean> TraceTruffleCompilationCallTree = new OptionKey<>(false);
 
-    @Option(help = "Print source secions for printed expansion trees", type = OptionType.Debug)
+    @Option(help = "Print source sections for printed expansion trees", type = OptionType.Debug)
     public static final OptionKey<Boolean> TraceTruffleExpansionSource = new OptionKey<>(false);
 
     @Option(help = "Prints a histogram of all expanded Java methods.", type = OptionType.Debug)

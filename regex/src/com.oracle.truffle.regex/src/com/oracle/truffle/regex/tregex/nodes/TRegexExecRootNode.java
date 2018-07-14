@@ -26,6 +26,7 @@ package com.oracle.truffle.regex.tregex.nodes;
 
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
@@ -77,11 +78,13 @@ public class TRegexExecRootNode extends RegexExecRootNode implements CompiledReg
         regexCallTarget = Truffle.getRuntime().createCallTarget(new RegexRootNode(language, forwardExecutor.getProperties().getFrameDescriptor(), this));
         this.tRegexCompiler = tRegexCompiler;
         this.eagerCompilation = eagerCompilation;
-        if (eagerCompilation && captureGroupExecutor != null) {
-            compileEagerSearchNode();
-        }
-        if (DebugUtil.DEBUG_ALWAYS_EAGER) {
-            switchToEagerSearch(null);
+        if (canSwitchToEagerSearch()) {
+            if (eagerCompilation) {
+                compileEagerSearchNode();
+            }
+            if (DebugUtil.DEBUG_ALWAYS_EAGER) {
+                switchToEagerSearch(null);
+            }
         }
     }
 
@@ -89,7 +92,7 @@ public class TRegexExecRootNode extends RegexExecRootNode implements CompiledReg
     public final RegexResult execute(VirtualFrame frame, RegexObject regex, Object input, int fromIndex) {
         final RegexResult result = runRegexSearchNode.run(frame, regex, input, fromIndex);
         assert !eagerCompilation || eagerAndLazySearchNodesProduceSameResult(frame, regex, input, fromIndex, result);
-        if (CompilerDirectives.inInterpreter() && runRegexSearchNode == lazySearchNode) {
+        if (CompilerDirectives.inInterpreter() && canSwitchToEagerSearch() && runRegexSearchNode == lazySearchNode) {
             RegexProfile profile = regex.getRegexProfile();
             if (profile.atEvaluationTripPoint() && profile.shouldUseEagerMatching()) {
                 switchToEagerSearch(profile);
@@ -102,13 +105,29 @@ public class TRegexExecRootNode extends RegexExecRootNode implements CompiledReg
         return result;
     }
 
+    private boolean canSwitchToEagerSearch() {
+        return lazySearchNode.captureGroupExecutorNode != null;
+    }
+
     private void switchToEagerSearch(RegexProfile profile) {
         compileEagerSearchNode();
         if (eagerSearchNode != EAGER_SEARCH_BAILED_OUT) {
             if (DebugUtil.LOG_SWITCH_TO_EAGER) {
-                System.out.println("regex " + getSource() + ": switching to eager matching." + (profile == null ? "" : "profile: " + profile));
+                System.out.println("regex " + getSource() + ": switching to eager matching." + (profile == null ? "" : " profile: " + profile));
             }
             runRegexSearchNode = insert(eagerSearchNode);
+        }
+    }
+
+    private void compileEagerSearchNode() {
+        if (eagerSearchNode == null) {
+            try {
+                TRegexDFAExecutorNode executorNode = tRegexCompiler.compileEagerDFAExecutor(getSource());
+                eagerSearchNode = new EagerCaptureGroupRegexSearchNode(executorNode);
+            } catch (UnsupportedRegexException e) {
+                LOG_BAILOUT.log(e.getMessage() + ": " + source);
+                eagerSearchNode = EAGER_SEARCH_BAILED_OUT;
+            }
         }
     }
 
@@ -125,38 +144,22 @@ public class TRegexExecRootNode extends RegexExecRootNode implements CompiledReg
             lazyResult = lazySearchNode.run(frame, regex, input, fromIndex);
             eagerResult = resultOfCurrentSearchNode;
         }
+        boolean equal;
         if (lazyResult == RegexResult.NO_MATCH) {
-            return eagerResult == RegexResult.NO_MATCH;
-        }
-        LazyCaptureGroupsResult lazyResultC = (LazyCaptureGroupsResult) lazyResult;
-        LazyCaptureGroupsResult eagerResultC = (LazyCaptureGroupsResult) eagerResult;
-        if (lazyResultC.getFindStartCallTarget() == null) {
-            lazyResultC.getCaptureGroupCallTarget().call(lazyResultC.createArgsCGNoFindStart());
+            equal = eagerResult == RegexResult.NO_MATCH;
         } else {
-            lazyResultC.getCaptureGroupCallTarget().call(lazyResultC.createArgsCG((int) lazyResultC.getFindStartCallTarget().call(lazyResultC.createArgsFindStart())));
+            ((LazyCaptureGroupsResult) lazyResult).debugForceEvaluation();
+            equal = Arrays.equals(((LazyCaptureGroupsResult) lazyResult).getResult(), ((LazyCaptureGroupsResult) eagerResult).getResult());
         }
-        boolean equal = Arrays.equals(lazyResultC.getResult(), eagerResultC.getResult());
         if (!equal) {
             System.out.println("ERROR:");
             System.out.println("Regex: " + getSource());
             System.out.println("Input: " + input);
             System.out.println("fromIndex: " + fromIndex);
-            System.out.println("Lazy  Result: " + Arrays.toString(lazyResultC.getResult()));
-            System.out.println("Eager Result: " + Arrays.toString(eagerResultC.getResult()));
+            System.out.println("Lazy  Result: " + lazyResult);
+            System.out.println("Eager Result: " + eagerResult);
         }
         return equal;
-    }
-
-    private void compileEagerSearchNode() {
-        if (eagerSearchNode == null) {
-            try {
-                TRegexDFAExecutorNode executorNode = tRegexCompiler.compileEagerDFAExecutor(getSource());
-                eagerSearchNode = new EagerCaptureGroupRegexSearchNode(executorNode);
-            } catch (UnsupportedRegexException e) {
-                LOG_BAILOUT.log(e.getMessage() + ": " + source);
-                eagerSearchNode = EAGER_SEARCH_BAILED_OUT;
-            }
-        }
     }
 
     @Override
@@ -179,7 +182,7 @@ public class TRegexExecRootNode extends RegexExecRootNode implements CompiledReg
     static final class LazyCaptureGroupRegexSearchNode extends RunRegexSearchNode {
 
         private final RegexSource source;
-        private final PreCalculatedResultFactory[] preCalculatedResults;
+        @CompilationFinal(dimensions = 1) private final PreCalculatedResultFactory[] preCalculatedResults;
 
         @Child private TRegexDFAExecutorNode forwardExecutorNode;
         private final TRegexDFAExecutorNode backwardExecutorNode;
