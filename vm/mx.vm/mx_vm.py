@@ -150,6 +150,10 @@ class BaseGraalVmLayoutDistribution(mx.LayoutDistribution):
             exclude_base = _jdk_dir
             if _src_jdk_base != '.':
                 exclude_base = join(exclude_base, _src_jdk_base)
+            if mx.get_os() == 'darwin':
+                hsdis = '/jre/lib/' + mx.add_lib_suffix('hsdis-' + mx.get_arch())
+            else:
+                hsdis = '/jre/lib/' + mx.get_arch() + '/' + mx.add_lib_suffix('hsdis-' + mx.get_arch())
             _add(layout, base_dir, {
                 'source_type': 'file',
                 'path': _jdk_dir,
@@ -157,7 +161,9 @@ class BaseGraalVmLayoutDistribution(mx.LayoutDistribution):
                     exclude_base + '/COPYRIGHT',
                     exclude_base + '/LICENSE',
                     exclude_base + '/release',
+                    exclude_base + '/bin/jvisualvm',
                     exclude_base + '/lib/visualvm',
+                    exclude_base + hsdis,
                 ]
             })
 
@@ -211,9 +217,6 @@ class BaseGraalVmLayoutDistribution(mx.LayoutDistribution):
             else:
                 _component_base = _component_type_base
 
-            if _component.dir_name == 'visualvm':
-                _add(layout, "<jdk_base>/lib/visualvm/platform", "link:../visualizer/platform")
-
             _add(layout, '<jdk_base>/jre/lib/boot/', ['dependency:' + d for d in _component.boot_jars], _component, with_sources=True)
             _add(layout, _component_base, ['dependency:' + d for d in _component.jar_distributions], _component, with_sources=True)
             _add(layout, _component_base + 'builder/', ['dependency:' + d for d in _component.builder_jar_distributions], _component, with_sources=True)
@@ -254,9 +257,12 @@ class BaseGraalVmLayoutDistribution(mx.LayoutDistribution):
                     _jre_bin_names.append(basename(_link_dest))
 
             for _provided_executable in _component.provided_executables:
-                _link_dest = _component_base + _provided_executable
-                _add_link(_jdk_jre_bin, _link_dest)
-                _jre_bin_names.append(basename(_link_dest))
+                if _component.short_name is 'vvm':
+                    _add(layout, _jdk_jre_bin, 'extracted-dependency:tools:VISUALVM_PLATFORM_SPECIFIC/./' + _provided_executable)
+                else:
+                    _link_dest = _component_base + _provided_executable
+                    _add_link(_jdk_jre_bin, _link_dest)
+                    _jre_bin_names.append(basename(_link_dest))
 
             if 'jre' in _jdk_jre_bin:
                 # Add jdk to jre links
@@ -456,7 +462,7 @@ class SvmSupport(object):
         stage1 = get_stage1_graalvm_distribution()
         native_image_project_name = GraalVmLauncher.launcher_project_name(mx_sdk.LauncherConfig('native-image', [], "", []), stage1=True)
         native_image_bin = join(stage1.output, stage1.find_single_source_location('dependency:' + native_image_project_name))
-        native_image_command = [native_image_bin] + build_args
+        native_image_command = [native_image_bin, '-H:+EnforceMaxRuntimeCompileMethods'] + build_args
         # currently, when building with the bash version of native-image, --no-server is implied (and can not be passed)
         output_directory = dirname(output_file)
         if "-H:Kind=SHARED_LIBRARY" in build_args:
@@ -1413,7 +1419,7 @@ def mx_register_dynamic_suite_constituents(register_project, register_distributi
         if isinstance(component, mx_sdk.GraalVmLanguage) and not (_disable_installable(component) or component.dir_name == 'js'):
             installable_component = GraalVmInstallableComponent(component)
             register_distribution(installable_component)
-            if _get_svm_support().is_supported() and not _has_forced_launchers(component):
+            if has_svm_launcher(component):
                 register_distribution(GraalVmStandaloneComponent(installable_component))
 
     if register_project:
@@ -1443,8 +1449,41 @@ def mx_register_dynamic_suite_constituents(register_project, register_distributi
         register_distribution(get_stage1_graalvm_distribution())
 
 
-def has_component(name):
-    return any((c.short_name == name or c.name == name for c in mx_sdk.graalvm_components()))
+def has_svm_launcher(component):
+    """:type component: mx.GraalVmComponent | str"""
+    component = get_component(component) if isinstance(component, str) else component
+    return _get_svm_support().is_supported() and not _has_forced_launchers(component) and bool(component.launcher_configs)
+
+
+def has_svm_polyglot_lib():
+    return _get_svm_support().is_supported() and _with_polyglot_lib_project()
+
+
+def get_component(name):
+    """:type name: str"""
+    for c in mx_sdk.graalvm_components():
+        if c.short_name == name or c.name == name:
+            return c
+    return None
+
+
+def has_component(name, fatalIfMissing=False):
+    """
+    :type name: str
+    :type fatalIfMissing: bool
+    """
+    result = get_component(name)
+    if fatalIfMissing and not result:
+        mx.abort("'{}' is not registered as GraalVM component. Did you forget to dynamically import it?".format(name))
+    return result
+
+
+def has_components(names, fatalIfMissing=False):
+    """
+    :type names: list[str]
+    :type fatalIfMissing: bool
+    """
+    return all((has_component(name, fatalIfMissing=fatalIfMissing) for name in names))
 
 
 def graalvm_output():
@@ -1554,15 +1593,17 @@ def _str_to_bool(val):
     return val
 
 
-mx_gate.add_gate_runner(_suite, mx_vm_gate.gate)
+mx_gate.add_gate_runner(_suite, mx_vm_gate.gate_body)
 mx.add_argument('--disable-libpolyglot', action='store_true', help='Disable the \'polyglot\' library project')
 mx.add_argument('--disable-polyglot', action='store_true', help='Disable the \'polyglot\' launcher project')
-mx.add_argument('--disable-installables', action='store', help='Disable the \'installable\' distributions for gu. This can also be a coma-separated list of disabled components short names.', nargs='?', const=True, default=False)
+mx.add_argument('--disable-installables', action='store', help='Disable the \'installable\' distributions for gu.'
+                                                               'This can be a comma-separated list of disabled components short names or `true` to disable all installables.', default=None)
 mx.add_argument('--debug-images', action='store_true', help='Build native images in debug mode: -H:-AOTInline and with -ea')
-mx.add_argument('--force-bash-launchers', action='store', help='Force the use of bash launchers instead of native images. This can also be a coma-separated list of disabled launchers.', nargs='?', const=True, default=False)
+mx.add_argument('--force-bash-launchers', action='store', help='Force the use of bash launchers instead of native images.'
+                                                               'This can be a comma-separated list of disabled launchers or `true` to disable all native launchers.', default=None)
 mx.add_argument('--no-sources', action='store_true', help='Do not include the archives with the source files of open-source components')
 
-register_vm_config('ce', ['cmp', 'gu', 'gvm', 'ins', 'js', 'njs', 'polynative', 'pro', 'rgx', 'slg', 'svm', 'tfl', 'libpoly', 'poly'])
+register_vm_config('ce', ['cmp', 'gu', 'gvm', 'ins', 'js', 'njs', 'polynative', 'pro', 'rgx', 'slg', 'svm', 'tfl', 'libpoly', 'poly', 'vvm'])
 
 
 def _debug_images():
@@ -1583,7 +1624,7 @@ def _force_bash_launchers(launcher, forced=None):
     :type forced: bool | None | str | list[str]
     """
     if forced is None:
-        forced = mx.get_opts().force_bash_launchers or _str_to_bool(mx.get_env('FORCE_BASH_LAUNCHERS', 'false'))
+        forced = _str_to_bool(mx.get_opts().force_bash_launchers or mx.get_env('FORCE_BASH_LAUNCHERS', 'false'))
     if isinstance(forced, bool):
         return forced
     if isinstance(forced, str):
@@ -1596,7 +1637,7 @@ def _force_bash_launchers(launcher, forced=None):
 
 def _disable_installable(component):
     """ :type component: str | mx_sdk.GraalVmComponent """
-    disabled = mx.get_opts().disable_installables or _str_to_bool(mx.get_env('DISABLE_INSTALLABLES', 'false'))
+    disabled = _str_to_bool(mx.get_opts().disable_installables or mx.get_env('DISABLE_INSTALLABLES', 'false'))
     if isinstance(disabled, bool):
         return disabled
     if isinstance(disabled, str):
@@ -1607,7 +1648,8 @@ def _disable_installable(component):
 
 
 def _has_forced_launchers(component, forced=None):
-    for launcher_config in component.launcher_configs:
+    """:type component: mx.GraalVmComponent"""
+    for launcher_config in _get_launcher_configs(component):
         if _force_bash_launchers(launcher_config, forced):
             return True
     return False

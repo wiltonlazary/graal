@@ -197,7 +197,7 @@ final class Target_jdk_internal_ref_Cleaner {
     static Target_jdk_internal_ref_Cleaner first;
 
     /**
-     * Contrary to the comment on {@link sun.misc.Cleaner}.dummyQueue, in SubstrateVM the queue can
+     * Contrary to the comment on {@code sun.misc.Cleaner}.dummyQueue, in SubstrateVM the queue can
      * have Cleaner instances on it, because SubstrateVM does not have a ReferenceHandler thread to
      * clean instances, so SubstrateVM puts them on the queue and drains the queue after collections
      * in {@link SunMiscSupport#drainCleanerQueue()}.
@@ -273,18 +273,6 @@ final class Target_jdk_internal_perf_PerfCounter {
     }
 }
 
-@Platforms(Platform.HOSTED_ONLY.class)
-class Package_jdk_internal_misc implements Function<TargetClass, String> {
-    @Override
-    public String apply(TargetClass annotation) {
-        if (GraalServices.Java8OrEarlier) {
-            return "sun.misc." + annotation.className();
-        } else {
-            return "jdk.internal.misc." + annotation.className();
-        }
-    }
-}
-
 @TargetClass(classNameProvider = Package_jdk_internal_misc.class, className = "SharedSecrets")
 final class Target_jdk_internal_misc_SharedSecrets {
     @Substitute
@@ -316,11 +304,6 @@ class Package_jdk_internal_loader implements Function<TargetClass, String> {
 @TargetClass(classNameProvider = Package_jdk_internal_loader.class, className = "URLClassPath", innerClass = "JarLoader")
 @Delete
 final class Target_sun_misc_URLClassPath_JarLoader {
-}
-
-@TargetClass(java.net.JarURLConnection.class)
-@Delete
-final class Target_java_net_JarURLConnection {
 }
 
 /** Dummy class to have a class with the file's name. */

@@ -24,18 +24,21 @@
  */
 package com.oracle.truffle.tools.chromeinspector.test;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
 import java.io.File;
 import java.nio.file.Files;
 import java.util.regex.Pattern;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.Source;
 import org.junit.After;
 import org.junit.Test;
 
-import org.graalvm.polyglot.Source;
-
+import com.oracle.truffle.api.TruffleFile;
+import com.oracle.truffle.sl.SLLanguage;
 import com.oracle.truffle.tools.chromeinspector.ScriptsHandler;
 import com.oracle.truffle.tools.chromeinspector.TruffleDebugger;
 
@@ -540,10 +543,10 @@ public class SLInspectDebugTest {
                         "{\"method\":\"Debugger.scriptParsed\",\"params\":{\"endLine\":18,\"scriptId\":\"1\",\"endColumn\":1,\"startColumn\":0,\"startLine\":0,\"length\":245,\"executionContextId\":" + id + ",\"url\":\"" + slTestURI + "\",\"hash\":\"f8058ed0f3c2f0acf3e37e59f953127afdba90e5\"}}\n"));
         // Try to compile a script:
         tester.sendMessage("{\"id\":3,\"method\":\"Runtime.compileScript\",\"params\":{\"expression\":\"app\",\"sourceURL\":\"\",\"persistScript\":false,\"executionContextId\":" + id + "}}");
-        assertEquals("{\"result\":{\"exceptionDetails\":{\"text\":\"<Not suspended>\"}},\"id\":3}", tester.getMessages(true).trim());
+        assertEquals("{\"result\":{\"exceptionDetails\":{\"exception\":{\"description\":\"<Not suspended>\",\"type\":\"string\",\"value\":\"<Not suspended>\"},\"exceptionId\":1,\"executionContextId\":1,\"text\":\"Caught\"}},\"id\":3}", tester.getMessages(true).trim());
         // Try to evaluate:
         tester.sendMessage("{\"id\":4,\"method\":\"Runtime.evaluate\",\"params\":{\"expression\":\"app\",\"objectGroup\":\"watch-group\",\"includeCommandLineAPI\":false,\"silent\":true,\"contextId\":" + id + "}}");
-        assertEquals("{\"result\":{\"exceptionDetails\":{\"text\":\"<Not suspended>\"}},\"id\":4}", tester.getMessages(true).trim());
+        assertEquals("{\"result\":{\"exceptionDetails\":{\"exception\":{\"description\":\"<Not suspended>\",\"type\":\"string\",\"value\":\"<Not suspended>\"},\"exceptionId\":2,\"executionContextId\":1,\"text\":\"Caught\"}},\"id\":4}", tester.getMessages(true).trim());
         tester.finish();
     }
 
@@ -839,7 +842,11 @@ public class SLInspectDebugTest {
         file.createNewFile();
         file.deleteOnExit();
 
-        com.oracle.truffle.api.source.Source source = com.oracle.truffle.api.source.Source.newBuilder(file).language("sl").mimeType("application/x-sl").build();
+        Context context = Context.newBuilder().allowIO(true).build();
+        context.initialize("sl");
+        context.enter();
+        TruffleFile truffleFile = SLLanguage.getCurrentContext().getEnv().getTruffleFile(file.toPath().toString());
+        com.oracle.truffle.api.source.Source source = com.oracle.truffle.api.source.Source.newBuilder("sl", truffleFile).build();
 
         // Test name of a file
         assertTrue(TruffleDebugger.sourceMatchesBlackboxPatterns(source, new Pattern[] {Pattern.compile("BlackboxTest.sl")}));
@@ -859,6 +866,9 @@ public class SLInspectDebugTest {
 
         // Test regular expression produced by Chrome Inspector's 'Blackbox Script' action.
         assertTrue(TruffleDebugger.sourceMatchesBlackboxPatterns(source, new Pattern[] {Pattern.compile("^file://.*/BlackboxTest\\.sl$")}));
+
+        context.leave();
+        context.close();
     }
 
     @Test

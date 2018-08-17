@@ -34,17 +34,19 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.Predicate;
 
-import org.graalvm.collections.EconomicMap;
-
 import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.CompilerAsserts;
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.impl.Accessor;
 import com.oracle.truffle.api.impl.TVMCI;
+import org.graalvm.collections.EconomicMap;
 
 /**
  * Descriptor of the slots of frame objects. Multiple frame instances are associated with one such
- * descriptor.
+ * descriptor. The FrameDescriptor is not thread-safe until it's given to a first RootNode's
+ * constructor. After that it has thread-safe properties.
  *
  * @since 0.8 or earlier
  */
@@ -53,9 +55,10 @@ public final class FrameDescriptor implements Cloneable {
     private final Object defaultValue;
     private final ArrayList<FrameSlot> slots;
     private final EconomicMap<Object, FrameSlot> identifierToSlotMap;
-    private Assumption version;
+    @CompilationFinal private volatile Assumption version;
     private EconomicMap<Object, Assumption> identifierToNotInFrameAssumptionMap;
-    private int size;
+    @CompilationFinal private volatile int size;
+    private final Object lock;
 
     /**
      * Flag that can be used by the runtime to track that {@link Frame#materialize()} was called on
@@ -84,18 +87,27 @@ public final class FrameDescriptor implements Cloneable {
      * @since 0.8 or earlier
      */
     public FrameDescriptor(Object defaultValue) {
+        this(defaultValue, null);
+    }
+
+    private FrameDescriptor(Object defaultValue, Object lock) {
         CompilerAsserts.neverPartOfCompilation("do not create a FrameDescriptor from compiled code");
         this.defaultValue = defaultValue;
         this.slots = new ArrayList<>();
         this.identifierToSlotMap = EconomicMap.create();
         this.version = createVersion();
+        this.lock = lock == null ? this : lock;
     }
 
     /**
      * Adds frame slot. Delegates to
      * {@link #addFrameSlot(java.lang.Object, java.lang.Object, FrameSlotKind) addFrameSlot}
      * (identifier, <code>null</code>, {@link FrameSlotKind#Illegal}). This is a slow operation that
-     * switches to interpreter mode.
+     * switches to interpreter mode. Note that even if it is checked that the FrameDescriptor does
+     * not have the slot for a given identifier before adding the slot for the given identifier it
+     * can still fail with an {@link IllegalArgumentException} since the FrameDescriptor can be
+     * modified concurrently. In such case consider using {@link #findOrAddFrameSlot(Object)}
+     * instead.
      *
      * @param identifier key for the slot - must not be {@code null} and needs proper
      *            {@link #equals(java.lang.Object)} and {@link Object#hashCode()} implementations
@@ -112,7 +124,11 @@ public final class FrameDescriptor implements Cloneable {
      * Adds frame slot. Delegates to
      * {@link #addFrameSlot(java.lang.Object, java.lang.Object, FrameSlotKind) addFrameSlot}
      * (identifier, <code>null</code>, <code>kind</code>). This is a slow operation that switches to
-     * interpreter mode.
+     * interpreter mode. Note that even if it is checked that the FrameDescriptor does not have the
+     * slot for a given identifier before adding the slot for the given identifier it can still fail
+     * with an {@link IllegalArgumentException} since the FrameDescriptor can be modified
+     * concurrently. In such case consider using {@link #findOrAddFrameSlot(Object, FrameSlotKind)}
+     * instead.
      *
      * @param identifier key for the slot - must not be {@code null} and needs proper
      *            {@link #equals(java.lang.Object)} and {@link Object#hashCode()} implementations
@@ -128,7 +144,11 @@ public final class FrameDescriptor implements Cloneable {
 
     /**
      * Adds new frame slot to {@link #getSlots()} list. This is a slow operation that switches to
-     * interpreter mode.
+     * interpreter mode. Note that even if it is checked that the FrameDescriptor does not have the
+     * slot for a given identifier before adding the slot for the given identifier it can still fail
+     * with an {@link IllegalArgumentException} since the FrameDescriptor can be modified
+     * concurrently. In such case consider using
+     * {@link #findOrAddFrameSlot(Object, Object, FrameSlotKind)} instead.
      *
      * @param identifier key for the slot - must not be {@code null} and needs proper
      *            {@link #equals(java.lang.Object)} and {@link Object#hashCode()} implementations
@@ -139,20 +159,23 @@ public final class FrameDescriptor implements Cloneable {
      * @throws NullPointerException if {@code identifier} or {@code kind} is {@code null}
      * @since 0.8 or earlier
      */
+    @SuppressFBWarnings(value = "VO_VOLATILE_INCREMENT", justification = "All increments and decrements are synchronized.")
     public FrameSlot addFrameSlot(Object identifier, Object info, FrameSlotKind kind) {
         CompilerAsserts.neverPartOfCompilation(NEVER_PART_OF_COMPILATION_MESSAGE);
         Objects.requireNonNull(identifier, "identifier");
         Objects.requireNonNull(kind, "kind");
-        if (identifierToSlotMap.containsKey(identifier)) {
-            throw new IllegalArgumentException("duplicate frame slot: " + identifier);
+        synchronized (lock) {
+            if (identifierToSlotMap.containsKey(identifier)) {
+                throw new IllegalArgumentException("duplicate frame slot: " + identifier);
+            }
+            FrameSlot slot = new FrameSlot(this, identifier, info, kind, size);
+            size++;
+            slots.add(slot);
+            identifierToSlotMap.put(identifier, slot);
+            updateVersion();
+            invalidateNotInFrameAssumption(identifier);
+            return slot;
         }
-        FrameSlot slot = new FrameSlot(this, identifier, info, kind, size);
-        size++;
-        slots.add(slot);
-        identifierToSlotMap.put(identifier, slot);
-        updateVersion();
-        invalidateNotInFrameAssumption(identifier);
-        return slot;
     }
 
     /**
@@ -164,7 +187,9 @@ public final class FrameDescriptor implements Cloneable {
      */
     public FrameSlot findFrameSlot(Object identifier) {
         CompilerAsserts.neverPartOfCompilation(NEVER_PART_OF_COMPILATION_MESSAGE);
-        return identifierToSlotMap.get(identifier);
+        synchronized (lock) {
+            return identifierToSlotMap.get(identifier);
+        }
     }
 
     /**
@@ -176,11 +201,14 @@ public final class FrameDescriptor implements Cloneable {
      * @since 0.8 or earlier
      */
     public FrameSlot findOrAddFrameSlot(Object identifier) {
-        FrameSlot result = findFrameSlot(identifier);
-        if (result != null) {
-            return result;
+        CompilerAsserts.neverPartOfCompilation(NEVER_PART_OF_COMPILATION_MESSAGE);
+        synchronized (lock) {
+            FrameSlot result = findFrameSlot(identifier);
+            if (result != null) {
+                return result;
+            }
+            return addFrameSlot(identifier);
         }
-        return addFrameSlot(identifier);
     }
 
     /**
@@ -193,11 +221,14 @@ public final class FrameDescriptor implements Cloneable {
      * @since 0.8 or earlier
      */
     public FrameSlot findOrAddFrameSlot(Object identifier, FrameSlotKind kind) {
-        FrameSlot result = findFrameSlot(identifier);
-        if (result != null) {
-            return result;
+        CompilerAsserts.neverPartOfCompilation(NEVER_PART_OF_COMPILATION_MESSAGE);
+        synchronized (lock) {
+            FrameSlot result = findFrameSlot(identifier);
+            if (result != null) {
+                return result;
+            }
+            return addFrameSlot(identifier, kind);
         }
-        return addFrameSlot(identifier, kind);
     }
 
     /**
@@ -211,11 +242,14 @@ public final class FrameDescriptor implements Cloneable {
      * @since 0.8 or earlier
      */
     public FrameSlot findOrAddFrameSlot(Object identifier, Object info, FrameSlotKind kind) {
-        FrameSlot result = findFrameSlot(identifier);
-        if (result != null) {
-            return result;
+        CompilerAsserts.neverPartOfCompilation(NEVER_PART_OF_COMPILATION_MESSAGE);
+        synchronized (lock) {
+            FrameSlot result = findFrameSlot(identifier);
+            if (result != null) {
+                return result;
+            }
+            return addFrameSlot(identifier, info, kind);
         }
-        return addFrameSlot(identifier, info, kind);
     }
 
     /**
@@ -228,14 +262,92 @@ public final class FrameDescriptor implements Cloneable {
      */
     public void removeFrameSlot(Object identifier) {
         CompilerAsserts.neverPartOfCompilation(NEVER_PART_OF_COMPILATION_MESSAGE);
-        FrameSlot slot = identifierToSlotMap.get(identifier);
-        if (slot == null) {
-            throw new IllegalArgumentException("no such frame slot: " + identifier);
+        synchronized (lock) {
+            FrameSlot slot = identifierToSlotMap.get(identifier);
+            if (slot == null) {
+                throw new IllegalArgumentException("no such frame slot: " + identifier);
+            }
+            slots.remove(slot);
+            identifierToSlotMap.removeKey(identifier);
+            updateVersion();
+            getNotInFrameAssumption(identifier);
         }
-        slots.remove(slot);
-        identifierToSlotMap.removeKey(identifier);
-        updateVersion();
-        getNotInFrameAssumption(identifier);
+    }
+
+    /**
+     * Kind of the provided slot. Specified either at
+     * {@link #addFrameSlot(java.lang.Object, com.oracle.truffle.api.frame.FrameSlotKind) creation
+     * time} or updated via {@link #setFrameSlotKind(FrameSlot, FrameSlotKind)} method.
+     *
+     * @param frameSlot the slot
+     * @return current kind of this slot
+     * @since 1.0
+     */
+    public FrameSlotKind getFrameSlotKind(final FrameSlot frameSlot) {
+        assert checkFrameSlotOwnership(frameSlot);
+        /*
+         * not checking that the frame slot is not removed from the FrameDescriptor kind is volatile
+         * we can read it without locking the FrameDescriptor
+         */
+        return frameSlot.kind;
+    }
+
+    /**
+     * Changes the kind of the provided slot. Change of the slot kind is done on <em>slow path</em>
+     * and invalidates assumptions about version of {@link FrameDescriptor this descriptor}.
+     *
+     * @param frameSlot the slot
+     * @param kind new kind of the slot
+     * @since 1.0
+     */
+    public void setFrameSlotKind(final FrameSlot frameSlot, final FrameSlotKind kind) {
+        if (frameSlot.kind != kind) {
+            CompilerDirectives.transferToInterpreterAndInvalidate();
+            setFrameSlotKindSlow(frameSlot, kind);
+        }
+    }
+
+    private void setFrameSlotKindSlow(FrameSlot frameSlot, FrameSlotKind kind) {
+        CompilerAsserts.neverPartOfCompilation(NEVER_PART_OF_COMPILATION_MESSAGE);
+        synchronized (lock) {
+            assert checkFrameSlotOwnershipUnsafe(frameSlot);
+            /*
+             * Not checking that the frame slot is not removed from the FrameDescriptor letting it
+             * continue will only result in extra version update.
+             */
+            if (frameSlot.kind != kind) { // recheck under lock
+                /*
+                 * First, only invalidate before updating kind so it's impossible to read a new kind
+                 * and old still valid assumption.
+                 */
+                frameSlot.descriptor.version.invalidate();
+                if (frameSlot.sharedWith != null) {
+                    for (FrameDescriptor frameDescriptor : frameSlot.sharedWith.keySet()) {
+                        assert frameDescriptor.lock == lock;
+                        frameDescriptor.version.invalidate();
+                    }
+                }
+                frameSlot.kind = kind;
+                frameSlot.descriptor.version = createVersion();
+                if (frameSlot.sharedWith != null) {
+                    for (FrameDescriptor frameDescriptor : frameSlot.sharedWith.keySet()) {
+                        assert frameDescriptor.lock == lock;
+                        frameDescriptor.version = createVersion();
+                    }
+                }
+            }
+        }
+    }
+
+    private boolean checkFrameSlotOwnershipUnsafe(FrameSlot frameSlot) {
+        return frameSlot.descriptor == this || (frameSlot.sharedWith != null && frameSlot.sharedWith.containsKey(this));
+    }
+
+    private boolean checkFrameSlotOwnership(FrameSlot frameSlot) {
+        CompilerAsserts.neverPartOfCompilation(NEVER_PART_OF_COMPILATION_MESSAGE);
+        synchronized (lock) {
+            return checkFrameSlotOwnershipUnsafe(frameSlot);
+        }
     }
 
     /**
@@ -247,27 +359,40 @@ public final class FrameDescriptor implements Cloneable {
      * @since 0.8 or earlier
      */
     public int getSize() {
-        return size;
+        if (CompilerDirectives.inCompiledCode()) {
+            if (!this.version.isValid()) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+            }
+        }
+        return this.size;
     }
 
     /**
-     * Current set of slots in the descriptor.
+     * Retrieve the current list of slots in the descriptor. Further changes are not reflected in
+     * the returned collection.
      *
-     * @return unmodifiable list of {@link FrameSlot}
+     * @return the unmodifiable snapshot list of {@link FrameSlot}
      * @since 0.8 or earlier
      */
     public List<? extends FrameSlot> getSlots() {
-        return Collections.unmodifiableList(slots);
+        CompilerAsserts.neverPartOfCompilation(NEVER_PART_OF_COMPILATION_MESSAGE);
+        synchronized (lock) {
+            return Collections.unmodifiableList(new ArrayList<>(slots));
+        }
     }
 
     /**
-     * Retrieve the list of all the identifiers associated with this frame descriptor.
+     * Retrieve the current set of all the identifiers associated with this frame descriptor.
+     * Further changes are not reflected in the returned collection.
      *
-     * @return the list of all the identifiers in this frame descriptor
+     * @return the unmodifiable snapshot set of all the identifiers in this frame descriptor
      * @since 0.8 or earlier
      */
     public Set<Object> getIdentifiers() {
-        return unmodifiableSetFromEconomicMap(identifierToSlotMap);
+        CompilerAsserts.neverPartOfCompilation(NEVER_PART_OF_COMPILATION_MESSAGE);
+        synchronized (lock) {
+            return unmodifiableSetFromEconomicMap(EconomicMap.create(identifierToSlotMap));
+        }
     }
 
     private static <K> Set<K> unmodifiableSetFromEconomicMap(EconomicMap<K, ?> map) {
@@ -340,18 +465,21 @@ public final class FrameDescriptor implements Cloneable {
     /**
      * Deeper copy of the descriptor. Copies all slots in the descriptor, but only their
      * {@linkplain FrameSlot#getIdentifier() identifier} and {@linkplain FrameSlot#getInfo() info}
-     * but not their {@linkplain FrameSlot#getKind() kind}!
+     * but not their {@linkplain FrameDescriptor#getFrameSlotKind(FrameSlot) kind}!
      *
      * @return new instance of a descriptor with copies of values from this one
      * @since 0.8 or earlier
      */
     public FrameDescriptor copy() {
-        FrameDescriptor clonedFrameDescriptor = new FrameDescriptor(this.defaultValue);
-        for (int i = 0; i < slots.size(); i++) {
-            FrameSlot slot = slots.get(i);
-            clonedFrameDescriptor.addFrameSlot(slot.getIdentifier(), slot.getInfo(), FrameSlotKind.Illegal);
+        CompilerAsserts.neverPartOfCompilation(NEVER_PART_OF_COMPILATION_MESSAGE);
+        synchronized (lock) {
+            FrameDescriptor clonedFrameDescriptor = new FrameDescriptor(this.defaultValue);
+            for (int i = 0; i < slots.size(); i++) {
+                FrameSlot slot = slots.get(i);
+                clonedFrameDescriptor.addFrameSlot(slot.getIdentifier(), slot.getInfo(), FrameSlotKind.Illegal);
+            }
+            return clonedFrameDescriptor;
         }
-        return clonedFrameDescriptor;
     }
 
     /**
@@ -366,20 +494,23 @@ public final class FrameDescriptor implements Cloneable {
      */
     @Deprecated
     public FrameDescriptor shallowCopy() {
-        FrameDescriptor clonedFrameDescriptor = new FrameDescriptor(this.defaultValue);
-        clonedFrameDescriptor.slots.addAll(slots);
-        clonedFrameDescriptor.identifierToSlotMap.putAll(identifierToSlotMap);
-        for (FrameSlot slot : slots) {
-            slot.shareWith(clonedFrameDescriptor);
+        CompilerAsserts.neverPartOfCompilation(NEVER_PART_OF_COMPILATION_MESSAGE);
+        synchronized (lock) {
+            FrameDescriptor clonedFrameDescriptor = new FrameDescriptor(this.defaultValue, lock);
+            clonedFrameDescriptor.slots.addAll(slots);
+            clonedFrameDescriptor.identifierToSlotMap.putAll(identifierToSlotMap);
+            for (FrameSlot slot : slots) {
+                slot.shareWith(clonedFrameDescriptor);
+            }
+            clonedFrameDescriptor.size = size;
+            return clonedFrameDescriptor;
         }
-        clonedFrameDescriptor.size = this.size;
-        return clonedFrameDescriptor;
     }
 
     /**
      * Invalidates the current, and create a new version assumption.
      */
-    void updateVersion() {
+    private void updateVersion() {
         version.invalidate();
         version = createVersion();
     }
@@ -420,21 +551,24 @@ public final class FrameDescriptor implements Cloneable {
      * @since 0.8 or earlier
      */
     public Assumption getNotInFrameAssumption(Object identifier) {
-        if (identifierToSlotMap.containsKey(identifier)) {
-            throw new IllegalArgumentException("Cannot get not-in-frame assumption for existing frame slot!");
-        }
-
-        if (identifierToNotInFrameAssumptionMap == null) {
-            identifierToNotInFrameAssumptionMap = EconomicMap.create();
-        } else {
-            Assumption assumption = identifierToNotInFrameAssumptionMap.get(identifier);
-            if (assumption != null) {
-                return assumption;
+        CompilerAsserts.neverPartOfCompilation(NEVER_PART_OF_COMPILATION_MESSAGE);
+        synchronized (lock) {
+            if (identifierToSlotMap.containsKey(identifier)) {
+                throw new IllegalArgumentException("Cannot get not-in-frame assumption for existing frame slot!");
             }
+
+            if (identifierToNotInFrameAssumptionMap == null) {
+                identifierToNotInFrameAssumptionMap = EconomicMap.create();
+            } else {
+                Assumption assumption = identifierToNotInFrameAssumptionMap.get(identifier);
+                if (assumption != null) {
+                    return assumption;
+                }
+            }
+            Assumption assumption = Truffle.getRuntime().createAssumption("identifier not in frame");
+            identifierToNotInFrameAssumptionMap.put(identifier, assumption);
+            return assumption;
         }
-        Assumption assumption = Truffle.getRuntime().createAssumption("identifier not in frame");
-        identifierToNotInFrameAssumptionMap.put(identifier, assumption);
-        return assumption;
     }
 
     private void invalidateNotInFrameAssumption(Object identifier) {
@@ -450,20 +584,23 @@ public final class FrameDescriptor implements Cloneable {
     /** @since 0.8 or earlier */
     @Override
     public String toString() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("FrameDescriptor@").append(Integer.toHexString(hashCode()));
-        sb.append("{");
-        boolean comma = false;
-        for (FrameSlot slot : slots) {
-            if (comma) {
-                sb.append(", ");
-            } else {
-                comma = true;
+        CompilerAsserts.neverPartOfCompilation(NEVER_PART_OF_COMPILATION_MESSAGE);
+        synchronized (lock) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("FrameDescriptor@").append(Integer.toHexString(hashCode()));
+            sb.append("{");
+            boolean comma = false;
+            for (FrameSlot slot : slots) {
+                if (comma) {
+                    sb.append(", ");
+                } else {
+                    comma = true;
+                }
+                sb.append(slot.getIndex()).append(":").append(slot.getIdentifier());
             }
-            sb.append(slot.getIndex()).append(":").append(slot.getIdentifier());
+            sb.append("}");
+            return sb.toString();
         }
-        sb.append("}");
-        return sb.toString();
     }
 
     /** @since 0.14 */

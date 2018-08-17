@@ -120,16 +120,12 @@ gate_vm_darwin: ${vm_darwin} {
   targets: [gate]
 }
 
-post-merge_vm_linux: ${vm_linux} {
-  targets: [post-merge]
-}
-
-post-merge_vm_darwin: ${vm_darwin} {
-  targets: [post-merge]
+deploy_vm_linux: ${vm_linux} {
+  targets: [deploy, post-merge]
 }
 
 daily_vm_darwin: ${vm_darwin} {
-  targets: [daily]
+  targets: [deploy, daily]
 }
 
 mx_vm_common: [mx, --strip-jars, --no-sources, --env, ${vm_env}]
@@ -159,12 +155,13 @@ builds += [
     timelimit: "45:00"
     name: gate-vm-build-linux-amd64
   },
-  ${full_vm_build_linux} ${linux-deploy} ${post-merge_vm_linux} {
+  ${full_vm_build_linux} ${linux-deploy} ${deploy_vm_linux} {
     run: [
       ${mx_vm_installables} [--dynamicimports, ${vm_extra_suites}, build]
       ${mx_vm_installables} [--dynamicimports, ${vm_extra_suites}] ${maven_deploy_vm}
       ${mx_vm_common} [build]
       ${mx_vm_common} ${maven_deploy_vm}
+      ${notify-nexus-deploy}
     ]
     timelimit: "45:00"
     name: deploy-vm-linux-amd64
@@ -173,6 +170,7 @@ builds += [
     run: [
       ${mx_vm_installables} [--dynamicimports, ${vm_extra_suites}, build]
       ${mx_vm_installables} [--dynamicimports, ${vm_extra_suites}] ${maven_deploy_vm}
+      ${notify-nexus-deploy}
     ]
     timelimit: "1:30:00"
     name: deploy-vm-installable-darwin-amd64
@@ -181,6 +179,7 @@ builds += [
     run: [
       ${mx_vm_common} [build]
       ${mx_vm_common} ${maven_deploy_vm}
+      ${notify-nexus-deploy}
     ]
     timelimit: "1:30:00"
     name: deploy-vm-base-darwin-amd64
@@ -204,5 +203,25 @@ builds += [
     ]
     timelimit: "35:00"
     name: daily-vm-native-sulong
+  },
+  ${svm-common-linux} ${sulong_linux} ${truffleruby_linux} ${custom_vm_linux} ${gate_vm_linux} {
+    run: [
+      [git, clone, --depth, "1", [mx, urlrewrite, "https://github.com/oracle/truffleruby.git"], "../../truffleruby"]
+      [export, "SVM_SUITE="${svm_suite}]
+      [export, "NATIVE_IMAGE_TESTING=True"]
+      [mx, --dynamicimports, "$SVM_SUITE,truffleruby", --disable-polyglot, --disable-libpolyglot, "--force-bash-launchers=lli,truffleruby", gate, --no-warning-as-error, --tags, "build,ruby"]
+    ]
+    timelimit: "35:00"
+    name: gate-vm-native-truffleruby-tip
+  },
+  ${svm-common-linux} ${sulong_linux} ${truffleruby_linux} ${custom_vm_linux} ${vm_linux} {
+    targets: [daily]
+    run: [
+      [export, "SVM_SUITE="${svm_suite}]
+      [export, "NATIVE_IMAGE_TESTING=True"]
+      [mx, --dynamicimports, "$SVM_SUITE,truffleruby", --disable-polyglot, --disable-libpolyglot, "--force-bash-launchers=lli,truffleruby", gate, --no-warning-as-error, --tags, "build,ruby"]
+    ]
+    timelimit: "35:00"
+    name: daily-vm-native-truffleruby
   },
 ]
