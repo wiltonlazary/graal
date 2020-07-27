@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.instrumentation.test;
 
@@ -57,8 +73,8 @@ import com.oracle.truffle.api.instrumentation.AllocationListener;
 import com.oracle.truffle.api.instrumentation.AllocationReporter;
 import com.oracle.truffle.api.instrumentation.EventBinding;
 import com.oracle.truffle.api.instrumentation.TruffleInstrument;
-import com.oracle.truffle.api.interop.ForeignAccess;
 import com.oracle.truffle.api.interop.TruffleObject;
+import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.LanguageInfo;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
@@ -237,8 +253,8 @@ public class AllocationReporterTest {
             fail();
         } catch (PolyglotException ex) {
             // O.K.
-            assertTrue(ex.getMessage(), ex.getMessage().contains("OutOfMemoryError") &&
-                            ex.getMessage().contains("Denied allocation of 8 bytes."));
+            assertTrue(ex.isResourceExhausted());
+            assertTrue(ex.getMessage(), ex.getMessage().contains("Denied allocation of 8 bytes."));
         }
         assertEquals(1, consumerCalls.get());
         consumerCalls.set(0);
@@ -262,8 +278,8 @@ public class AllocationReporterTest {
             fail();
         } catch (PolyglotException ex) {
             // O.K.
-            assertTrue(ex.getMessage(), ex.getMessage().contains("OutOfMemoryError") &&
-                            ex.getMessage().contains("Denied an unknown reallocation."));
+            assertTrue(ex.isResourceExhausted());
+            assertTrue(ex.getMessage(), ex.getMessage().contains("Denied an unknown reallocation."));
         }
         assertEquals(1, consumerCalls.get());
     }
@@ -559,13 +575,6 @@ public class AllocationReporterTest {
 
     @Test
     public void testReporterChangeListener() {
-        try {
-            Class.forName("java.beans.PropertyChangeListener");
-        } catch (ClassNotFoundException ex) {
-            // skip the test if running only with java.base JDK9 module
-            return;
-        }
-
         // Test of AllocationReporter property change listener notifications
         allocation.setEnabled(false);
         Source source = Source.create(AllocationReporterLanguage.ID, "NEW");
@@ -574,23 +583,26 @@ public class AllocationReporterTest {
         });
         context.eval(source);
         context.enter();
-        AllocationReporter reporter = ProxyLanguage.getCurrentContext().getEnv().lookup(AllocationReporter.class);
-        AtomicInteger listenerCalls = new AtomicInteger(0);
-        AllocationReporterListener activatedListener = AllocationReporterListener.register(listenerCalls, reporter);
-        assertEquals(0, listenerCalls.get());
-        assertFalse(reporter.isActive());
-        allocation.setEnabled(true);
-        assertEquals(1, listenerCalls.get());
-        activatedListener.unregister();
-        listenerCalls.set(0);
+        try {
+            AllocationReporter reporter = AllocationReporterLanguage.getCurrentContext().getEnv().lookup(AllocationReporter.class);
+            AtomicInteger listenerCalls = new AtomicInteger(0);
+            AllocationReporterListener activatedListener = AllocationReporterListener.register(listenerCalls, reporter);
+            assertEquals(0, listenerCalls.get());
+            assertFalse(reporter.isActive());
+            allocation.setEnabled(true);
+            assertEquals(1, listenerCalls.get());
+            activatedListener.unregister();
+            listenerCalls.set(0);
 
-        AllocationDeactivatedListener deactivatedListener = AllocationDeactivatedListener.register(listenerCalls, reporter);
-        assertEquals(0, listenerCalls.get());
-        assertTrue(reporter.isActive());
-        allocation.setEnabled(false);
-        assertEquals(1, listenerCalls.get());
-        deactivatedListener.unregister();
-        context.leave();
+            AllocationDeactivatedListener deactivatedListener = AllocationDeactivatedListener.register(listenerCalls, reporter);
+            assertEquals(0, listenerCalls.get());
+            assertTrue(reporter.isActive());
+            allocation.setEnabled(false);
+            assertEquals(1, listenerCalls.get());
+            deactivatedListener.unregister();
+        } finally {
+            context.leave();
+        }
     }
 
     /**
@@ -626,7 +638,7 @@ public class AllocationReporterTest {
             });
         }
 
-        private AllocNode parse(String code) {
+        private static AllocNode parse(String code) {
             String[] allocations = code.split("\\s");
             LinkedList<FutureNode> futures = new LinkedList<>();
             FutureNode parent = new FutureNode(null, null);
@@ -640,11 +652,11 @@ public class AllocationReporterTest {
                     continue;
                 }
                 if (last != null) {
-                    parent.addChild(last.toNode(getContextReference()));
+                    parent.addChild(last.toNode());
                     last = null;
                 }
                 if ("}".equals(allocCommand)) {
-                    AllocNode node = parent.toNode(getContextReference());
+                    AllocNode node = parent.toNode();
                     futures.removeLast(); // the "parent" removed
                     parent = futures.getLast();
                     parent.addChild(node);
@@ -661,9 +673,9 @@ public class AllocationReporterTest {
                 }
             }
             if (last != null) {
-                parent.addChild(last.toNode(getContextReference()));
+                parent.addChild(last.toNode());
             }
-            return futures.removeLast().toNode(getContextReference());
+            return futures.removeLast().toNode();
         }
 
         private static AllocValue parseValue(String allocCommand) {
@@ -728,11 +740,12 @@ public class AllocationReporterTest {
                 children.add(node);
             }
 
-            AllocNode toNode(ContextReference<LanguageContext> contextRef) {
+            AllocNode toNode() {
+                AllocationReporter reporter = getCurrentContext().getEnv().lookup(AllocationReporter.class);
                 if (children == null) {
-                    return new AllocNode(oldValue, newValue, contextRef);
+                    return new AllocNode(oldValue, newValue, reporter);
                 } else {
-                    return new AllocNode(oldValue, newValue, contextRef, children.toArray(new AllocNode[children.size()]));
+                    return new AllocNode(oldValue, newValue, reporter, children.toArray(new AllocNode[children.size()]));
                 }
             }
         }
@@ -741,23 +754,22 @@ public class AllocationReporterTest {
 
             private final AllocValue oldValue;
             private final AllocValue newValue;
-            private final ContextReference<LanguageContext> contextRef;
             @Children private final AllocNode[] children;
+            private final AllocationReporter reporter;
 
-            AllocNode(AllocValue oldValue, AllocValue newValue, ContextReference<LanguageContext> contextRef) {
-                this(oldValue, newValue, contextRef, null);
+            AllocNode(AllocValue oldValue, AllocValue newValue, AllocationReporter reporter) {
+                this(oldValue, newValue, reporter, null);
             }
 
-            AllocNode(AllocValue oldValue, AllocValue newValue, ContextReference<LanguageContext> contextRef, AllocNode[] children) {
+            AllocNode(AllocValue oldValue, AllocValue newValue, AllocationReporter reporter, AllocNode[] children) {
                 this.oldValue = oldValue;
                 this.newValue = newValue;
-                this.contextRef = contextRef;
                 this.children = children;
+                this.reporter = reporter;
             }
 
             public Object execute(VirtualFrame frame) {
                 Object value;
-                AllocationReporter reporter = contextRef.get().getEnv().lookup(AllocationReporter.class);
                 if (newValue == null) { // No allocation
                     value = InstrumentationTestLanguage.Null.INSTANCE;
                     execChildren(frame);
@@ -800,6 +812,7 @@ public class AllocationReporterTest {
                 return value;
             }
 
+            @ExplodeLoop
             private void execChildren(VirtualFrame frame) {
                 if (children != null) {
                     for (AllocNode ch : children) {
@@ -849,12 +862,6 @@ public class AllocationReporterTest {
                     default:
                         return new TruffleObject() {
                             @Override
-                            public ForeignAccess getForeignAccess() {
-                                // For tests only
-                                return null;
-                            }
-
-                            @Override
                             public String toString() {
                                 return "NewObject";
                             }
@@ -863,25 +870,26 @@ public class AllocationReporterTest {
             }
 
         }
+
+        public static LanguageContext getCurrentContext() {
+            return getCurrentContext(AllocationReporterLanguage.class);
+        }
     }
 
     private static class BigNumber implements TruffleObject {
 
         private BigInteger integer;
 
+        @TruffleBoundary
         BigNumber(String value) {
             this.integer = new BigInteger(value);
         }
 
+        @TruffleBoundary
         long getSize() {
             return integer.bitCount() / 8;
         }
 
-        @Override
-        public ForeignAccess getForeignAccess() {
-            // For test only
-            return null;
-        }
     }
 
     private static final class AllocationInfo {

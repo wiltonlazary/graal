@@ -2,25 +2,41 @@
  * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package org.graalvm.polyglot.io;
 
@@ -34,6 +50,9 @@ final class ByteArraySequence implements ByteSequence {
     private final byte[] buffer;
     private final int start;
     private final int length;
+
+    /** Cache the hash code for the byte array sequences. */
+    private int hash; // Default to 0
 
     ByteArraySequence(byte[] buffer, int start, int length) {
         assert buffer.length >= start + length;
@@ -72,6 +91,12 @@ final class ByteArraySequence implements ByteSequence {
             if (length != other.length) {
                 return false;
             }
+            int thisHash = this.hash;
+            int otherHash = other.hash;
+            if (thisHash != 0 && otherHash != 0 && thisHash != otherHash) {
+                // hash was already computed and hash is not equal
+                return false;
+            }
             int otherStart = other.start;
             for (int i = 0; i < length; i++) {
                 if (buffer[start + i] != other.buffer[otherStart + i]) {
@@ -96,11 +121,24 @@ final class ByteArraySequence implements ByteSequence {
 
     @Override
     public int hashCode() {
-        int result = 1;
-        for (int i = start; i < start + length; i++) {
-            result = 31 * result + buffer[i];
+        int h = hash;
+        if (h == 0 && length > 0) {
+            int end = start + length;
+            h = 1;
+            int i = start;
+            for (; i + 3 < end; i += 4) {
+                int h0 = buffer[i + 0] & 0xff << 0;
+                int h1 = buffer[i + 1] & 0xff << 8;
+                int h2 = buffer[i + 2] & 0xff << 16;
+                int h3 = buffer[i + 3] & 0xff << 24;
+                h = 31 * h + (h0 | h1 | h2 | h3);
+            }
+            for (; i < end; i++) {
+                h = 31 * h + buffer[i];
+            }
+            hash = h;
         }
-        return result;
+        return h;
     }
 
     public ByteSequence subSequence(int startIndex, int endIndex) {
@@ -112,7 +150,7 @@ final class ByteArraySequence implements ByteSequence {
         if (realStartIndex < 0) {
             throw new IndexOutOfBoundsException(String.valueOf(startIndex));
         }
-        if (realStartIndex + l > length()) {
+        if (endIndex > length()) {
             throw new IndexOutOfBoundsException(String.valueOf(realStartIndex + l));
         }
         return new ByteArraySequence(buffer, realStartIndex, l);

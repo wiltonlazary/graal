@@ -41,7 +41,9 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
+import org.graalvm.compiler.debug.GraalError;
 import org.graalvm.compiler.graph.Node;
+import org.graalvm.util.GuardedAnnotationAccess;
 import org.graalvm.word.WordBase;
 
 import com.oracle.graal.pointsto.BigBang;
@@ -77,12 +79,13 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
     private static final AtomicReferenceFieldUpdater<AnalysisType, ConstantContextSensitiveObject> UNIQUE_CONSTANT_UPDATER = //
                     AtomicReferenceFieldUpdater.newUpdater(AnalysisType.class, ConstantContextSensitiveObject.class, "uniqueConstant");
 
-    private final AnalysisUniverse universe;
+    protected final AnalysisUniverse universe;
     private final ResolvedJavaType wrapped;
 
     private boolean isInHeap;
     private boolean isAllocated;
     private boolean isInTypeCheck;
+    private boolean reachabilityListenerNotified;
     private boolean unsafeFieldsRecomputed;
     private boolean unsafeAccessedFieldsRegistered;
 
@@ -95,6 +98,7 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
     private volatile ConcurrentHashMap<UnsafePartitionKind, Collection<AnalysisField>> unsafeAccessedFields;
 
     AnalysisType[] subTypes;
+    AnalysisType superClass;
 
     private final int id;
 
@@ -128,7 +132,7 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
      * Map ResolvedJavaMethod to Object and not AnalysisMethod because when the type doesn't
      * implement the method the value stored is {@link AnalysisType#NULL_METHOD}.
      */
-    private final ConcurrentHashMap<ResolvedJavaMethod, Object> resolvedMethods = new ConcurrentHashMap<>(AnalysisUniverse.ESTIMATED_METHODS_PER_TYPE);
+    private final ConcurrentHashMap<ResolvedJavaMethod, Object> resolvedMethods = new ConcurrentHashMap<>();
 
     /**
      * Marker used in the {@link AnalysisType#resolvedMethods} map to signal that the type doesn't
@@ -144,48 +148,24 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
     /* isArray is an expensive operation so we eagerly compute it */
     private boolean isArray;
 
+    public enum UsageKind {
+        InHeap,
+        Allocated,
+        InTypeCheck;
+    }
+
     AnalysisType(AnalysisUniverse universe, ResolvedJavaType javaType, JavaKind storageKind, AnalysisType objectType) {
         this.universe = universe;
         this.wrapped = javaType;
         isArray = wrapped.isArray();
         this.storageKind = storageKind;
         this.unsafeAccessedFieldsRegistered = false;
-        if (universe.hostVM.analysisPolicy().needsConstantCache()) {
+        if (universe.analysisPolicy().needsConstantCache()) {
             this.constantObjectsCache = new ConcurrentHashMap<>();
         }
 
-        /*
-         * Eagerly ask the wrapped type to lookup the declared constructors. This will discover
-         * early any class resolution problems caused by missing parameter types. We cannot cache
-         * the result as AnalysisMethod[], i.e., by calling universe.lookup(JavaMethod[]), because
-         * that would lead to a deadlock, but we could cache it as ResolvedJavaMethod[] which we can
-         * later use in AnalysisType.getDeclaredConstructors().
-         */
-        wrapped.getDeclaredConstructors();
-        /*
-         * Eagerly resolve the enclosing type. It is possible that we are dealing with an incomplete
-         * classpath. While normally JVM doesn't care about missing classes unless they are really
-         * used the analysis is eager to load all reachable classes. The analysis client should deal
-         * with type resolution problems.
-         * 
-         * We cannot cache the result as an AnalysisType, i.e., by calling
-         * universe.lookup(JavaType), because that could lead to a deadlock.
-         */
-        wrapped.getEnclosingType();
-
-        /*
-         * Eagerly resolve the instance fields. The wrapped type caches the result, so when
-         * AnalysisType.getInstanceFields(boolean) is called it will use that cached result. We
-         * cannot call AnalysisType.getInstanceFields(boolean), and create the corresponding
-         * AnalysisField objects, directly here because that could lead to a deadlock.
-         */
-        for (ResolvedJavaField field : wrapped.getInstanceFields(false)) {
-            /* Eagerly resolve the field declared type. */
-            field.getType();
-        }
-
         /* Ensure the super types as well as the component type (for arrays) is created too. */
-        getSuperclass();
+        superClass = universe.lookup(wrapped.getSuperclass());
         interfaces = convertTypes(wrapped.getInterfaces());
         if (isArray()) {
             this.componentType = universe.lookup(wrapped.getComponentType());
@@ -222,7 +202,7 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
     private AnalysisType[] convertTypes(ResolvedJavaType[] originalTypes) {
         List<AnalysisType> result = new ArrayList<>(originalTypes.length);
         for (ResolvedJavaType originalType : originalTypes) {
-            if (!universe.hostVM().platformSupported(originalType)) {
+            if (!universe.platformSupported(originalType)) {
                 /* Ignore types that are not in our platform (including hosted-only types). */
                 continue;
             }
@@ -256,6 +236,10 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
         return contextInsensitiveAnalysisObject;
     }
 
+    public AnalysisObject getUniqueConstantObject() {
+        return uniqueConstant;
+    }
+
     public AnalysisObject getCachedConstantObject(BigBang bb, JavaConstant constant) {
 
         /*
@@ -271,7 +255,7 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
             return uniqueConstant;
         }
 
-        if (constantObjectsCache.size() > PointstoOptions.MaxConstantObjectsPerType.getValue(bb.getOptions())) {
+        if (constantObjectsCache.size() >= PointstoOptions.MaxConstantObjectsPerType.getValue(bb.getOptions())) {
             // The number of constant objects has increased above the limit,
             // merge the constants in the uniqueConstant and return it
             mergeConstantObjects(bb);
@@ -299,6 +283,12 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
         ConstantContextSensitiveObject uConstant = new ConstantContextSensitiveObject(bb, this, null);
         if (UNIQUE_CONSTANT_UPDATER.compareAndSet(this, null, uConstant)) {
             constantObjectsCache.values().stream().forEach(constantObject -> {
+                /*
+                 * The order of the two lines below matters: setting the merged flag first, before
+                 * doing the actual merging, ensures that concurrent updates to the flow are still
+                 * merged correctly.
+                 */
+                constantObject.setMergedWithUniqueConstantObject();
                 constantObject.mergeInstanceFieldsFlows(bb, uniqueConstant);
             });
         }
@@ -514,22 +504,52 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
     }
 
     public void registerAsInHeap() {
-        assert isArray() || (isInstanceClass() && !Modifier.isAbstract(getModifiers()));
-        isInHeap = true;
+        if (!isInHeap) {
+            /* Races are not a problem because every thread is going to do the same steps. */
+            isInHeap = true;
+
+            assert isArray() || (isInstanceClass() && !Modifier.isAbstract(getModifiers())) : this;
+            universe.hostVM.checkForbidden(this, UsageKind.InHeap);
+        }
     }
 
     /**
      * @param node For future use and debugging
      */
     public void registerAsAllocated(Node node) {
-        assert isArray() || (isInstanceClass() && !Modifier.isAbstract(getModifiers())) : this;
         if (!isAllocated) {
+            /* Races are not a problem because every thread is going to do the same steps. */
             isAllocated = true;
+
+            assert isArray() || (isInstanceClass() && !Modifier.isAbstract(getModifiers())) : this;
+            universe.hostVM.checkForbidden(this, UsageKind.Allocated);
         }
     }
 
     public void registerAsInTypeCheck() {
-        isInTypeCheck = true;
+        if (!isInTypeCheck) {
+            /* Races are not a problem because every thread is going to do the same steps. */
+            isInTypeCheck = true;
+
+            universe.hostVM.checkForbidden(this, UsageKind.InTypeCheck);
+            if (isArray()) {
+                /*
+                 * For array types, distinguishing between "used" and "instantiated" does not
+                 * provide any benefits since array types do not implement new methods. Marking all
+                 * used array types as instantiated too allows more usages of Arrays.newInstance
+                 * without the need of explicit registration of types for reflection.
+                 */
+                registerAsAllocated(null);
+            }
+        }
+    }
+
+    public boolean getReachabilityListenerNotified() {
+        return reachabilityListenerNotified;
+    }
+
+    public void setReachabilityListenerNotified(boolean reachabilityListenerNotified) {
+        this.reachabilityListenerNotified = reachabilityListenerNotified;
     }
 
     /**
@@ -669,6 +689,10 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
         return universe.substitutions.resolve(wrapped);
     }
 
+    public ResolvedJavaType getWrappedWithoutResolve() {
+        return wrapped;
+    }
+
     @Override
     public Class<?> getJavaClass() {
         return OriginalClassProvider.getJavaClass(universe.getOriginalSnippetReflection(), wrapped);
@@ -703,13 +727,14 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
 
     @Override
     public final boolean isInitialized() {
-        assert wrapped.isInitialized();
-        return true;
+        return universe.hostVM.isInitialized(this);
     }
 
     @Override
     public void initialize() {
-        assert wrapped.isInitialized();
+        if (!wrapped.isInitialized()) {
+            throw GraalError.shouldNotReachHere("Classes can only be initialized using methods in ClassInitializationFeature: " + toClassName());
+        }
     }
 
     @Override
@@ -760,7 +785,7 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
 
     @Override
     public AnalysisType getSuperclass() {
-        return universe.lookup(wrapped.getSuperclass());
+        return superClass;
     }
 
     @Override
@@ -821,6 +846,16 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
             resolvedMethod = oldResolvedMethod != null ? oldResolvedMethod : newResolvedMethod;
         }
         return resolvedMethod == NULL_METHOD ? null : (AnalysisMethod) resolvedMethod;
+    }
+
+    /**
+     * Wrapper for resolveConcreteMethod() that ignores the callerType parameter. The method that
+     * does the resolution, resolveMethod() above, ignores the callerType parameter and uses
+     * substMethod.getDeclaringClass() instead since we don't want any access checks in the
+     * analysis.
+     */
+    public AnalysisMethod resolveConcreteMethod(ResolvedJavaMethod method) {
+        return (AnalysisMethod) WrappedJavaType.super.resolveConcreteMethod(method, null);
     }
 
     @Override
@@ -895,17 +930,17 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
 
     @Override
     public Annotation[] getAnnotations() {
-        return wrapped.getAnnotations();
+        return GuardedAnnotationAccess.getAnnotations(wrapped);
     }
 
     @Override
     public Annotation[] getDeclaredAnnotations() {
-        return wrapped.getDeclaredAnnotations();
+        return GuardedAnnotationAccess.getDeclaredAnnotations(wrapped);
     }
 
     @Override
     public <T extends Annotation> T getAnnotation(Class<T> annotationClass) {
-        return wrapped.getAnnotation(annotationClass);
+        return GuardedAnnotationAccess.getAnnotation(wrapped, annotationClass);
     }
 
     @Override
@@ -929,7 +964,7 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
         try {
             return wrapped.isLocal();
         } catch (InternalError e) {
-            universe.getHostVM().warn("unknown locality of class " + wrapped.getName() + ", assuming class is not local. To remove the warning report an issue " +
+            universe.hostVM().warn("unknown locality of class " + wrapped.getName() + ", assuming class is not local. To remove the warning report an issue " +
                             "to the library or language author. The issue is caused by " + wrapped.getName() + " which is not following the naming convention.");
             return false;
         }
@@ -942,7 +977,14 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
 
     @Override
     public AnalysisType getEnclosingType() {
-        return universe.lookup(wrapped.getEnclosingType());
+        ResolvedJavaType wrappedEnclosingType;
+        try {
+            wrappedEnclosingType = wrapped.getEnclosingType();
+        } catch (NoClassDefFoundError e) {
+            /* Ignore NoClassDefFoundError thrown by enclosing type resolution. */
+            return null;
+        }
+        return universe.lookup(wrappedEnclosingType);
     }
 
     @Override
@@ -956,14 +998,32 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
     }
 
     @Override
-    public ResolvedJavaMethod getClassInitializer() {
+    public AnalysisMethod getClassInitializer() {
         return universe.lookup(wrapped.getClassInitializer());
     }
 
     @Override
     public boolean isLinked() {
-        assert wrapped.isLinked();
-        return true;
+        /*
+         * If the wrapped type is referencing some missing types verification may fail and the type
+         * will not be linked.
+         */
+        return wrapped.isLinked();
+    }
+
+    @Override
+    public void link() {
+        wrapped.link();
+    }
+
+    @Override
+    public boolean hasDefaultMethods() {
+        return wrapped.hasDefaultMethods();
+    }
+
+    @Override
+    public boolean declaresDefaultMethods() {
+        return wrapped.declaresDefaultMethods();
     }
 
     @Override
@@ -998,5 +1058,4 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
     public boolean isAnnotation() {
         return (getModifiers() & ANNOTATION) != 0;
     }
-
 }

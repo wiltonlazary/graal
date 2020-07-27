@@ -27,9 +27,12 @@ package com.oracle.svm.hosted.annotation;
 import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
 
 import java.lang.annotation.Annotation;
+import java.lang.reflect.Executable;
 import java.lang.reflect.Type;
 
 import com.oracle.graal.pointsto.infrastructure.GraphProvider;
+import com.oracle.graal.pointsto.infrastructure.OriginalMethodProvider;
+import com.oracle.svm.hosted.c.GraalAccess;
 
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.ConstantPool;
@@ -42,7 +45,7 @@ import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
 import jdk.vm.ci.meta.SpeculationLog;
 
-public abstract class CustomSubstitutionMethod implements ResolvedJavaMethod, GraphProvider {
+public abstract class CustomSubstitutionMethod implements ResolvedJavaMethod, GraphProvider, OriginalMethodProvider {
 
     protected final ResolvedJavaMethod original;
 
@@ -52,6 +55,17 @@ public abstract class CustomSubstitutionMethod implements ResolvedJavaMethod, Gr
 
     public ResolvedJavaMethod getOriginal() {
         return original;
+    }
+
+    @Override
+    public boolean allowRuntimeCompilation() {
+        /*
+         * The safe default for all methods with manually generated graphs is that such methods are
+         * not available for runtime compilation. Note that a manually generated graph must be able
+         * to provide the proper deoptimization entry points and deoptimization frame states. If a
+         * subclass provides that, it can override this method and return true.
+         */
+        return false;
     }
 
     @Override
@@ -81,7 +95,7 @@ public abstract class CustomSubstitutionMethod implements ResolvedJavaMethod, Gr
 
     @Override
     public int getMaxLocals() {
-        return getSignature().getParameterCount(true) + 2;
+        return getSignature().getParameterCount(!isStatic()) * 2;
     }
 
     @Override
@@ -174,6 +188,11 @@ public abstract class CustomSubstitutionMethod implements ResolvedJavaMethod, Gr
     }
 
     @Override
+    public Parameter[] getParameters() {
+        return original.getParameters();
+    }
+
+    @Override
     public Annotation[][] getParameterAnnotations() {
         return original.getParameterAnnotations();
     }
@@ -221,5 +240,10 @@ public abstract class CustomSubstitutionMethod implements ResolvedJavaMethod, Gr
     @Override
     public SpeculationLog getSpeculationLog() {
         throw shouldNotReachHere();
+    }
+
+    @Override
+    public Executable getJavaMethod() {
+        return OriginalMethodProvider.getJavaMethod(GraalAccess.getOriginalSnippetReflection(), original);
     }
 }

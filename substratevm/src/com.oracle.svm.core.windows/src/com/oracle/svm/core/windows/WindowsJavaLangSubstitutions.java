@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,34 +37,17 @@ import com.oracle.svm.core.annotate.Uninterruptible;
 @Platforms(Platform.WINDOWS.class)
 final class Target_java_lang_System {
 
-    @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset)//
-    static volatile Console cons;
+    @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset) static volatile Console cons;
 
     @Substitute
-    @Uninterruptible(reason = "Called from uninterruptible code.")
-    public static long currentTimeMillis() {
-        return 0x12345678L;
-    }
-
-    @Substitute
-    @Uninterruptible(reason = "Does basic math after a simple system call")
-    private static long nanoTime() {
-        return 0x1234567812345678L;
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    protected static long nanoTime() {
+        return WindowsUtils.getNanoCounter();
     }
 
     @Substitute
     public static String mapLibraryName(String libname) {
-        return "lib" + libname + ".dll";
-    }
-}
-
-@TargetClass(className = "java.lang.Shutdown")
-@Platforms(Platform.WINDOWS.class)
-final class Target_java_lang_Shutdown {
-
-    @SuppressWarnings("unused")
-    @Substitute
-    static void halt0(int status) {
+        return libname + ".dll";
     }
 }
 

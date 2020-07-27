@@ -28,11 +28,14 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import org.graalvm.component.installer.Version;
 
 /**
  * Information about an installable Component.
@@ -47,6 +50,11 @@ public final class ComponentInfo {
      * Version of the component.
      */
     private final String versionString;
+
+    /**
+     * Parsed version of the Component.
+     */
+    private final Version version;
 
     /**
      * Human-readable name of the component.
@@ -64,6 +72,11 @@ public final class ComponentInfo {
     private String licensePath;
 
     /**
+     * License type.
+     */
+    private String licenseType;
+
+    /**
      * Assertions on graalVM installation.
      */
     private final Map<String, String> requiredGraalValues = new HashMap<>();
@@ -71,6 +84,8 @@ public final class ComponentInfo {
     private final List<String> paths = new ArrayList<>();
 
     private final Set<String> workingDirectories = new LinkedHashSet<>();
+
+    private final Map<String, Object> providedValues = new HashMap<>();
 
     private URL remoteURL;
 
@@ -80,10 +95,42 @@ public final class ComponentInfo {
 
     private String postinstMessage;
 
-    public ComponentInfo(String id, String name, String versionString) {
+    private boolean nativeComponent;
+
+    private String tag = "";
+
+    /**
+     * Component direct dependencies. Contains component canonical IDs.
+     */
+    private Set<String> dependencies = Collections.emptySet();
+
+    /**
+     * Origin of the component.
+     */
+    private String origin;
+
+    /**
+     * The distribution type.
+     */
+    private DistributionType distributionType = DistributionType.OPTIONAL;
+
+    public ComponentInfo(String id, String name, String versionString, String tag) {
         this.id = id;
         this.versionString = versionString;
         this.name = name;
+        this.version = Version.fromString(versionString);
+        this.tag = tag;
+    }
+
+    public ComponentInfo(String id, String name, String versionString) {
+        this(id, name, versionString, ""); // NOI18N
+    }
+
+    public ComponentInfo(String id, String name, Version v) {
+        this.id = id;
+        this.versionString = v == null ? null : v.originalString();
+        this.name = name;
+        this.version = v == null ? Version.NO_VERSION : v;
     }
 
     public String getId() {
@@ -96,6 +143,14 @@ public final class ComponentInfo {
 
     public String getName() {
         return name;
+    }
+
+    public DistributionType getDistributionType() {
+        return distributionType;
+    }
+
+    public void setDistributionType(DistributionType distributionType) {
+        this.distributionType = distributionType;
     }
 
     public Map<String, String> getRequiredGraalValues() {
@@ -181,5 +236,161 @@ public final class ComponentInfo {
 
     public void setPostinstMessage(String postinstMessage) {
         this.postinstMessage = postinstMessage;
+    }
+
+    public String getLicenseType() {
+        return licenseType;
+    }
+
+    public void setLicenseType(String licenseType) {
+        this.licenseType = licenseType;
+    }
+
+    @Override
+    public int hashCode() {
+        int hash = 5;
+        hash = 37 * hash + Objects.hashCode(this.id);
+        hash = 37 * hash + Objects.hashCode(this.version);
+        if (remoteURL != null) {
+            hash = 37 * hash + Objects.hashCode(this.remoteURL);
+        }
+        if (origin != null) {
+            hash = 37 * hash + Objects.hashCode(this.origin);
+        }
+        hash = 37 * hash + Objects.hashCode(this.tag);
+        return hash;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj) {
+            return true;
+        }
+        if (obj == null) {
+            return false;
+        }
+        if (getClass() != obj.getClass()) {
+            return false;
+        }
+        final ComponentInfo other = (ComponentInfo) obj;
+        if (!Objects.equals(this.id, other.id)) {
+            return false;
+        }
+        if (!Objects.equals(this.version, other.version)) {
+            return false;
+        }
+        if (!Objects.equals(this.remoteURL, other.remoteURL)) {
+            return false;
+        }
+        if (!Objects.equals(this.origin, other.origin)) {
+            return false;
+        }
+        if (!Objects.equals(this.tag, other.tag)) {
+            return false;
+        }
+        return true;
+    }
+
+    public Version getVersion() {
+        return version;
+    }
+
+    private static final Comparator<ComponentInfo> COMPARATOR_VERSIONS = new Comparator<ComponentInfo>() {
+        @Override
+        public int compare(ComponentInfo o1, ComponentInfo o2) {
+            if (o1 == null) {
+                if (o2 == null) {
+                    return 0;
+                } else {
+                    return -1;
+                }
+            } else if (o2 == null) {
+                return 1;
+            }
+
+            return o1.getVersion().compareTo(o2.getVersion());
+        }
+    };
+
+    @Override
+    public String toString() {
+        return getId() + "[" + getVersion().toString() +
+                        (tag.isEmpty() ? "" : "/" + tag) + "]"; // NOI18N
+    }
+
+    public static Comparator<ComponentInfo> versionComparator() {
+        return COMPARATOR_VERSIONS;
+    }
+
+    public String getOrigin() {
+        return origin;
+    }
+
+    public void setOrigin(String origin) {
+        this.origin = origin;
+    }
+
+    public boolean isNativeComponent() {
+        return nativeComponent;
+    }
+
+    public void setNativeComponent(boolean nativeComponent) {
+        this.nativeComponent = nativeComponent;
+    }
+
+    public <T> void provideValue(String k, T v) {
+        providedValues.put(k, v);
+    }
+
+    public <T> T getProvidedValue(String k, Class<T> type) {
+        Object o = providedValues.get(k);
+        if (!type.isInstance(o)) {
+            if (type != String.class || o == null) {
+                return null;
+            }
+            o = o.toString();
+        }
+        @SuppressWarnings("unchecked")
+        T ret = (T) o;
+        return ret;
+    }
+
+    public Map<String, Object> getProvidedValues() {
+        return Collections.unmodifiableMap(providedValues);
+    }
+
+    public void addProvidedValues(Map<String, Object> vals) {
+        for (String s : vals.keySet()) {
+            provideValue(s, vals.get(s));
+        }
+    }
+
+    public void setDependencies(Set<String> deps) {
+        this.dependencies = deps;
+    }
+
+    public Set<String> getDependencies() {
+        return Collections.unmodifiableSet(dependencies);
+    }
+
+    /**
+     * @return True, if the Component is already installed.
+     */
+    public boolean isInstalled() {
+        return infoPath != null;
+    }
+
+    public String getTag() {
+        return tag;
+    }
+
+    /**
+     * Sets the component tag. WARNING: do not use this after Component has been constructed; the
+     * call will change the hashCode + equals !
+     * 
+     * @param tag component tag/serial
+     */
+    public void setTag(String tag) {
+        this.tag = tag;
     }
 }

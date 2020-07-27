@@ -1,36 +1,54 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.polyglot;
 
-import static com.oracle.truffle.polyglot.VMAccessor.INSTRUMENT;
+import static com.oracle.truffle.polyglot.EngineAccessor.INSTRUMENT;
 
 import org.graalvm.options.OptionDescriptors;
 import org.graalvm.polyglot.Instrument;
 import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractInstrumentImpl;
 
 import com.oracle.truffle.api.InstrumentInfo;
+import com.oracle.truffle.api.instrumentation.TruffleInstrument;
+import java.util.function.Supplier;
 
 class PolyglotInstrument extends AbstractInstrumentImpl implements com.oracle.truffle.polyglot.PolyglotImpl.VMObject {
 
@@ -44,6 +62,7 @@ class PolyglotInstrument extends AbstractInstrumentImpl implements com.oracle.tr
     private volatile OptionValuesImpl optionValues;
     private volatile boolean initialized;
     private volatile boolean created;
+    int requestedAsyncStackDepth = 0;
 
     PolyglotInstrument(PolyglotEngineImpl engine, InstrumentCache cache) {
         super(engine.impl);
@@ -53,7 +72,15 @@ class PolyglotInstrument extends AbstractInstrumentImpl implements com.oracle.tr
 
     @Override
     public OptionDescriptors getOptions() {
-        engine.checkState();
+        try {
+            engine.checkState();
+            return getOptionsInternal();
+        } catch (Throwable t) {
+            throw PolyglotImpl.guestToHostException(engine, t);
+        }
+    }
+
+    OptionDescriptors getOptionsInternal() {
         ensureInitialized();
         return options;
     }
@@ -62,10 +89,14 @@ class PolyglotInstrument extends AbstractInstrumentImpl implements com.oracle.tr
         if (optionValues == null) {
             synchronized (instrumentLock) {
                 if (optionValues == null) {
-                    optionValues = new OptionValuesImpl(engine, getOptions());
+                    optionValues = new OptionValuesImpl(engine, getOptionsInternal(), false);
                 }
             }
         }
+        return optionValues;
+    }
+
+    OptionValuesImpl getOptionValuesIfExists() {
         return optionValues;
     }
 
@@ -79,8 +110,12 @@ class PolyglotInstrument extends AbstractInstrumentImpl implements com.oracle.tr
             synchronized (instrumentLock) {
                 if (!initialized) {
                     try {
-                        Class<?> loadedInstrument = cache.getInstrumentationClass();
-                        INSTRUMENT.initializeInstrument(engine.instrumentationHandler, this, loadedInstrument);
+                        INSTRUMENT.initializeInstrument(engine.instrumentationHandler, this, cache.getClassName(), new Supplier<TruffleInstrument>() {
+                            @Override
+                            public TruffleInstrument get() {
+                                return cache.loadInstrument();
+                            }
+                        });
                         this.options = INSTRUMENT.describeOptions(engine.instrumentationHandler, this, cache.getId());
                     } catch (Exception e) {
                         throw new IllegalStateException(String.format("Error initializing instrument '%s' using class '%s'.", cache.getId(), cache.getClassName()), e);
@@ -132,21 +167,17 @@ class PolyglotInstrument extends AbstractInstrumentImpl implements com.oracle.tr
 
     @Override
     public <T> T lookup(Class<T> serviceClass) {
-        return lookup(serviceClass, true);
+        try {
+            engine.checkState();
+            return lookupInternal(serviceClass);
+        } catch (Throwable t) {
+            throw PolyglotImpl.guestToHostException(engine, t);
+        }
     }
 
-    <T> T lookup(Class<T> serviceClass, boolean wrapExceptions) {
-        engine.checkState();
+    <T> T lookupInternal(Class<T> serviceClass) {
         if (cache.supportsService(serviceClass)) {
-            try {
-                ensureCreated();
-            } catch (Throwable t) {
-                if (wrapExceptions) {
-                    throw PolyglotImpl.wrapGuestException(engine, t);
-                } else {
-                    throw t;
-                }
-            }
+            ensureCreated();
             return INSTRUMENT.getInstrumentationHandlerService(engine.instrumentationHandler, this, serviceClass);
         } else {
             return null;
@@ -167,7 +198,7 @@ class PolyglotInstrument extends AbstractInstrumentImpl implements com.oracle.tr
     public String getVersion() {
         final String version = cache.getVersion();
         if (version.equals("inherit")) {
-            return engine.getVersion();
+            return engine.creatorApi.getVersion();
         } else {
             return version;
         }

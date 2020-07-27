@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.tck.tests;
 
@@ -45,6 +61,7 @@ import java.util.stream.Stream;
 import org.junit.Assert;
 
 import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.Instrument;
 import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.tck.InlineSnippet;
 import org.graalvm.polyglot.tck.Snippet;
@@ -52,6 +69,9 @@ import org.graalvm.polyglot.tck.TypeDescriptor;
 import org.graalvm.polyglot.tck.LanguageProvider;
 
 final class TestContext implements Closeable {
+    private static final Object contextCacheLock = new Object();
+    private static RefCountedContextReference contextCache;
+
     private Map<String, LanguageProvider> providers;
     private final Map<String, Collection<? extends Snippet>> valueConstructors;
     private final Map<String, Collection<? extends Snippet>> expressions;
@@ -59,6 +79,7 @@ final class TestContext implements Closeable {
     private final Map<String, Collection<? extends Snippet>> scripts;
     private final Map<String, Collection<? extends InlineSnippet>> inlineScripts;
     private final boolean printOutput;
+    private final boolean enableInlineVerifier;
     private Context context;
     private InlineVerifier inlineVerifier;
     private State state;
@@ -70,12 +91,18 @@ final class TestContext implements Closeable {
         this.statements = new HashMap<>();
         this.scripts = new HashMap<>();
         this.inlineScripts = new HashMap<>();
-        boolean verbose = Boolean.getBoolean("tck.verbose");
-        final String propValue = System.getProperty(String.format("tck.%s.verbose", testClass.getSimpleName()));
+        boolean verbose = true;
+        String propValue = System.getProperty("tck.verbose");
+        if (propValue != null) {
+            verbose = Boolean.parseBoolean(propValue);
+        }
+        propValue = System.getProperty(String.format("tck.%s.verbose", testClass.getSimpleName()));
         if (propValue != null) {
             verbose = Boolean.parseBoolean(propValue);
         }
         printOutput = verbose;
+        propValue = System.getProperty("tck.inlineVerifierInstrument");
+        enableInlineVerifier = propValue == null ? true : Boolean.parseBoolean(propValue);
     }
 
     Map<String, ? extends LanguageProvider> getInstalledProviders() {
@@ -89,6 +116,9 @@ final class TestContext implements Closeable {
                     final String id = provider.getId();
                     if (languages.contains(id) || isHost(provider)) {
                         tmpProviders.put(id, provider);
+                    } else {
+                        throw new IllegalStateException("Provider " + provider.getClass().getName() + " requires a non installed language " + id + "\n" +
+                                        "Installed languages: " + String.join(", ", languages));
                     }
                 }
                 providers = Collections.unmodifiableMap(tmpProviders);
@@ -104,20 +134,39 @@ final class TestContext implements Closeable {
         checkState(State.NEW, State.INITIALIZED);
         state = State.CLOSED;
         if (context != null) {
-            context.close();
+            synchronized (contextCacheLock) {
+                contextCache.close();
+                if (!contextCache.isValid()) {
+                    context.close();
+                    contextCache = null;
+                }
+            }
         }
     }
 
     Context getContext() {
         checkState(State.NEW, State.INITIALIZING, State.INITIALIZED);
         if (context == null) {
-            final Context.Builder builder = Context.newBuilder().allowAllAccess(true);
-            if (!printOutput) {
-                builder.out(NullOutputStream.INSTANCE).err(NullOutputStream.INSTANCE);
+            synchronized (contextCacheLock) {
+                if (contextCache != null) {
+                    this.context = contextCache.retain();
+                    try {
+                        contextCache.out().setDelegate(printOutput ? System.out : NullOutputStream.INSTANCE);
+                        contextCache.err().setDelegate(printOutput ? System.err : NullOutputStream.INSTANCE);
+                    } catch (IOException ioe) {
+                        throw new RuntimeException("Failed to flush stdout, stderr.", ioe);
+                    }
+                } else {
+                    ProxyOutputStream out = new ProxyOutputStream(printOutput ? System.out : NullOutputStream.INSTANCE);
+                    ProxyOutputStream err = new ProxyOutputStream(printOutput ? System.err : NullOutputStream.INSTANCE);
+                    this.context = Context.newBuilder().allowAllAccess(true).out(out).err(err).build();
+                    assert contextCache == null;
+                    contextCache = new RefCountedContextReference(context, out, err);
+                }
             }
-            this.context = builder.build();
-            if (!isTruffleCompileImmediately()) {
-                this.inlineVerifier = context.getEngine().getInstruments().get(InlineVerifier.ID).lookup(InlineVerifier.class);
+            if (enableInlineVerifier) {
+                Instrument instrument = context.getEngine().getInstruments().get(InlineVerifier.ID);
+                this.inlineVerifier = instrument.lookup(InlineVerifier.class);
                 Assert.assertNotNull(this.inlineVerifier);
             }
         }
@@ -256,10 +305,6 @@ final class TestContext implements Closeable {
         }
     }
 
-    private static boolean isTruffleCompileImmediately() {
-        return Boolean.getBoolean("graal.TruffleCompileImmediately");
-    }
-
     private enum State {
         NEW,
         INITIALIZING,
@@ -332,6 +377,92 @@ final class TestContext implements Closeable {
 
         @Override
         public void write(int b) throws IOException {
+        }
+    }
+
+    private static final class ProxyOutputStream extends OutputStream {
+
+        private OutputStream delegate;
+
+        ProxyOutputStream(OutputStream delegate) {
+            Objects.requireNonNull(delegate, "Delegate must be non null.");
+            this.delegate = delegate;
+        }
+
+        void setDelegate(OutputStream newDelegate) throws IOException {
+            this.delegate.flush();
+            this.delegate = newDelegate;
+        }
+
+        @Override
+        public void write(int b) throws IOException {
+            delegate.write(b);
+        }
+
+        @Override
+        public void write(byte[] b) throws IOException {
+            delegate.write(b);
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) throws IOException {
+            delegate.write(b, off, len);
+        }
+
+        @Override
+        public void flush() throws IOException {
+            delegate.flush();
+        }
+
+        @Override
+        public void close() throws IOException {
+            delegate.close();
+        }
+    }
+
+    private static final class RefCountedContextReference implements Closeable {
+
+        private final ProxyOutputStream out;
+        private final ProxyOutputStream err;
+        private Context context;
+        private int refCount;
+
+        RefCountedContextReference(Context context, ProxyOutputStream out, ProxyOutputStream err) {
+            this.context = context;
+            this.refCount = 1;
+            this.out = out;
+            this.err = err;
+        }
+
+        ProxyOutputStream out() {
+            return out;
+        }
+
+        ProxyOutputStream err() {
+            return err;
+        }
+
+        Context retain() {
+            if (refCount == 0) {
+                throw new IllegalStateException("Released reference");
+            }
+            refCount++;
+            return context;
+        }
+
+        boolean isValid() {
+            return refCount > 0;
+        }
+
+        @Override
+        public void close() {
+            if (refCount == 0) {
+                throw new IllegalStateException("Released reference");
+            }
+            refCount--;
+            if (refCount == 0) {
+                context = null;
+            }
         }
     }
 }

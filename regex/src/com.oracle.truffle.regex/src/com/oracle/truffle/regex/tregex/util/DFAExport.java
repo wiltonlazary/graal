@@ -1,30 +1,54 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.regex.tregex.util;
 
-import com.oracle.truffle.api.CompilerDirectives;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.nio.file.StandardOpenOption;
+import java.util.Map;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
+
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.TruffleFile;
 import com.oracle.truffle.regex.tregex.dfa.DFAGenerator;
 import com.oracle.truffle.regex.tregex.dfa.DFAStateNodeBuilder;
 import com.oracle.truffle.regex.tregex.dfa.DFAStateTransitionBuilder;
@@ -34,32 +58,25 @@ import com.oracle.truffle.regex.tregex.matchers.CharMatcher;
 import com.oracle.truffle.regex.tregex.matchers.EmptyMatcher;
 import com.oracle.truffle.regex.tregex.matchers.SingleCharMatcher;
 import com.oracle.truffle.regex.tregex.matchers.SingleRangeMatcher;
-import com.oracle.truffle.regex.tregex.nodes.DFAStateNode;
-
-import java.io.BufferedWriter;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.util.Map;
-import java.util.TreeSet;
-import java.util.stream.Collectors;
+import com.oracle.truffle.regex.tregex.nodes.dfa.DFAStateNode;
+import com.oracle.truffle.regex.tregex.nodes.dfa.Matchers.SimpleMatchers;
 
 public class DFAExport {
 
-    @CompilerDirectives.TruffleBoundary
-    public static void exportDot(DFAGenerator dfaGenerator, String path, boolean shortLabels) {
+    @TruffleBoundary
+    public static void exportDot(DFAGenerator dfaGenerator, TruffleFile path, boolean shortLabels) {
         DFAStateNodeBuilder[] entryStates = dfaGenerator.getEntryStates();
         Map<DFAStateNodeBuilder, DFAStateNodeBuilder> stateMap = dfaGenerator.getStateMap();
-        TreeSet<Short> entryIDs = new TreeSet<>();
+        TreeSet<Integer> entryIDs = new TreeSet<>();
         for (DFAStateNodeBuilder s : entryStates) {
             if (s != null) {
                 entryIDs.add(s.getId());
             }
         }
-        try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(path))) {
+        try (BufferedWriter writer = path.newBufferedWriter(StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
             writer.write("digraph finite_state_machine {");
             writer.newLine();
-            String finalStates = stateMap.values().stream().filter(DFAStateNodeBuilder::isFinalState).map(
+            String finalStates = stateMap.values().stream().filter(DFAStateNodeBuilder::isUnAnchoredFinalState).map(
                             s -> DotExport.escape(dotState(s, shortLabels))).collect(Collectors.joining("\" \""));
             if (!finalStates.isEmpty()) {
                 writer.write(String.format("    node [shape = doublecircle]; \"%s\";", finalStates));
@@ -88,8 +105,8 @@ public class DFAExport {
                         }
                     }
                 }
-                for (DFAStateTransitionBuilder t : state.getTransitions()) {
-                    DotExport.printConnection(writer, dotState(state, shortLabels), dotState(t.getTarget(), shortLabels), t.getMatcherBuilder().toString());
+                for (DFAStateTransitionBuilder t : state.getSuccessors()) {
+                    DotExport.printConnection(writer, dotState(state, shortLabels), dotState(t.getTarget(), shortLabels), t.getCodePointSet().toString());
                 }
             }
             writer.write("}");
@@ -103,7 +120,7 @@ public class DFAExport {
         return "S" + (shortLabels ? state.getId() : state.stateSetToString());
     }
 
-    @CompilerDirectives.TruffleBoundary
+    @TruffleBoundary
     public static void exportUnitTest(DFAStateNode entry, DFAStateNode[] states) {
         System.out.printf("int initialState = %d;\n", entry.getId());
         System.out.printf("DFAStateNode[] states = createStates(%d);\n", states.length);
@@ -114,10 +131,10 @@ public class DFAExport {
             }
             System.out.println(" });");
             System.out.printf("states[%d].setMatchers(new ByteMatcher[] {\n    ", state.getId());
-            printMatcher(state.getMatchers()[0]);
-            for (int i = 1; i < state.getMatchers().length; i++) {
+            printMatcher(((SimpleMatchers) state.getMatchers()).getMatchers()[0]);
+            for (int i = 1; i < state.getMatchers().size(); i++) {
                 System.out.print(",\n    ");
-                printMatcher(state.getMatchers()[i]);
+                printMatcher(((SimpleMatchers) state.getMatchers()).getMatchers()[i]);
             }
             System.out.println("\n});");
             if (state.isFinalState()) {
@@ -131,13 +148,13 @@ public class DFAExport {
             System.out.print("EmptyByteMatcher.create()");
         }
         if (matcher instanceof SingleCharMatcher) {
-            System.out.printf("SingleByteMatcher.create(0x%02x)", (int) ((SingleCharMatcher) matcher).getChar());
+            System.out.printf("SingleByteMatcher.create(0x%02x)", ((SingleCharMatcher) matcher).getChar());
         }
         if (matcher instanceof SingleRangeMatcher) {
-            System.out.printf("RangeByteMatcher.create(0x%02x, 0x%02x)", (int) ((SingleRangeMatcher) matcher).getLo(), (int) ((SingleRangeMatcher) matcher).getHi());
+            System.out.printf("RangeByteMatcher.create(0x%02x, 0x%02x)", ((SingleRangeMatcher) matcher).getLo(), ((SingleRangeMatcher) matcher).getHi());
         }
         if (matcher instanceof BitSetMatcher) {
-            long[] words = ((BitSetMatcher) matcher).getBitSet().toLongArray();
+            long[] words = ((BitSetMatcher) matcher).getBitSet();
             System.out.printf("MultiByteMatcher.create(new CompilationFinalBitSet(new long[] {\n        0x%016xL", words[0]);
             for (int i = 1; i < words.length; i++) {
                 System.out.printf(", 0x%016xL", words[i]);

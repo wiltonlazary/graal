@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package org.graalvm.polyglot.management;
 
@@ -29,7 +45,7 @@ import java.util.List;
 import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.SourceSection;
 import org.graalvm.polyglot.Value;
-import static org.graalvm.polyglot.management.ExecutionListener.IMPL;
+import static org.graalvm.polyglot.management.Management.IMPL;
 
 /**
  * An execution event object passed to an execution listener consumer. Execution event instances
@@ -37,7 +53,7 @@ import static org.graalvm.polyglot.management.ExecutionListener.IMPL;
  * until the context was closed.
  *
  * @see ExecutionListener For further details.
- * @since 1.0
+ * @since 19.0
  */
 public final class ExecutionEvent {
 
@@ -51,10 +67,10 @@ public final class ExecutionEvent {
      * Returns the source location of the event that was triggered or <code>null</code> if no
      * location source location is available.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public SourceSection getLocation() {
-        return IMPL.getLocation(impl);
+        return IMPL.getExecutionEventLocation(impl);
     }
 
     /**
@@ -62,10 +78,10 @@ public final class ExecutionEvent {
      * available for events caused by expressions and statements. In this case the name of the
      * containing root will be returned.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public String getRootName() {
-        return IMPL.getRootName(impl);
+        return IMPL.getExecutionEventRootName(impl);
     }
 
     /**
@@ -78,10 +94,10 @@ public final class ExecutionEvent {
      * unmodifiable. The returned input values may escape the event consumer and remain valid until
      * the context is closed.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public List<Value> getInputValues() {
-        return IMPL.getInputValues(impl);
+        return IMPL.getExecutionEventInputValues(impl);
     }
 
     /**
@@ -92,10 +108,10 @@ public final class ExecutionEvent {
      * events. The returned value is allowed to escape the event consumer and remain valid until the
      * context is closed.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public Value getReturnValue() {
-        return IMPL.getReturnValue(impl);
+        return IMPL.getExecutionEventReturnValue(impl);
     }
 
     /**
@@ -106,10 +122,10 @@ public final class ExecutionEvent {
      * events if an exception was thrown when the location was executed. The returned value is
      * allowed to escape the event consumer and remains valid until the context is closed.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public PolyglotException getException() {
-        return IMPL.getException(impl);
+        return IMPL.getExecutionEventException(impl);
     }
 
     /**
@@ -117,10 +133,10 @@ public final class ExecutionEvent {
      * <code>false</code>. The collection of expression events may be enabled by calling
      * {@link ExecutionListener.Builder#expressions(boolean)}.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isExpression() {
-        return IMPL.isExpression(impl);
+        return IMPL.isExecutionEventExpression(impl);
     }
 
     /**
@@ -128,10 +144,10 @@ public final class ExecutionEvent {
      * <code>false</code>. The collection of statement events may be enabled by calling
      * {@link ExecutionListener.Builder#statements(boolean)}.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isStatement() {
-        return IMPL.isStatement(impl);
+        return IMPL.isExecutionEventStatement(impl);
     }
 
     /**
@@ -139,16 +155,16 @@ public final class ExecutionEvent {
      * closure, else <code>false</code>. The collection of root events may be enabled by calling
      * {@link ExecutionListener.Builder#roots(boolean)}.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public boolean isRoot() {
-        return IMPL.isRoot(impl);
+        return IMPL.isExecutionEventRoot(impl);
     }
 
     /**
      * {@inheritDoc}
      *
-     * @since 1.0
+     * @since 19.0
      */
     @Override
     public String toString() {

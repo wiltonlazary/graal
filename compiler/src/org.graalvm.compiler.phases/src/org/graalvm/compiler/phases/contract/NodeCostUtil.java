@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -46,6 +46,15 @@ public class NodeCostUtil {
     private static final CounterKey sizeComputationCount = DebugContext.counter("GraphCostComputationCount_Size");
     private static final CounterKey sizeVerificationCount = DebugContext.counter("GraphCostVerificationCount_Size");
 
+    public static int computeNodesSize(Iterable<Node> nodes) {
+        int size = 0;
+        for (Node n : nodes) {
+            size += n.estimatedNodeSize().value;
+        }
+        assert size >= 0;
+        return size;
+    }
+
     @SuppressWarnings("try")
     public static int computeGraphSize(StructuredGraph graph) {
         sizeComputationCount.increment(graph.getDebug());
@@ -83,12 +92,12 @@ public class NodeCostUtil {
         try (DebugContext.Scope s = debug.scope("NodeCostSummary")) {
             for (Block block : cfg.getBlocks()) {
                 for (Node n : blockToNodes.apply(block)) {
-                    double probWeighted = n.estimatedNodeCycles().value * block.probability();
+                    double probWeighted = n.estimatedNodeCycles().value * block.getRelativeFrequency();
                     assert Double.isFinite(probWeighted);
                     weightedCycles += probWeighted;
                     if (debug.isLogEnabled()) {
-                        debug.log("Node %s contributes cycles:%f size:%d to graph %s [block prob:%f]", n, n.estimatedNodeCycles().value * block.probability(),
-                                        n.estimatedNodeSize().value, graph, block.probability());
+                        debug.log("Node %s contributes cycles:%f size:%d to graph %s [block freq:%f]", n, n.estimatedNodeCycles().value * block.getRelativeFrequency(),
+                                        n.estimatedNodeSize().value, graph, block.getRelativeFrequency());
                     }
                 }
             }

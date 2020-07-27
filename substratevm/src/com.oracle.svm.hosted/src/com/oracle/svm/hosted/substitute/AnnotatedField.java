@@ -25,10 +25,13 @@
 package com.oracle.svm.hosted.substitute;
 
 import java.lang.annotation.Annotation;
+import java.lang.reflect.Field;
 import java.util.Arrays;
 
+import com.oracle.graal.pointsto.infrastructure.OriginalFieldProvider;
+import com.oracle.svm.core.annotate.Delete;
+import com.oracle.svm.core.annotate.InjectAccessors;
 import com.oracle.svm.core.meta.ReadableJavaField;
-import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.c.GraalAccess;
 
 import jdk.vm.ci.meta.JavaConstant;
@@ -36,7 +39,13 @@ import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
-public class AnnotatedField implements ReadableJavaField {
+public class AnnotatedField implements ReadableJavaField, OriginalFieldProvider {
+
+    static Annotation[] appendAnnotationTo(Annotation[] array, Annotation element) {
+        Annotation[] result = Arrays.copyOf(array, array.length + 1);
+        result[result.length - 1] = element;
+        return result;
+    }
 
     private final ResolvedJavaField original;
 
@@ -49,15 +58,12 @@ public class AnnotatedField implements ReadableJavaField {
 
     @Override
     public Annotation[] getAnnotations() {
-        Annotation[] result = original.getAnnotations();
-        result = Arrays.copyOf(result, result.length + 1);
-        result[result.length - 1] = injectedAnnotation;
-        return result;
+        return appendAnnotationTo(original.getAnnotations(), injectedAnnotation);
     }
 
     @Override
     public Annotation[] getDeclaredAnnotations() {
-        return getAnnotations();
+        return appendAnnotationTo(original.getDeclaredAnnotations(), injectedAnnotation);
     }
 
     @Override
@@ -75,7 +81,13 @@ public class AnnotatedField implements ReadableJavaField {
 
     @Override
     public boolean allowConstantFolding() {
-        throw VMError.shouldNotReachHere();
+        /*
+         * We assume that fields for which this class is used always have altered behavior for which
+         * constant folding is not valid.
+         */
+        assert (injectedAnnotation instanceof Delete) || (injectedAnnotation instanceof InjectAccessors) : "Unknown annotation @" +
+                        injectedAnnotation.annotationType().getSimpleName() + ", should constant folding be permitted?";
+        return false;
     }
 
     @Override
@@ -123,5 +135,10 @@ public class AnnotatedField implements ReadableJavaField {
     @Override
     public String toString() {
         return "InjectedAnnotationField<original " + original.toString() + ", annotation: " + injectedAnnotation + ">";
+    }
+
+    @Override
+    public Field getJavaField() {
+        return OriginalFieldProvider.getJavaField(GraalAccess.getOriginalSnippetReflection(), original);
     }
 }

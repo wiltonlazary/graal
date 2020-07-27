@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,27 +24,24 @@
  */
 package org.graalvm.compiler.replacements.test;
 
-import org.graalvm.compiler.nodes.NodeView;
-import org.junit.Assert;
-import org.junit.Assume;
-import org.junit.Test;
-
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.test.GraalCompilerTest;
+import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.ReturnNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.StructuredGraph.AllowAssumptions;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.phases.common.CanonicalizerPhase;
-import org.graalvm.compiler.phases.common.inlining.InliningPhase;
 import org.graalvm.compiler.phases.tiers.HighTierContext;
 import org.graalvm.compiler.replacements.nodes.BitScanReverseNode;
+import org.junit.Assert;
+import org.junit.Assume;
+import org.junit.Test;
 
 import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.amd64.AMD64;
 import jdk.vm.ci.code.Architecture;
 import jdk.vm.ci.meta.JavaKind;
-import jdk.vm.ci.sparc.SPARC;
 
 public class BitOpNodesTest extends GraalCompilerTest {
 
@@ -73,7 +70,7 @@ public class BitOpNodesTest extends GraalCompilerTest {
         } else {
             // Even though there are AArch64 intrinsics for bitCount, they do
             // not use BitCountNode.
-            return arch instanceof SPARC;
+            return isSPARC(arch);
         }
     }
 
@@ -86,7 +83,7 @@ public class BitOpNodesTest extends GraalCompilerTest {
             AMD64 amd64 = (AMD64) arch;
             return amd64.getFeatures().contains(AMD64.CPUFeature.LZCNT) && amd64.getFlags().contains(AMD64.Flag.UseCountLeadingZerosInstruction);
         } else {
-            return arch instanceof SPARC || arch instanceof AArch64;
+            return isSPARC(arch) || arch instanceof AArch64;
         }
     }
 
@@ -99,7 +96,7 @@ public class BitOpNodesTest extends GraalCompilerTest {
             AMD64 amd64 = (AMD64) arch;
             return amd64.getFeatures().contains(AMD64.CPUFeature.BMI1) && amd64.getFlags().contains(AMD64.Flag.UseCountTrailingZerosInstruction);
         } else {
-            return arch instanceof SPARC || arch instanceof AArch64;
+            return isSPARC(arch) || arch instanceof AArch64;
         }
     }
 
@@ -305,9 +302,9 @@ public class BitOpNodesTest extends GraalCompilerTest {
     private ValueNode parseAndInline(String name, Class<? extends ValueNode> expectedClass) {
         StructuredGraph graph = parseEager(name, AllowAssumptions.YES);
         HighTierContext context = getDefaultHighTierContext();
-        CanonicalizerPhase canonicalizer = new CanonicalizerPhase();
+        CanonicalizerPhase canonicalizer = createCanonicalizerPhase();
         canonicalizer.apply(graph, context);
-        new InliningPhase(canonicalizer).apply(graph, context);
+        createInliningPhase(canonicalizer).apply(graph, context);
         canonicalizer.apply(graph, context);
         Assert.assertEquals(1, graph.getNodes(ReturnNode.TYPE).count());
         if (expectedClass != null) {

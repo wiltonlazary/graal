@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -105,6 +105,11 @@ public class NumUtil {
         return -0x80000000L <= x && x < 0x80000000L;
     }
 
+    public static byte safeToByte(int v) {
+        assert isByte(v);
+        return (byte) v;
+    }
+
     public static short safeToShort(int v) {
         assert isShort(v);
         return (short) v;
@@ -129,6 +134,14 @@ public class NumUtil {
 
     public static long roundDown(long number, long mod) {
         return number / mod * mod;
+    }
+
+    public static int divideAndRoundUp(int number, int divisor) {
+        return (number + divisor - 1) / divisor;
+    }
+
+    public static long divideAndRoundUp(long number, long divisor) {
+        return (number + divisor - 1L) / divisor;
     }
 
     public static int log2Ceil(int val) {
@@ -215,14 +228,14 @@ public class NumUtil {
     }
 
     public static long maxUnsigned(long a, long b) {
-        if (Long.compareUnsigned(a, b) > 0) {
+        if (Long.compareUnsigned(a, b) < 0) {
             return b;
         }
         return a;
     }
 
     public static long minUnsigned(long a, long b) {
-        if (Long.compareUnsigned(a, b) > 0) {
+        if (Long.compareUnsigned(a, b) < 0) {
             return a;
         }
         return b;

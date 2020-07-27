@@ -32,10 +32,12 @@ import org.graalvm.compiler.java.BytecodeParser;
 import org.graalvm.compiler.nodes.PiNode.PlaceholderStamp;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.util.Providers;
+import org.graalvm.compiler.word.WordTypes;
 
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.svm.core.graal.meta.SubstrateReplacements;
+import com.oracle.svm.core.graal.nodes.SubstrateNarrowOopStamp;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedUniverse;
@@ -51,7 +53,7 @@ import jdk.vm.ci.meta.ResolvedJavaType;
  * Snippets are parsed before the static analysis using {@link SubstrateReplacements}. This ensures
  * that snippets do not use analysis-specific nodes - they are parsed using the same
  * {@link BytecodeParser} subclass also used for parsing the snippets we use for runtime
- * compilation. The parsing using the {@link AnalysisUniverse}.
+ * compilation. The parsing uses the {@link AnalysisUniverse}.
  *
  * We cannot parse snippets again before compilation with the {@link HostedUniverse}: the static
  * analysis does not see the individual methods that are inlined into snippets, only the final graph
@@ -70,16 +72,16 @@ public class HostedReplacements extends SubstrateReplacements {
     private final SubstrateReplacements aReplacements;
 
     public HostedReplacements(HostedUniverse hUniverse, Providers providers, SnippetReflectionProvider snippetReflection, TargetDescription target, HostedProviders anaylysisProviders,
-                    BytecodeProvider bytecodeProvider, OptionValues options) {
-        super(options, providers, snippetReflection, bytecodeProvider, target, null);
+                    BytecodeProvider bytecodeProvider, WordTypes wordTypes) {
+        super(providers, snippetReflection, bytecodeProvider, target, wordTypes, null);
         this.hUniverse = hUniverse;
         this.aReplacements = (SubstrateReplacements) anaylysisProviders.getReplacements();
     }
 
     @Override
-    public void registerSnippet(ResolvedJavaMethod m, boolean trackNodeSourcePosition) {
+    public void registerSnippet(ResolvedJavaMethod method, ResolvedJavaMethod original, Object receiver, boolean trackNodeSourcePosition, OptionValues options) {
         /* We must have the snippet already available in the analysis replacements. */
-        assert aReplacements.getSnippet(((HostedMethod) m).wrapped, null, null, trackNodeSourcePosition, null) != null;
+        assert aReplacements.getSnippet(((HostedMethod) method).wrapped, null, null, trackNodeSourcePosition, null, options) != null;
     }
 
     @Override
@@ -102,7 +104,8 @@ public class HostedReplacements extends SubstrateReplacements {
             return hUniverse.lookup((JavaField) obj);
 
         } else if (obj.getClass() == ObjectStamp.class) {
-            if (((ObjectStamp) obj).type() == null) {
+            ObjectStamp stamp = (ObjectStamp) obj;
+            if (stamp.type() == null) {
                 /* No actual type referenced, so we can keep the original object. */
                 return obj;
             } else {
@@ -110,8 +113,14 @@ public class HostedReplacements extends SubstrateReplacements {
                  * ObjectStamp references a type indirectly, so we need to provide a new stamp with
                  * a modified type.
                  */
-                ObjectStamp stamp = (ObjectStamp) obj;
                 return new ObjectStamp((ResolvedJavaType) replaceAnalysisObjects(stamp.type()), stamp.isExactType(), stamp.nonNull(), stamp.alwaysNull());
+            }
+        } else if (obj.getClass() == SubstrateNarrowOopStamp.class) {
+            SubstrateNarrowOopStamp stamp = (SubstrateNarrowOopStamp) obj;
+            if (stamp.type() == null) {
+                return obj;
+            } else {
+                return new SubstrateNarrowOopStamp((ResolvedJavaType) replaceAnalysisObjects(stamp.type()), stamp.isExactType(), stamp.nonNull(), stamp.alwaysNull(), stamp.getEncoding());
             }
         } else if (obj.getClass() == PlaceholderStamp.class) {
             assert ((PlaceholderStamp) obj).type() == null : "PlaceholderStamp never references a type";

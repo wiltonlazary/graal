@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,13 +27,14 @@ package org.graalvm.compiler.nodes;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.nodes.CallTargetNode.InvokeKind;
 import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
+import org.graalvm.compiler.nodes.memory.SingleMemoryKill;
 import org.graalvm.compiler.nodes.spi.Lowerable;
 import org.graalvm.compiler.nodes.type.StampTool;
 
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
-public interface Invoke extends StateSplit, Lowerable, DeoptimizingNode.DeoptDuring, FixedNodeInterface, Invokable {
+public interface Invoke extends StateSplit, Lowerable, SingleMemoryKill, DeoptimizingNode.DeoptDuring, FixedNodeInterface, Invokable {
 
     FixedNode next();
 
@@ -41,16 +42,11 @@ public interface Invoke extends StateSplit, Lowerable, DeoptimizingNode.DeoptDur
 
     CallTargetNode callTarget();
 
-    @Override
-    int bci();
-
     Node predecessor();
 
     ValueNode classInit();
 
     void setClassInit(ValueNode node);
-
-    void intrinsify(Node node);
 
     boolean useForInlining();
 
@@ -68,13 +64,7 @@ public interface Invoke extends StateSplit, Lowerable, DeoptimizingNode.DeoptDur
         return callTarget() != null ? callTarget().targetMethod() : null;
     }
 
-    /**
-     * Returns the {@linkplain ResolvedJavaMethod method} from which this invoke is executed. This
-     * is the caller method and in the case of inlining may be different from the method of the
-     * graph this node is in.
-     *
-     * @return the method from which this invoke is executed.
-     */
+    @Override
     default ResolvedJavaMethod getContextMethod() {
         FrameState state = stateAfter();
         if (state == null) {
@@ -119,4 +109,5 @@ public interface Invoke extends StateSplit, Lowerable, DeoptimizingNode.DeoptDur
     default InvokeKind getInvokeKind() {
         return callTarget().invokeKind();
     }
+
 }

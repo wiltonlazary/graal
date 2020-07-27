@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,8 +26,8 @@ package com.oracle.svm.graal;
 
 import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
 
+import java.io.PrintStream;
 import java.util.EnumMap;
-import java.util.EnumSet;
 import java.util.Map;
 
 import org.graalvm.compiler.code.CompilationResult;
@@ -44,92 +44,30 @@ import org.graalvm.compiler.options.Option;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.OptimisticOptimizations;
 import org.graalvm.compiler.phases.tiers.Suites;
-import org.graalvm.compiler.printer.GraalDebugHandlersFactory;
+import org.graalvm.nativeimage.ImageSingletons;
 
+import com.oracle.svm.core.CPUFeatureAccess;
 import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.amd64.AMD64CPUFeatureAccess;
 import com.oracle.svm.core.graal.code.SubstrateCompilationIdentifier;
 import com.oracle.svm.core.graal.code.SubstrateCompilationResult;
-import com.oracle.svm.core.graal.meta.InstalledCodeBuilder;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
-import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.core.option.RuntimeOptionKey;
-import com.oracle.svm.graal.meta.SubstrateInstalledCodeImpl;
 import com.oracle.svm.graal.meta.SubstrateMethod;
 
-import jdk.vm.ci.amd64.AMD64;
-import jdk.vm.ci.code.InstalledCode;
+import jdk.vm.ci.code.Architecture;
 
 public class SubstrateGraalUtils {
 
-    /** Compile and install the method. Return the installed code descriptor. */
-    public static InstalledCode compileAndInstall(OptionValues options, SubstrateMethod method) {
-        return compileAndInstall(options, GraalSupport.getRuntimeConfig(), GraalSupport.getSuites(), GraalSupport.getLIRSuites(), method);
-    }
-
-    public static InstalledCode compileAndInstall(OptionValues options, RuntimeConfiguration runtimeConfig, Suites suites, LIRSuites lirSuites, SubstrateMethod method) {
-        return compileAndInstall(options, runtimeConfig, suites, lirSuites, method, false);
-    }
-
-    public static InstalledCode compileAndInstall(OptionValues options, SubstrateMethod method, boolean testTrampolineJumps) {
-        return compileAndInstall(options, GraalSupport.getRuntimeConfig(), GraalSupport.getSuites(), GraalSupport.getLIRSuites(), method, testTrampolineJumps);
-    }
-
-    public static InstalledCode compileAndInstall(OptionValues options, RuntimeConfiguration runtimeConfig, Suites suites, LIRSuites lirSuites, SubstrateMethod method, boolean testTrampolineJumps) {
-        updateGraalArchitectureWithHostCPUFeatures(runtimeConfig.lookupBackend(method));
-
-        DebugContext debug = DebugContext.create(options, new GraalDebugHandlersFactory(GraalSupport.getRuntimeConfig().getSnippetReflection()));
-
-        // create the installed code descriptor
-        SubstrateInstalledCodeImpl installedCode = new SubstrateInstalledCodeImpl(method);
-        // do compilation and code installation and update the installed code descriptor
-        SubstrateGraalUtils.doCompileAndInstall(debug, runtimeConfig, suites, lirSuites, method, installedCode, testTrampolineJumps);
-        // return the installed code
-        return installedCode;
-    }
-
-    /**
-     * This method does the actual compilation and installation of the method. Nothing is returned
-     * by this call. The code is installed via pinned objects and the address is updated in the
-     * {@link InstalledCode} argument.
-     *
-     * For zone allocation this is where the zone boundary can be placed when the code needs to be
-     * compiled and installed.
-     */
-    private static void doCompileAndInstall(DebugContext debug, RuntimeConfiguration runtimeConfig, Suites suites, LIRSuites lirSuites, SubstrateMethod method,
-                    SubstrateInstalledCodeImpl installedCode, boolean testTrampolineJumps) {
-        CompilationResult compilationResult = doCompile(debug, runtimeConfig, suites, lirSuites, method);
-        installMethod(method, compilationResult, installedCode, testTrampolineJumps);
-    }
-
-    private static void installMethod(SubstrateMethod method, CompilationResult result, SubstrateInstalledCodeImpl installedCode, boolean testTrampolineJumps) {
-        InstalledCodeBuilder installedCodeBuilder = new InstalledCodeBuilder(method, result, installedCode, null, testTrampolineJumps);
-        installedCodeBuilder.install();
-
-        Log.log().string("Installed code for " + method.format("%H.%n(%p)") + ": " + result.getTargetCodeSize() + " bytes").newline();
-    }
-
     /** Does the compilation of the method and returns the compilation result. */
     public static CompilationResult compile(DebugContext debug, final SubstrateMethod method) {
-        return compile(debug, GraalSupport.getRuntimeConfig(), GraalSupport.getSuites(), GraalSupport.getLIRSuites(), method);
-    }
-
-    public static CompilationResult compile(DebugContext debug, RuntimeConfiguration runtimeConfig, Suites suites, LIRSuites lirSuites, final SubstrateMethod method) {
-        updateGraalArchitectureWithHostCPUFeatures(runtimeConfig.lookupBackend(method));
-        return doCompile(debug, runtimeConfig, suites, lirSuites, method);
+        return doCompile(debug, GraalSupport.getRuntimeConfig(), GraalSupport.getSuites(), GraalSupport.getLIRSuites(), method);
     }
 
     private static final Map<ExceptionAction, Integer> compilationProblemsPerAction = new EnumMap<>(ExceptionAction.class);
 
-    /**
-     * Actual method compilation.
-     *
-     * For zone allocation this is where the zone boundary can be placed when the code is only
-     * compiled. However using the returned compilation result would result into a zone allocation
-     * invariant violation.
-     */
-    private static CompilationResult doCompile(DebugContext initialDebug, RuntimeConfiguration runtimeConfig, Suites suites, LIRSuites lirSuites, final SubstrateMethod method) {
+    public static CompilationResult doCompile(DebugContext initialDebug, RuntimeConfiguration runtimeConfig, Suites suites, LIRSuites lirSuites, final SubstrateMethod method) {
+        updateGraalArchitectureWithHostCPUFeatures(runtimeConfig.lookupBackend(method));
 
         String methodString = method.format("%H.%n(%p)");
         SubstrateCompilationIdentifier compilationId = new SubstrateCompilationIdentifier();
@@ -156,9 +94,15 @@ public class SubstrateGraalUtils {
                 return methodString;
             }
 
+            @SuppressWarnings("hiding")
             @Override
-            protected DebugContext createRetryDebugContext(OptionValues options) {
-                return GraalSupport.get().openDebugContext(options, compilationId, method);
+            protected DebugContext createRetryDebugContext(DebugContext initialDebug, OptionValues options, PrintStream logStream) {
+                return GraalSupport.get().openDebugContext(options, compilationId, method, logStream);
+            }
+
+            @Override
+            protected void exitHostVM(int status) {
+                System.exit(status);
             }
         }.run(initialDebug);
     }
@@ -181,12 +125,12 @@ public class SubstrateGraalUtils {
 
         if (!architectureInitialized) {
             architectureInitialized = true;
-
-            AMD64CPUFeatureAccess.verifyHostSupportsArchitecture(graalBackend.getCodeCache().getTarget().arch);
-
-            AMD64 architecture = (AMD64) graalBackend.getCodeCache().getTarget().arch;
-            EnumSet<AMD64.CPUFeature> features = AMD64CPUFeatureAccess.determineHostCPUFeatures();
-            architecture.getFeatures().addAll(features);
+            CPUFeatureAccess cpuFeatureAccess = ImageSingletons.lookup(CPUFeatureAccess.class);
+            if (cpuFeatureAccess != null) {
+                cpuFeatureAccess.verifyHostSupportsArchitecture(graalBackend.getCodeCache().getTarget().arch);
+                Architecture architecture = graalBackend.getCodeCache().getTarget().arch;
+                cpuFeatureAccess.enableFeatures(architecture);
+            }
         }
     }
 

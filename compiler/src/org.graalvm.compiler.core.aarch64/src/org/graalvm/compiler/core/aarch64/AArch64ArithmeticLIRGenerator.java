@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,19 +25,22 @@
 
 package org.graalvm.compiler.core.aarch64;
 
-import static jdk.vm.ci.aarch64.AArch64.sp;
 import static jdk.vm.ci.aarch64.AArch64Kind.DWORD;
 import static jdk.vm.ci.aarch64.AArch64Kind.QWORD;
+import static org.graalvm.compiler.core.target.Backend.ARITHMETIC_DREM;
+import static org.graalvm.compiler.core.target.Backend.ARITHMETIC_FREM;
 import static org.graalvm.compiler.lir.LIRValueUtil.asJavaConstant;
 import static org.graalvm.compiler.lir.LIRValueUtil.isJavaConstant;
 import static org.graalvm.compiler.lir.aarch64.AArch64BitManipulationOp.BitManipulationOpCode.BSR;
 import static org.graalvm.compiler.lir.aarch64.AArch64BitManipulationOp.BitManipulationOpCode.CLZ;
 import static org.graalvm.compiler.lir.aarch64.AArch64BitManipulationOp.BitManipulationOpCode.CTZ;
+import static org.graalvm.compiler.lir.aarch64.AArch64BitManipulationOp.BitManipulationOpCode.POPCNT;
 
 import org.graalvm.compiler.asm.aarch64.AArch64MacroAssembler;
 import org.graalvm.compiler.core.common.LIRKind;
 import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.compiler.core.common.calc.FloatConvert;
+import org.graalvm.compiler.core.common.spi.ForeignCallLinkage;
 import org.graalvm.compiler.debug.GraalError;
 import org.graalvm.compiler.lir.ConstantValue;
 import org.graalvm.compiler.lir.LIRFrameState;
@@ -46,6 +49,7 @@ import org.graalvm.compiler.lir.aarch64.AArch64AddressValue;
 import org.graalvm.compiler.lir.aarch64.AArch64ArithmeticLIRGeneratorTool;
 import org.graalvm.compiler.lir.aarch64.AArch64ArithmeticOp;
 import org.graalvm.compiler.lir.aarch64.AArch64BitManipulationOp;
+import org.graalvm.compiler.lir.aarch64.AArch64Move;
 import org.graalvm.compiler.lir.aarch64.AArch64Move.LoadOp;
 import org.graalvm.compiler.lir.aarch64.AArch64Move.StoreConstantOp;
 import org.graalvm.compiler.lir.aarch64.AArch64Move.StoreOp;
@@ -55,7 +59,6 @@ import org.graalvm.compiler.lir.aarch64.AArch64Unary;
 import org.graalvm.compiler.lir.gen.ArithmeticLIRGenerator;
 
 import jdk.vm.ci.aarch64.AArch64Kind;
-import jdk.vm.ci.code.RegisterValue;
 import jdk.vm.ci.meta.AllocatableValue;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.PlatformKind;
@@ -64,9 +67,24 @@ import jdk.vm.ci.meta.ValueKind;
 
 public class AArch64ArithmeticLIRGenerator extends ArithmeticLIRGenerator implements AArch64ArithmeticLIRGeneratorTool {
 
+    public AArch64ArithmeticLIRGenerator(AllocatableValue nullRegisterValue) {
+        this.nullRegisterValue = nullRegisterValue;
+    }
+
+    private final AllocatableValue nullRegisterValue;
+
     @Override
     public AArch64LIRGenerator getLIRGen() {
         return (AArch64LIRGenerator) super.getLIRGen();
+    }
+
+    public boolean mustReplaceNullWithNullRegister(JavaConstant nullConstant) {
+        /* Uncompressed null pointers only */
+        return nullRegisterValue != null && JavaConstant.NULL_POINTER.equals(nullConstant);
+    }
+
+    public AllocatableValue getNullRegisterValue() {
+        return nullRegisterValue;
     }
 
     @Override
@@ -134,6 +152,11 @@ public class AArch64ArithmeticLIRGenerator extends ArithmeticLIRGenerator implem
         return emitBinary(LIRKind.combine(a, b), AArch64ArithmeticOp.UMULH, true, a, b);
     }
 
+    public Value emitMNeg(Value a, Value b) {
+        assert isNumericInteger(a.getPlatformKind()) && isNumericInteger(b.getPlatformKind());
+        return emitBinary(LIRKind.combine(a, b), AArch64ArithmeticOp.MNEG, true, a, b);
+    }
+
     @Override
     public Value emitDiv(Value a, Value b, LIRFrameState state) {
         return emitBinary(LIRKind.combine(a, b), getOpCode(a, AArch64ArithmeticOp.DIV, AArch64ArithmeticOp.FDIV), false, asAllocatable(a), asAllocatable(b));
@@ -141,7 +164,21 @@ public class AArch64ArithmeticLIRGenerator extends ArithmeticLIRGenerator implem
 
     @Override
     public Value emitRem(Value a, Value b, LIRFrameState state) {
-        return emitBinary(LIRKind.combine(a, b), getOpCode(a, AArch64ArithmeticOp.REM, AArch64ArithmeticOp.FREM), false, asAllocatable(a), asAllocatable(b));
+        if (isNumericInteger(a.getPlatformKind())) {
+            return emitBinary(LIRKind.combine(a, b), AArch64ArithmeticOp.REM, false, asAllocatable(a), asAllocatable(b));
+        } else {
+            switch ((AArch64Kind) a.getPlatformKind()) {
+                case SINGLE:
+                    ForeignCallLinkage fremCall = getLIRGen().getForeignCalls().lookupForeignCall(ARITHMETIC_FREM);
+                    return getLIRGen().emitForeignCall(fremCall, state, a, b);
+                case DOUBLE:
+                    ForeignCallLinkage dremCall = getLIRGen().getForeignCalls().lookupForeignCall(ARITHMETIC_DREM);
+                    return getLIRGen().emitForeignCall(dremCall, state, a, b);
+                default:
+                    GraalError.shouldNotReachHere("emitRem on unexpected kind " + a.getPlatformKind());
+                    return null;
+            }
+        }
     }
 
     @Override
@@ -198,6 +235,41 @@ public class AArch64ArithmeticLIRGenerator extends ArithmeticLIRGenerator implem
         LIRKind resultLirKind = LIRKind.combine(inputVal).changeType(resultPlatformKind);
         Variable result = getLIRGen().newVariable(resultLirKind);
         getLIRGen().append(new AArch64FloatConvertOp(op, result, asAllocatable(inputVal)));
+        return result;
+    }
+
+    Value emitIntegerMAdd(Value a, Value b, Value c, boolean isI2L) {
+        return emitMultiplyAddSub(isI2L ? AArch64ArithmeticOp.SMADDL : AArch64ArithmeticOp.MADD, a, b, c);
+    }
+
+    Value emitIntegerMSub(Value a, Value b, Value c, boolean isI2L) {
+        return emitMultiplyAddSub(isI2L ? AArch64ArithmeticOp.SMSUBL : AArch64ArithmeticOp.MSUB, a, b, c);
+    }
+
+    private Value emitMultiplyAddSub(AArch64ArithmeticOp op, Value a, Value b, Value c) {
+        assert a.getPlatformKind() == b.getPlatformKind();
+        Variable result;
+        if (op == AArch64ArithmeticOp.SMADDL || op == AArch64ArithmeticOp.SMSUBL) {
+            // For signed multiply int and then add/sub long.
+            assert a.getPlatformKind() != c.getPlatformKind();
+            result = getLIRGen().newVariable(LIRKind.combine(c));
+        } else {
+            assert a.getPlatformKind() == c.getPlatformKind();
+            if (op == AArch64ArithmeticOp.FMADD) {
+                // For floating-point Math.fma intrinsic.
+                assert a.getPlatformKind() == AArch64Kind.SINGLE || a.getPlatformKind() == AArch64Kind.DOUBLE;
+            } else {
+                // For int/long multiply add or sub.
+                assert op == AArch64ArithmeticOp.MADD || op == AArch64ArithmeticOp.MSUB;
+                assert isNumericInteger(a.getPlatformKind());
+            }
+            result = getLIRGen().newVariable(LIRKind.combine(a, b, c));
+        }
+
+        AllocatableValue x = moveSp(asAllocatable(a));
+        AllocatableValue y = moveSp(asAllocatable(b));
+        AllocatableValue z = moveSp(asAllocatable(c));
+        getLIRGen().append(new AArch64ArithmeticOp.MultiplyAddSubOp(op, result, x, y, z));
         return result;
     }
 
@@ -305,7 +377,6 @@ public class AArch64ArithmeticLIRGenerator extends ArithmeticLIRGenerator implem
         AllocatableValue x = moveSp(a);
         AllocatableValue y = moveSp(b);
         switch (op) {
-            case FREM:
             case REM:
             case UREM:
                 getLIRGen().append(new AArch64ArithmeticOp.BinaryCompositeOp(op, result, x, y));
@@ -316,7 +387,7 @@ public class AArch64ArithmeticLIRGenerator extends ArithmeticLIRGenerator implem
         }
     }
 
-    private void emitBinaryConst(Variable result, AArch64ArithmeticOp op, AllocatableValue a, JavaConstant b) {
+    public void emitBinaryConst(Variable result, AArch64ArithmeticOp op, AllocatableValue a, JavaConstant b) {
         AllocatableValue x = moveSp(a);
         getLIRGen().append(new AArch64ArithmeticOp.BinaryConstOp(op, result, x, b));
     }
@@ -382,7 +453,8 @@ public class AArch64ArithmeticLIRGenerator extends ArithmeticLIRGenerator implem
 
     @Override
     public Value emitMathSqrt(Value input) {
-        assert input.getPlatformKind() == AArch64Kind.DOUBLE;
+        assert input.getPlatformKind() == AArch64Kind.DOUBLE ||
+                        input.getPlatformKind() == AArch64Kind.SINGLE;
         return emitUnary(AArch64ArithmeticOp.SQRT, input);
     }
 
@@ -393,27 +465,35 @@ public class AArch64ArithmeticLIRGenerator extends ArithmeticLIRGenerator implem
 
     @Override
     public Value emitBitCount(Value operand) {
-        throw GraalError.unimplemented("AArch64 ISA does not offer way to implement this more efficiently than a simple Java algorithm.");
+        assert ((AArch64Kind) operand.getPlatformKind()).isInteger();
+        Variable result = getLIRGen().newVariable(LIRKind.combine(operand).changeType(AArch64Kind.DWORD));
+        getLIRGen().append(new AArch64BitManipulationOp(getLIRGen(), POPCNT, result, asAllocatable(operand)));
+        return result;
     }
 
     @Override
     public Value emitBitScanReverse(Value value) {
         Variable result = getLIRGen().newVariable(LIRKind.combine(value).changeType(AArch64Kind.DWORD));
-        getLIRGen().append(new AArch64BitManipulationOp(BSR, result, asAllocatable(value)));
+        getLIRGen().append(new AArch64BitManipulationOp(getLIRGen(), BSR, result, asAllocatable(value)));
         return result;
+    }
+
+    @Override
+    public Value emitFusedMultiplyAdd(Value a, Value b, Value c) {
+        return emitMultiplyAddSub(AArch64ArithmeticOp.FMADD, a, b, c);
     }
 
     @Override
     public Value emitCountLeadingZeros(Value value) {
         Variable result = getLIRGen().newVariable(LIRKind.combine(value).changeType(AArch64Kind.DWORD));
-        getLIRGen().append(new AArch64BitManipulationOp(CLZ, result, asAllocatable(value)));
+        getLIRGen().append(new AArch64BitManipulationOp(getLIRGen(), CLZ, result, asAllocatable(value)));
         return result;
     }
 
     @Override
     public Value emitCountTrailingZeros(Value value) {
         Variable result = getLIRGen().newVariable(LIRKind.combine(value).changeType(AArch64Kind.DWORD));
-        getLIRGen().append(new AArch64BitManipulationOp(CTZ, result, asAllocatable(value)));
+        getLIRGen().append(new AArch64BitManipulationOp(getLIRGen(), CTZ, result, asAllocatable(value)));
         return result;
     }
 
@@ -424,16 +504,8 @@ public class AArch64ArithmeticLIRGenerator extends ArithmeticLIRGenerator implem
         return result;
     }
 
-    /**
-     * If val denotes the stackpointer, move it to another location. This is necessary since most
-     * ops cannot handle the stackpointer as input or output.
-     */
     private AllocatableValue moveSp(AllocatableValue val) {
-        if (val instanceof RegisterValue && ((RegisterValue) val).getRegister().equals(sp)) {
-            assert val.getPlatformKind() == AArch64Kind.QWORD : "Stackpointer must be long";
-            return getLIRGen().emitMove(val);
-        }
-        return val;
+        return getLIRGen().moveSp(val);
     }
 
     /**
@@ -448,6 +520,14 @@ public class AArch64ArithmeticLIRGenerator extends ArithmeticLIRGenerator implem
         AArch64AddressValue loadAddress = getLIRGen().asAddressValue(address);
         Variable result = getLIRGen().newVariable(getLIRGen().toRegisterKind(kind));
         getLIRGen().append(new LoadOp((AArch64Kind) kind.getPlatformKind(), result, loadAddress, state));
+        return result;
+    }
+
+    @Override
+    public Variable emitVolatileLoad(LIRKind kind, Value address, LIRFrameState state) {
+        AllocatableValue loadAddress = asAllocatable(address);
+        Variable result = getLIRGen().newVariable(getLIRGen().toRegisterKind(kind));
+        getLIRGen().append(new AArch64Move.VolatileLoadOp((AArch64Kind) kind.getPlatformKind(), result, loadAddress, state));
         return result;
     }
 
@@ -469,28 +549,11 @@ public class AArch64ArithmeticLIRGenerator extends ArithmeticLIRGenerator implem
     }
 
     @Override
-    public Value emitMathLog(Value input, boolean base10) {
-        throw GraalError.unimplemented();
-    }
-
-    @Override
-    public Value emitMathCos(Value input) {
-        throw GraalError.unimplemented();
-    }
-
-    @Override
-    public Value emitMathSin(Value input) {
-        throw GraalError.unimplemented();
-    }
-
-    @Override
-    public Value emitMathTan(Value input) {
-        throw GraalError.unimplemented();
-    }
-
-    @Override
-    public void emitCompareOp(AArch64Kind cmpKind, Variable left, Value right) {
-        throw GraalError.unimplemented();
+    public void emitVolatileStore(ValueKind<?> lirKind, Value addressVal, Value inputVal, LIRFrameState state) {
+        AArch64Kind kind = (AArch64Kind) lirKind.getPlatformKind();
+        AllocatableValue input = asAllocatable(inputVal);
+        AllocatableValue address = asAllocatable(addressVal);
+        getLIRGen().append(new AArch64Move.VolatileStoreOp(kind, address, input, state));
     }
 
     @Override

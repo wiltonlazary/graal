@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.polyglot;
 
@@ -33,13 +49,13 @@ import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.interop.TruffleObject;
 
-final class PolyglotFunction<T, R> implements Function<T, R> {
+final class PolyglotFunction<T, R> implements Function<T, R>, HostWrapper {
 
-    final TruffleObject guestObject;
+    final Object guestObject;
     final PolyglotLanguageContext languageContext;
     final CallTarget apply;
 
-    PolyglotFunction(PolyglotLanguageContext languageContext, TruffleObject function, Class<?> returnClass, Type returnType) {
+    PolyglotFunction(PolyglotLanguageContext languageContext, Object function, Class<?> returnClass, Type returnType) {
         this.guestObject = function;
         this.languageContext = languageContext;
         this.apply = Apply.lookup(languageContext, function.getClass(), returnClass, returnType);
@@ -51,36 +67,45 @@ final class PolyglotFunction<T, R> implements Function<T, R> {
     }
 
     @Override
+    public PolyglotLanguageContext getLanguageContext() {
+        return languageContext;
+    }
+
+    @Override
+    public Object getGuestObject() {
+        return guestObject;
+    }
+
+    @Override
+    public PolyglotContextImpl getContext() {
+        return languageContext.context;
+    }
+
+    @Override
+    public String toString() {
+        return HostWrapper.toString(this);
+    }
+
+    @Override
     public int hashCode() {
-        return guestObject.hashCode();
+        return HostWrapper.hashCode(languageContext, guestObject);
     }
 
     @Override
     public boolean equals(Object o) {
-        if (o == this) {
-            return true;
-        } else if (o instanceof PolyglotFunction) {
-            return languageContext.context == ((PolyglotFunction<?, ?>) o).languageContext.context && guestObject.equals(((PolyglotFunction<?, ?>) o).guestObject);
+        if (o instanceof PolyglotFunction) {
+            return HostWrapper.equals(languageContext, guestObject, ((PolyglotFunction<?, ?>) o).guestObject);
         } else {
             return false;
         }
     }
 
-    @Override
-    public String toString() {
-        try {
-            return languageContext.asValue(guestObject).toString();
-        } catch (UnsupportedOperationException e) {
-            return super.toString();
-        }
-    }
-
     @TruffleBoundary
-    public static <T> PolyglotFunction<?, ?> create(PolyglotLanguageContext languageContext, TruffleObject function, Class<?> returnClass, Type returnType) {
+    public static <T> PolyglotFunction<?, ?> create(PolyglotLanguageContext languageContext, Object function, Class<?> returnClass, Type returnType) {
         return new PolyglotFunction<>(languageContext, function, returnClass, returnType);
     }
 
-    static final class Apply extends HostEntryRootNode<TruffleObject> {
+    static final class Apply extends HostToGuestRootNode {
 
         final Class<?> receiverClass;
         final Class<?> returnClass;
@@ -106,12 +131,13 @@ final class PolyglotFunction<T, R> implements Function<T, R> {
         }
 
         @Override
-        protected Object executeImpl(PolyglotLanguageContext languageContext, TruffleObject function, Object[] args, int offset) {
-            if (apply == null) {
+        protected Object executeImpl(PolyglotLanguageContext languageContext, Object function, Object[] args) {
+            PolyglotExecuteNode localApply = this.apply;
+            if (localApply == null) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
-                apply = insert(new PolyglotExecuteNode());
+                apply = localApply = insert(PolyglotExecuteNodeGen.create());
             }
-            return apply.execute(languageContext, function, args[offset], returnClass, returnType);
+            return localApply.execute(languageContext, function, args[ARGUMENT_OFFSET], returnClass, returnType);
         }
 
         @Override

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,8 @@
  */
 package org.graalvm.compiler.truffle.runtime;
 
+import org.graalvm.compiler.truffle.common.TruffleCallNode;
+
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
@@ -31,13 +33,8 @@ import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerOptions;
 import com.oracle.truffle.api.impl.DefaultCompilerOptions;
 import com.oracle.truffle.api.nodes.DirectCallNode;
-import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.nodes.RootNode;
-import com.oracle.truffle.api.profiles.ValueProfile;
-import org.graalvm.compiler.truffle.common.TruffleCompilerOptions;
-
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TruffleExperimentalSplitting;
 
 /**
  * A call node with a constant {@link CallTarget} that can be optimized by Graal.
@@ -45,66 +42,74 @@ import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.Truffle
  * Note: {@code PartialEvaluator} looks up this class and a number of its methods by name.
  */
 @NodeInfo
-public final class OptimizedDirectCallNode extends DirectCallNode {
+public final class OptimizedDirectCallNode extends DirectCallNode implements TruffleCallNode {
 
     private int callCount;
     private boolean inliningForced;
-    @CompilationFinal private ValueProfile exceptionProfile;
-
+    @CompilationFinal private Class<? extends Throwable> exceptionProfile;
     @CompilationFinal private OptimizedCallTarget splitCallTarget;
+    private volatile boolean splitDecided;
 
-    private final GraalTruffleRuntime runtime;
-
-    public OptimizedDirectCallNode(GraalTruffleRuntime runtime, OptimizedCallTarget target) {
+    /*
+     * Should be instantiated with the runtime.
+     */
+    OptimizedDirectCallNode(OptimizedCallTarget target) {
         super(target);
         assert target.getSourceCallTarget() == null;
-        this.runtime = runtime;
     }
 
     @Override
-    public Object call(Object[] arguments) {
+    public Object call(Object... arguments) {
+        OptimizedCallTarget target = getCurrentCallTarget();
         if (CompilerDirectives.inInterpreter()) {
-            onInterpreterCall();
+            target = onInterpreterCall(target);
         }
         try {
-            return callProxy(this, getCurrentCallTarget(), arguments, true);
+            return target.callDirect(this, arguments);
         } catch (Throwable t) {
-            if (exceptionProfile == null) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                exceptionProfile = ValueProfile.createClassProfile();
-            }
-            Throwable profiledT = exceptionProfile.profile(t);
-            OptimizedCallTarget.runtime().getTvmci().onThrowable(this, null, profiledT, null);
+            Throwable profiledT = profileExceptionType(t);
+            GraalRuntimeAccessor.LANGUAGE.onThrowable(this, null, profiledT, null);
             throw OptimizedCallTarget.rethrow(profiledT);
         }
     }
 
-    // Note: {@code PartialEvaluator} looks up this method by name and signature.
-    public static Object callProxy(Node callNode, CallTarget callTarget, Object[] arguments, boolean direct) {
-        try {
-            if (direct) {
-                return ((OptimizedCallTarget) callTarget).callDirect(arguments);
+    @SuppressWarnings("unchecked")
+    private <T extends Throwable> T profileExceptionType(T value) {
+        Class<? extends Throwable> clazz = exceptionProfile;
+        if (clazz != Throwable.class) {
+            if (clazz != null && value.getClass() == clazz) {
+                if (CompilerDirectives.inInterpreter()) {
+                    return value;
+                } else {
+                    return (T) CompilerDirectives.castExact(value, clazz);
+                }
             } else {
-                return callTarget.call(arguments);
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                if (clazz == null) {
+                    exceptionProfile = value.getClass();
+                } else {
+                    exceptionProfile = Throwable.class;
+                }
             }
-        } finally {
-            // this assertion is needed to keep the values from being cleared as non-live locals
-            assert callNode != null & callTarget != null;
         }
+        return value;
     }
 
     @Override
     public boolean isInlinable() {
+        CompilerAsserts.neverPartOfCompilation();
         return true;
     }
 
     @Override
     public void forceInlining() {
+        CompilerAsserts.neverPartOfCompilation();
         inliningForced = true;
     }
 
     @Override
     public boolean isInliningForced() {
+        CompilerAsserts.neverPartOfCompilation();
         return inliningForced;
     }
 
@@ -118,6 +123,7 @@ public final class OptimizedDirectCallNode extends DirectCallNode {
         return (OptimizedCallTarget) super.getCallTarget();
     }
 
+    @Override
     public int getCallCount() {
         return callCount;
     }
@@ -141,12 +147,20 @@ public final class OptimizedDirectCallNode extends DirectCallNode {
         return splitCallTarget;
     }
 
-    private void onInterpreterCall() {
-        int calls = ++callCount;
-        if (calls == 1) {
-            getCurrentCallTarget().incrementKnownCallSites();
+    /**
+     * @return The current call target (ie. getCurrentCallTarget) In case a splitting decision was
+     *         made during this interpreter call, the argument target otherwise.
+     */
+    private OptimizedCallTarget onInterpreterCall(OptimizedCallTarget target) {
+        callCount++;
+        if (target.isNeedsSplit() && !splitDecided) {
+            // We intentionally avoid locking here because worst case is a double decision printed
+            // and preventing that is not worth the performance impact of locking
+            splitDecided = true;
+            TruffleSplittingStrategy.beforeCall(this, target);
+            return getCurrentCallTarget();
         }
-        TruffleSplittingStrategy.beforeCall(this, runtime.getTvmci());
+        return target;
     }
 
     /** Used by the splitting strategy to install new targets. */
@@ -164,31 +178,22 @@ public final class OptimizedDirectCallNode extends DirectCallNode {
             OptimizedCallTarget currentTarget = getCallTarget();
 
             OptimizedCallTarget splitTarget = getCallTarget().cloneUninitialized();
-            splitTarget.setCallSiteForSplit(this);
-
-            if (callCount >= 1) {
-                currentTarget.decrementKnownCallSites();
-                if (TruffleCompilerOptions.getValue(TruffleExperimentalSplitting)) {
-                    currentTarget.removeKnownCallSite(this);
-                }
-            }
-            splitTarget.incrementKnownCallSites();
-            if (TruffleCompilerOptions.getValue(TruffleExperimentalSplitting)) {
-                splitTarget.addKnownCallNode(this);
-            }
+            currentTarget.removeDirectCallNode(this);
+            splitTarget.addDirectCallNode(this);
+            assert splitTarget.getCallSiteForSplit() == this;
 
             if (getParent() != null) {
                 // dummy replace to report the split, irrelevant if this node is not adopted
                 replace(this, "Split call node");
             }
             splitCallTarget = splitTarget;
-            runtime.getListener().onCompilationSplit(this);
+            OptimizedCallTarget.runtime().getListener().onCompilationSplit(this);
         });
     }
 
     @Override
     public boolean cloneCallTarget() {
-        TruffleSplittingStrategy.forceSplitting(this, runtime.getTvmci());
+        TruffleSplittingStrategy.forceSplitting(this);
         return true;
     }
 }

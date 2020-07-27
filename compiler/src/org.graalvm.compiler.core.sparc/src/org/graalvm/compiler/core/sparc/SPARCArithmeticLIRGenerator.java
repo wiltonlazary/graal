@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -660,6 +660,16 @@ public class SPARCArithmeticLIRGenerator extends ArithmeticLIRGenerator {
         Variable result = getLIRGen().newVariable(getLIRGen().toRegisterKind(kind));
         getLIRGen().append(new LoadOp(kind.getPlatformKind(), result, loadAddress, state));
         return result;
+    }
+
+    @Override
+    public Variable emitVolatileLoad(LIRKind kind, Value address, LIRFrameState state) {
+        throw GraalError.shouldNotReachHere();
+    }
+
+    @Override
+    public void emitVolatileStore(ValueKind<?> kind, Value address, Value input, LIRFrameState state) {
+        throw GraalError.shouldNotReachHere();
     }
 
     @Override

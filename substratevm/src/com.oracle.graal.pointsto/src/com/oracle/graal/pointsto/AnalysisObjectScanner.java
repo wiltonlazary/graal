@@ -35,8 +35,8 @@ import jdk.vm.ci.meta.JavaConstant;
 
 public class AnalysisObjectScanner extends ObjectScanner {
 
-    public AnalysisObjectScanner(BigBang bigbang) {
-        super(bigbang);
+    public AnalysisObjectScanner(BigBang bigbang, ReusableSet scannedObjects) {
+        super(bigbang, scannedObjects);
     }
 
     @Override
@@ -58,7 +58,7 @@ public class AnalysisObjectScanner extends ObjectScanner {
     @Override
     public void forNonNullFieldValue(JavaConstant receiver, AnalysisField field, JavaConstant fieldValue) {
         AnalysisType fieldType = bb.getMetaAccess().lookupJavaType(bb.getSnippetReflectionProvider().asObject(Object.class, fieldValue).getClass());
-        assert fieldType.isInstantiated();
+        assert fieldType.isInstantiated() : fieldType;
 
         /*
          * *ALL* constants are scanned after each analysis iteration, thus the fieldType will
@@ -106,7 +106,6 @@ public class AnalysisObjectScanner extends ObjectScanner {
 
     @Override
     public void forNonNullArrayElement(JavaConstant array, AnalysisType arrayType, JavaConstant elementConstant, AnalysisType elementType, int elementIndex) {
-        assert elementType.isInstantiated();
         /*
          * *ALL* constants are scanned after each analysis iteration, thus the elementType will
          * eventually be added to the AllInstantiatedTypeFlow and the array elements flow will
@@ -130,12 +129,10 @@ public class AnalysisObjectScanner extends ObjectScanner {
     }
 
     @Override
-    protected void forScannedConstant(JavaConstant value, Object reason) {
+    protected void forScannedConstant(JavaConstant value, ScanReason reason) {
         Object valueObj = bb.getSnippetReflectionProvider().asObject(Object.class, value);
         AnalysisType type = bb.getMetaAccess().lookupJavaType(valueObj.getClass());
 
-        if (!type.isInstantiated()) {
-            type.registerAsInHeap();
-        }
+        type.registerAsInHeap();
     }
 }

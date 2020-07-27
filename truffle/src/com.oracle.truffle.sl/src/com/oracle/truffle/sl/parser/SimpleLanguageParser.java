@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -67,7 +67,7 @@ import java.util.ArrayList;
 
 @SuppressWarnings("all")
 public class SimpleLanguageParser extends Parser {
-	static { RuntimeMetaData.checkVersion("4.7", RuntimeMetaData.VERSION); }
+	static { RuntimeMetaData.checkVersion("4.7.2", RuntimeMetaData.VERSION); }
 
 	protected static final DFA[] _decisionToDFA;
 	protected static final PredictionContextCache _sharedContextCache =
@@ -83,24 +83,33 @@ public class SimpleLanguageParser extends Parser {
 		RULE_while_statement = 4, RULE_if_statement = 5, RULE_return_statement = 6, 
 		RULE_expression = 7, RULE_logic_term = 8, RULE_logic_factor = 9, RULE_arithmetic = 10, 
 		RULE_term = 11, RULE_factor = 12, RULE_member_expression = 13;
-	public static final String[] ruleNames = {
-		"simplelanguage", "function", "block", "statement", "while_statement", 
-		"if_statement", "return_statement", "expression", "logic_term", "logic_factor", 
-		"arithmetic", "term", "factor", "member_expression"
-	};
+	private static String[] makeRuleNames() {
+		return new String[] {
+			"simplelanguage", "function", "block", "statement", "while_statement", 
+			"if_statement", "return_statement", "expression", "logic_term", "logic_factor", 
+			"arithmetic", "term", "factor", "member_expression"
+		};
+	}
+	public static final String[] ruleNames = makeRuleNames();
 
-	private static final String[] _LITERAL_NAMES = {
-		null, "'function'", "'('", "','", "')'", "'{'", "'}'", "'break'", "';'", 
-		"'continue'", "'debugger'", "'while'", "'if'", "'else'", "'return'", "'||'", 
-		"'&&'", "'<'", "'<='", "'>'", "'>='", "'=='", "'!='", "'+'", "'-'", "'*'", 
-		"'/'", "'='", "'.'", "'['", "']'"
-	};
-	private static final String[] _SYMBOLIC_NAMES = {
-		null, null, null, null, null, null, null, null, null, null, null, null, 
-		null, null, null, null, null, null, null, null, null, null, null, null, 
-		null, null, null, null, null, null, null, "WS", "COMMENT", "LINE_COMMENT", 
-		"IDENTIFIER", "STRING_LITERAL", "NUMERIC_LITERAL"
-	};
+	private static String[] makeLiteralNames() {
+		return new String[] {
+			null, "'function'", "'('", "','", "')'", "'{'", "'}'", "'break'", "';'", 
+			"'continue'", "'debugger'", "'while'", "'if'", "'else'", "'return'", 
+			"'||'", "'&&'", "'<'", "'<='", "'>'", "'>='", "'=='", "'!='", "'+'", 
+			"'-'", "'*'", "'/'", "'='", "'.'", "'['", "']'"
+		};
+	}
+	private static final String[] _LITERAL_NAMES = makeLiteralNames();
+	private static String[] makeSymbolicNames() {
+		return new String[] {
+			null, null, null, null, null, null, null, null, null, null, null, null, 
+			null, null, null, null, null, null, null, null, null, null, null, null, 
+			null, null, null, null, null, null, null, "WS", "COMMENT", "LINE_COMMENT", 
+			"IDENTIFIER", "STRING_LITERAL", "NUMERIC_LITERAL"
+		};
+	}
+	private static final String[] _SYMBOLIC_NAMES = makeSymbolicNames();
 	public static final Vocabulary VOCABULARY = new VocabularyImpl(_LITERAL_NAMES, _SYMBOLIC_NAMES);
 
 	/**
@@ -157,15 +166,20 @@ public class SimpleLanguageParser extends Parser {
 	    }
 	    @Override
 	    public void syntaxError(Recognizer<?, ?> recognizer, Object offendingSymbol, int line, int charPositionInLine, String msg, RecognitionException e) {
-	        String location = "-- line " + line + " col " + (charPositionInLine + 1) + ": ";
-	        throw new SLParseError(source, line, charPositionInLine + 1, offendingSymbol == null ? 1 : ((Token) offendingSymbol).getText().length(), "Error(s) parsing script:\n" + location + msg);
+	        throwParseError(source, line, charPositionInLine, (Token) offendingSymbol, msg);
 	    }
 	}
 
 	public void SemErr(Token token, String message) {
-	    int col = token.getCharPositionInLine() + 1;
-	    String location = "-- line " + token.getLine() + " col " + col + ": ";
-	    throw new SLParseError(source, token.getLine(), col, token.getText().length(), "Error(s) parsing script:\n" + location + message);
+	    assert token != null;
+	    throwParseError(source, token.getLine(), token.getCharPositionInLine(), token, message);
+	}
+
+	private static void throwParseError(Source source, int line, int charPositionInLine, Token token, String message) {
+	    int col = charPositionInLine + 1;
+	    String location = "-- line " + line + " col " + col + ": ";
+	    int length = token == null ? 1 : Math.max(token.getStopIndex() - token.getStartIndex(), 0);
+	    throw new SLParseError(source, line, col, length, String.format("Error(s) parsing script:%n" + location + message));
 	}
 
 	public static Map<String, RootCallTarget> parseSL(SLLanguage language, Source source) {
@@ -186,6 +200,7 @@ public class SimpleLanguageParser extends Parser {
 		super(input);
 		_interp = new ParserATNSimulator(this,_ATN,_decisionToDFA,_sharedContextCache);
 	}
+
 	public static class SimplelanguageContext extends ParserRuleContext {
 		public List<FunctionContext> function() {
 			return getRuleContexts(FunctionContext.class);
@@ -1115,7 +1130,7 @@ public class SimpleLanguageParser extends Parser {
 				match(T__1);
 				 List<SLExpressionNode> parameters = new ArrayList<>();
 				                                                  if (receiver == null) {
-				                                                      receiver = factory.createRead(assignmentName); 
+				                                                      receiver = factory.createRead(assignmentName);
 				                                                  } 
 				setState(210);
 				_errHandler.sync(this);
@@ -1170,7 +1185,7 @@ public class SimpleLanguageParser extends Parser {
 				setState(218);
 				match(T__27);
 				 if (receiver == null) {
-				                                                       receiver = factory.createRead(assignmentName); 
+				                                                       receiver = factory.createRead(assignmentName);
 				                                                  } 
 				setState(220);
 				_localctx.IDENTIFIER = match(IDENTIFIER);
@@ -1183,7 +1198,7 @@ public class SimpleLanguageParser extends Parser {
 				setState(222);
 				match(T__28);
 				 if (receiver == null) {
-				                                                      receiver = factory.createRead(assignmentName); 
+				                                                      receiver = factory.createRead(assignmentName);
 				                                                  } 
 				setState(224);
 				_localctx.expression = expression();

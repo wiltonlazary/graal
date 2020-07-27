@@ -1,34 +1,51 @@
 /*
- * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.test.polyglot;
 
-import static com.oracle.truffle.api.test.polyglot.ValueAssert.assertValue;
+import static com.oracle.truffle.tck.tests.ValueAssert.assertValue;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThat;
@@ -36,6 +53,8 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeTrue;
 
+import java.awt.Color;
+import java.awt.image.BufferedImage;
 import java.lang.reflect.Method;
 import java.util.AbstractList;
 import java.util.AbstractMap;
@@ -43,7 +62,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.GregorianCalendar;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -53,27 +71,32 @@ import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.TypeLiteral;
 import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.proxy.ProxyObject;
 import org.hamcrest.CoreMatchers;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Test;
 
 import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.interop.ForeignAccess;
-import com.oracle.truffle.api.interop.KeyInfo;
-import com.oracle.truffle.api.interop.MessageResolution;
-import com.oracle.truffle.api.interop.Resolve;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.TruffleOptions;
+import com.oracle.truffle.api.interop.InteropLibrary;
+import com.oracle.truffle.api.interop.InvalidArrayIndexException;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
-import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.library.ExportLibrary;
+import com.oracle.truffle.api.library.ExportMessage;
 
 public class ValueHostInteropTest extends AbstractPolyglotTest {
+
+    public static final boolean Java9OrLater = System.getProperty("java.specification.version").compareTo("1.9") >= 0;
 
     public static class Data {
         public int x;
@@ -100,16 +123,44 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
     }
 
     @Test
+    public void testAccessInvisibleAPIVirtualCall() {
+        if (TruffleOptions.AOT) {
+            return;
+        }
+        Value imageClass = context.asValue(java.awt.image.BufferedImage.class);
+        Value image = imageClass.newInstance(450, 450, BufferedImage.TYPE_INT_RGB);
+        Value graphics = image.invokeMember("getGraphics");
+        graphics.invokeMember("setBackground", Color.white);
+    }
+
+    @Test
+    public void testAccessInvisibleAPIDirect() {
+        if (TruffleOptions.AOT) {
+            return;
+        }
+        try {
+            languageEnv.lookupHostSymbol("sun.awt.image.OffScreenImage");
+            if (Java9OrLater) {
+                fail("On >= Java9 sun.awt.image should not be visible.");
+            }
+        } catch (RuntimeException e) {
+            if (!Java9OrLater) {
+                fail("On < Java9 sun.awt.image should be visible.");
+            }
+        }
+    }
+
+    @Test
     public void testRecursiveListMarshalling() {
-        List<GregorianCalendar> testList = Arrays.asList(new GregorianCalendar());
+        List<Data> testList = Arrays.asList(new Data());
         Value testListValue = context.asValue(testList);
         assertTrue(testListValue.isHostObject());
 
-        Value calendarValue = testListValue.getArrayElement(0);
-        assertTrue(calendarValue.isHostObject());
+        Value data = testListValue.getArrayElement(0);
+        assertTrue(data.isHostObject());
 
-        assertValue(context, testListValue);
-        assertValue(context, calendarValue);
+        assertValue(testListValue);
+        assertValue(data);
     }
 
     @Test
@@ -149,6 +200,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
 
         data.x = 44;
         assertEquals(44, anotherThis.x());
+        assertNotSame(anotherThis, xyp);
         assertEquals(anotherThis, xyp);
         assertEquals(anotherThis.hashCode(), xyp.hashCode());
     }
@@ -176,7 +228,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         assertFalse(memberKeys.contains("one"));
         assertFalse(memberKeys.contains("null"));
         assertFalse(memberKeys.contains("three"));
-        assertValue(context, context.asValue(map));
+        assertValue(context.asValue(map));
     }
 
     @Test
@@ -390,6 +442,14 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         assertFalse(context.asValue(new Object()).isNull());
     }
 
+    @Test
+    public void testClassStaticMembers() {
+        Value stringClass = context.asValue(String.class);
+        Value stringStatic = stringClass.getMember("static");
+        assertEquals("concatenated", stringStatic.getMember("join").execute("cat", "con", "enated").asString());
+        assertEquals(String.class, stringStatic.getMember("class").asHostObject());
+    }
+
     @FunctionalInterface
     public interface FunctionalWithDefaults {
         Object call(Object... args);
@@ -401,6 +461,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
 
     @Test
     public void functionalInterfaceOverridingObjectMethods() throws Exception {
+        Assume.assumeFalse("Cannot get reflection data for a lambda", TruffleOptions.AOT);
         Value object = context.asValue((FunctionalWithObjectMethodOverrides) (args) -> args.length >= 1 ? args[0] : null);
         assertArrayEquals(new Object[]{"call"}, object.getMemberKeys().toArray());
         assertEquals(42, object.execute(42).asInt());
@@ -421,12 +482,23 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    public void executableAsFunction() throws Exception {
+        TruffleObject executable = new FunctionObject();
+        Function<Integer, Integer> f = context.asValue(executable).as(Function.class);
+        assertEquals(13, (int) f.apply(13));
+        assertTrue(f.equals(f));
+    }
+
+    @Test
     public void executableAsFunctionalInterface1() throws Exception {
         TruffleObject executable = new FunctionObject();
         FunctionalWithDefaults f = context.asValue(executable).as(FunctionalWithDefaults.class);
         assertEquals(50, f.call((Object) 13, (Object) 37));
         f.hashCode();
         f.equals(null);
+        assertTrue(f.equals(f));
+        assertEquals(f, context.asValue(executable).as(FunctionalWithDefaults.class));
         f.toString();
     }
 
@@ -437,6 +509,8 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         assertEquals(50, f.call(13, 37));
         f.hashCode();
         f.equals(null);
+        assertTrue(f.equals(f));
+        assertEquals(f, context.asValue(executable).as(FunctionalWithObjectMethodOverrides.class));
         f.toString();
     }
 
@@ -502,6 +576,7 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
     @Test
     public void testNewClass() {
         Value hashMapClass = context.asValue(HashMap.class);
+        assertTrue(hashMapClass.canInstantiate());
         Value hashMap = hashMapClass.newInstance();
         assertTrue(hashMap.isHostObject());
         assertTrue(hashMap.asHostObject() instanceof HashMap);
@@ -521,6 +596,50 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         assertTrue(object.isHostObject());
         assertTrue(object.hasArrayElements());
         assertEquals(4, object.getArraySize());
+    }
+
+    @Test
+    public void testMultiDimArray() {
+        long[][] matrix = {
+                        {1, 2},
+                        {3, 4},
+                        {5, 6},
+        };
+
+        Value object = context.asValue(matrix);
+        assertTrue(object.isHostObject());
+        assertTrue(object.hasArrayElements());
+        assertEquals(3, object.getArraySize());
+
+        Value row = object.getArrayElement(1);
+        assertTrue(row.hasArrayElements());
+        assertEquals(2, row.getArraySize());
+        assertEquals(3, row.getArrayElement(0).asInt());
+        assertEquals(4, row.getArrayElement(1).asInt());
+    }
+
+    @Test
+    public void testNewMultiDimArray() {
+        Value objectClass = context.asValue(long[][].class);
+
+        // Current behavior, but maybe this should work?
+        // Similar to Array.newInstance(long.class, 3, 4)
+        assertFails(() -> objectClass.newInstance(3, 4), IllegalArgumentException.class);
+
+        Value object = objectClass.newInstance(4);
+        assertTrue(object.isHostObject());
+        assertTrue(object.hasArrayElements());
+        assertEquals(4, object.getArraySize());
+
+        Value row = object.getArrayElement(0);
+        assertTrue(row.isNull());
+
+        object.setArrayElement(0, new long[]{3, 4});
+        row = object.getArrayElement(0);
+        assertTrue(row.hasArrayElements());
+        assertEquals(2, row.getArraySize());
+        assertEquals(3, row.getArrayElement(0).asInt());
+        assertEquals(4, row.getArrayElement(1).asInt());
     }
 
     @Test
@@ -755,7 +874,8 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
         List<Data> data();
     }
 
-    static class ListArray extends ProxyInteropObject {
+    @ExportLibrary(InteropLibrary.class)
+    static class ListArray implements TruffleObject {
 
         private final List<String> array;
 
@@ -763,119 +883,116 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
             this.array = array;
         }
 
-        @Override
-        public int keyInfo(Number key) {
-            if (key.intValue() < array.size() && key.intValue() >= 0) {
-                return KeyInfo.READABLE;
-            }
-            return super.keyInfo(key);
-        }
-
-        @Override
-        public Object read(Number key) throws UnsupportedMessageException, UnknownIdentifierException {
-            return array.get(key.intValue());
-        }
-
-        @Override
-        public boolean remove(Number key) throws UnsupportedMessageException, UnknownIdentifierException {
-            array.remove(key.intValue());
+        @ExportMessage
+        boolean hasArrayElements() {
             return true;
         }
 
-        @Override
-        public boolean hasSize() {
-            return true;
+        @ExportMessage
+        @TruffleBoundary
+        final Object readArrayElement(long index) {
+            return array.get((int) index);
         }
 
-        @Override
-        public int getSize() {
+        @ExportMessage
+        @TruffleBoundary
+        final void removeArrayElement(long index) {
+            array.remove((int) index);
+        }
+
+        @ExportMessage
+        @TruffleBoundary
+        final long getArraySize() {
             return array.size();
+        }
+
+        @ExportMessage(name = "isArrayElementReadable")
+        @ExportMessage(name = "isArrayElementRemovable")
+        @TruffleBoundary
+        final boolean isArrayElementExisting(long index) {
+            return index < array.size() && index >= 0;
         }
 
     }
 
+    @ExportLibrary(InteropLibrary.class)
+    @SuppressWarnings({"static-method", "unused"})
     static final class RemoveKeysObject implements TruffleObject {
-
         private final Map<String, ?> keys;
 
         RemoveKeysObject(Map<String, ?> keys) {
             this.keys = keys;
         }
 
-        @Override
-        public ForeignAccess getForeignAccess() {
-            return RemoveKeysObjectMessageResolutionForeign.ACCESS;
+        @ExportMessage
+        boolean hasMembers() {
+            return true;
         }
 
-        public static boolean isInstance(TruffleObject obj) {
-            return obj instanceof RemoveKeysObject;
-        }
+        @ExportMessage
+        @TruffleBoundary
+        Object getMembers(boolean includeInternal) throws UnsupportedMessageException {
+            List<String> list = new AbstractList<String>() {
+                final Set<String> keys = RemoveKeysObject.this.keys.keySet();
 
-        @MessageResolution(receiverType = RemoveKeysObject.class)
-        static final class RemoveKeysObjectMessageResolution {
-
-            @Resolve(message = "KEYS")
-            public abstract static class PropertiesKeysOnlyNode extends Node {
-
-                public Object access(RemoveKeysObject receiver) {
-                    List<String> list = new AbstractList<String>() {
-                        final Set<String> keys = receiver.keys.keySet();
-
-                        @Override
-                        public String get(int index) {
-                            Iterator<String> iterator = keys.iterator();
-                            for (int i = 0; i < index; i++) {
-                                iterator.next();
-                            }
-                            return iterator.next();
-                        }
-
-                        @Override
-                        public int size() {
-                            return keys.size();
-                        }
-
-                        @Override
-                        public String remove(int index) {
-                            Iterator<String> iterator = keys.iterator();
-                            for (int i = 0; i < index; i++) {
-                                iterator.next();
-                            }
-                            String removed = iterator.next();
-                            iterator.remove();
-                            return removed;
-                        }
-                    };
-                    return new ListArray(list);
-                }
-            }
-
-            @Resolve(message = "READ")
-            public abstract static class ReadKeyNode extends Node {
-
-                public Object access(RemoveKeysObject receiver, String name) {
-                    if (!receiver.keys.containsKey(name)) {
-                        CompilerDirectives.transferToInterpreter();
-                        throw UnknownIdentifierException.raise(name);
+                @Override
+                public String get(int index) {
+                    Iterator<String> iterator = keys.iterator();
+                    for (int i = 0; i < index; i++) {
+                        iterator.next();
                     }
-                    return receiver.keys.get(name);
+                    return iterator.next();
                 }
-            }
 
-            @Resolve(message = "REMOVE")
-            public abstract static class RemoveKeyNode extends Node {
+                @Override
+                public int size() {
+                    return keys.size();
+                }
 
-                public Object access(RemoveKeysObject receiver, String name) {
-                    if (!receiver.keys.containsKey(name)) {
-                        return false;
+                @Override
+                public String remove(int index) {
+                    Iterator<String> iterator = keys.iterator();
+                    for (int i = 0; i < index; i++) {
+                        iterator.next();
                     }
-                    receiver.keys.remove(name);
-                    return true;
+                    String removed = iterator.next();
+                    iterator.remove();
+                    return removed;
                 }
-            }
+            };
+            return new ListArray(list);
         }
+
+        @ExportMessage(name = "isMemberReadable")
+        @ExportMessage(name = "isMemberRemovable")
+        @TruffleBoundary
+        boolean isMemberExisting(String member) {
+            return keys.containsKey(member);
+        }
+
+        @ExportMessage
+        @TruffleBoundary
+        Object readMember(String member) throws UnsupportedMessageException, UnknownIdentifierException {
+            if (!keys.containsKey(member)) {
+                CompilerDirectives.transferToInterpreter();
+                throw UnknownIdentifierException.create(member);
+            }
+            return keys.get(member);
+        }
+
+        @ExportMessage
+        @TruffleBoundary
+        void removeMember(String member) throws UnsupportedMessageException, UnknownIdentifierException {
+            if (!keys.containsKey(member)) {
+                throw UnknownIdentifierException.create(member);
+            }
+            keys.remove(member);
+        }
+
     }
 
+    @ExportLibrary(InteropLibrary.class)
+    @SuppressWarnings({"static-method", "unused"})
     static final class ArrayTruffleObject implements TruffleObject {
 
         private int size;
@@ -884,85 +1001,55 @@ public class ValueHostInteropTest extends AbstractPolyglotTest {
             this.size = size;
         }
 
-        @Override
-        public ForeignAccess getForeignAccess() {
-            return ArrayTruffleObjectMessageResolutionForeign.ACCESS;
+        @ExportMessage
+        boolean hasArrayElements() {
+            return true;
         }
 
-        public static boolean isInstance(TruffleObject obj) {
-            return obj instanceof ArrayTruffleObject;
+        @ExportMessage
+        Object readArrayElement(long index) throws InvalidArrayIndexException {
+            if (!isArrayElementReadable(index)) {
+                throw InvalidArrayIndexException.create(index);
+            }
+            return (int) (size - index);
         }
 
-        @MessageResolution(receiverType = ArrayTruffleObject.class)
-        static final class ArrayTruffleObjectMessageResolution {
-
-            @Resolve(message = "HAS_SIZE")
-            public abstract static class ArrayHasSizeNode extends Node {
-
-                public Object access(ArrayTruffleObject receiver) {
-                    assert receiver != null;
-                    return true;
-                }
+        @ExportMessage
+        void removeArrayElement(long index) throws InvalidArrayIndexException {
+            if (!isArrayElementReadable(index)) {
+                throw InvalidArrayIndexException.create(index);
             }
-
-            @Resolve(message = "GET_SIZE")
-            public abstract static class ArrayGetSizeNode extends Node {
-
-                public Object access(ArrayTruffleObject receiver) {
-                    return receiver.size;
-                }
-            }
-
-            @Resolve(message = "READ")
-            public abstract static class ArrayReadSizeNode extends Node {
-
-                public Object access(ArrayTruffleObject receiver, int index) {
-                    if (index < 0 || index >= receiver.size) {
-                        throw new ArrayIndexOutOfBoundsException(index);
-                    }
-                    return receiver.size - index;
-                }
-            }
-
-            @Resolve(message = "REMOVE")
-            public abstract static class ArrayRemoveNode extends Node {
-
-                public Object access(ArrayTruffleObject receiver, int index) {
-                    if (index < 0 || index >= receiver.size) {
-                        throw new ArrayIndexOutOfBoundsException(index);
-                    }
-                    receiver.size--;
-                    return true;
-                }
-            }
+            size--;
         }
+
+        @ExportMessage
+        long getArraySize() {
+            return size;
+        }
+
+        @ExportMessage(name = "isArrayElementReadable")
+        @ExportMessage(name = "isArrayElementRemovable")
+        boolean isArrayElementReadable(long index) {
+            return index >= 0 && index < size;
+        }
+
     }
 
-    @MessageResolution(receiverType = FunctionObject.class)
+    @ExportLibrary(InteropLibrary.class)
+    @SuppressWarnings({"static-method", "unused"})
     static final class FunctionObject implements TruffleObject {
-        @Resolve(message = "IS_EXECUTABLE")
-        abstract static class IsExecutable extends Node {
-            @SuppressWarnings("unused")
-            protected Object access(FunctionObject obj) {
-                return true;
-            }
+
+        @ExportMessage
+        boolean isExecutable() {
+            return true;
         }
 
-        @Resolve(message = "EXECUTE")
-        @SuppressWarnings("unused")
-        abstract static class Execute extends Node {
-            protected Object access(FunctionObject obj, Object[] args) {
-                return Arrays.stream(args).mapToInt(o -> (int) o).sum();
-            }
+        @ExportMessage
+        @TruffleBoundary
+        Object execute(Object[] arguments) {
+            return Arrays.stream(arguments).mapToInt(o -> (int) o).sum();
         }
 
-        static boolean isInstance(TruffleObject obj) {
-            return obj instanceof FunctionObject;
-        }
-
-        @Override
-        public ForeignAccess getForeignAccess() {
-            return FunctionObjectForeign.ACCESS;
-        }
     }
+
 }

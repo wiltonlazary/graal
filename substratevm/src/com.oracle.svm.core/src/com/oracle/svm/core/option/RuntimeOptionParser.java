@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.core.option;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Optional;
@@ -40,9 +41,11 @@ import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.option.SubstrateOptionsParser.BooleanOptionFormat;
 import com.oracle.svm.core.option.SubstrateOptionsParser.OptionParseResult;
+import com.oracle.svm.core.properties.RuntimePropertyParser;
 
 /**
  * Option parser to be used by an application that runs on Substrate VM. The list of options that
@@ -56,17 +59,34 @@ public final class RuntimeOptionParser {
     /**
      * The suggested prefix for all VM options available in an application based on Substrate VM.
      */
-    public static final String DEFAULT_OPTION_PREFIX = "-XX:";
+    private static final String DEFAULT_OPTION_PREFIX = "-XX:";
 
     /**
      * The prefix for Graal style options available in an application based on Substrate VM.
      */
-    public static final String GRAAL_OPTION_PREFIX = "-Dgraal.";
+    private static final String GRAAL_OPTION_PREFIX = "-Dgraal.";
 
     /**
-     * All reachable options.
+     * Parse and consume all standard options and system properties supported by Substrate VM. The
+     * returned array contains all arguments that were not consumed, i.e., were not recognized as
+     * options.
      */
+    public static String[] parseAndConsumeAllOptions(String[] initialArgs) {
+        String[] args = initialArgs;
+        if (SubstrateOptions.ParseRuntimeOptions.getValue()) {
+            args = RuntimeOptionParser.singleton().parse(args, DEFAULT_OPTION_PREFIX, BooleanOptionFormat.PLUS_MINUS, true);
+            args = RuntimeOptionParser.singleton().parse(args, GRAAL_OPTION_PREFIX, BooleanOptionFormat.NAME_VALUE, true);
+            args = XOptions.singleton().parse(args, true);
+            args = RuntimePropertyParser.parse(args);
+
+            RuntimeOptionParser.singleton().notifyOptionsParsed();
+        }
+        return args;
+    }
+
+    /** All reachable options. */
     private final SortedMap<String, OptionDescriptor> sortedOptions;
+    private ArrayList<OptionsParsedListener> optionsParsedListeners;
 
     public Optional<OptionDescriptor> getDescriptor(String optionName) {
         return Optional.ofNullable(sortedOptions.get(optionName));
@@ -90,6 +110,14 @@ public final class RuntimeOptionParser {
             }
         }
         return result;
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void registerOptionsParsedListener(OptionsParsedListener listener) {
+        if (optionsParsedListeners == null) {
+            optionsParsedListeners = new ArrayList<>();
+        }
+        optionsParsedListeners.add(listener);
     }
 
     /**
@@ -166,8 +194,8 @@ public final class RuntimeOptionParser {
      */
     private void parseOptionAtRuntime(String arg, String optionPrefix, BooleanOptionFormat booleanOptionFormat, EconomicMap<OptionKey<?>, Object> values, boolean systemExitOnError) {
         OptionParseResult parseResult = SubstrateOptionsParser.parseOption(sortedOptions, arg.substring(optionPrefix.length()), values, optionPrefix, booleanOptionFormat);
-        if (parseResult.printFlags()) {
-            SubstrateOptionsParser.printFlags(parseResult::matchesFlagsRuntime, sortedOptions, optionPrefix, Log.logStream());
+        if (parseResult.printFlags() || parseResult.printFlagsWithExtraHelp()) {
+            SubstrateOptionsParser.printFlags(parseResult::matchesFlagsRuntime, sortedOptions, optionPrefix, Log.logStream(), parseResult.printFlagsWithExtraHelp());
             System.exit(0);
         }
         if (!parseResult.isValid()) {
@@ -195,5 +223,17 @@ public final class RuntimeOptionParser {
 
     public Collection<OptionDescriptor> getDescriptors() {
         return sortedOptions.values();
+    }
+
+    private void notifyOptionsParsed() {
+        if (optionsParsedListeners != null) {
+            for (OptionsParsedListener listener : optionsParsedListeners) {
+                listener.onOptionsParsed();
+            }
+        }
+    }
+
+    public interface OptionsParsedListener {
+        void onOptionsParsed();
     }
 }

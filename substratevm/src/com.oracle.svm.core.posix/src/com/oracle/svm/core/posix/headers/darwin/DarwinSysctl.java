@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,18 +24,18 @@
  */
 package com.oracle.svm.core.posix.headers.darwin;
 
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.CContext;
 import org.graalvm.nativeimage.c.constant.CConstant;
 
 import com.oracle.svm.core.posix.headers.PosixDirectives;
 
-/** Declarations of method from <sys/sysctl.h>. */
-@Platforms(Platform.DARWIN.class)
+// Checkstyle: stop
+
+/**
+ * Definitions manually translated from the C header file sys/sysctl.h.
+ */
 @CContext(PosixDirectives.class)
 public class DarwinSysctl {
-    // { Allow names with underscores: Checkstyle: stop
 
     @CConstant
     public static native int CTL_KERN();
@@ -51,6 +51,4 @@ public class DarwinSysctl {
 
     @CConstant
     public static native int HW_MEMSIZE();
-
-    // } Allow names with underscores: Checkstyle: resume
 }

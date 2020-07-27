@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,7 +38,6 @@ import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.calc.FloatingNode;
 import org.graalvm.compiler.nodes.spi.Lowerable;
-import org.graalvm.compiler.nodes.spi.LoweringTool;
 import org.graalvm.compiler.nodes.spi.Virtualizable;
 import org.graalvm.compiler.nodes.spi.VirtualizerTool;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
@@ -66,11 +65,6 @@ public final class GetClassNode extends FloatingNode implements Lowerable, Canon
         assert ((ObjectStamp) object.stamp(NodeView.DEFAULT)).nonNull();
     }
 
-    @Override
-    public void lower(LoweringTool tool) {
-        tool.getLowerer().lower(this, tool);
-    }
-
     public static ValueNode tryFold(MetaAccessProvider metaAccess, ConstantReflectionProvider constantReflection, NodeView view, ValueNode object) {
         if (metaAccess != null && object != null && object.stamp(view) instanceof ObjectStamp) {
             ObjectStamp objectStamp = (ObjectStamp) object.stamp(view);
@@ -93,8 +87,8 @@ public final class GetClassNode extends FloatingNode implements Lowerable, Canon
         ValueNode alias = tool.getAlias(getObject());
         if (alias instanceof VirtualObjectNode) {
             VirtualObjectNode virtual = (VirtualObjectNode) alias;
-            Constant javaClass = tool.getConstantReflectionProvider().asJavaClass(virtual.type());
-            tool.replaceWithValue(ConstantNode.forConstant(stamp(NodeView.DEFAULT), javaClass, tool.getMetaAccessProvider(), graph()));
+            Constant javaClass = tool.getConstantReflection().asJavaClass(virtual.type());
+            tool.replaceWithValue(ConstantNode.forConstant(stamp(NodeView.DEFAULT), javaClass, tool.getMetaAccess(), graph()));
         }
     }
 }

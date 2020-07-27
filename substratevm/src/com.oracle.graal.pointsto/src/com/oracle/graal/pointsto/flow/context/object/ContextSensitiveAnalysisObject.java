@@ -25,6 +25,7 @@
 package com.oracle.graal.pointsto.flow.context.object;
 
 import java.lang.reflect.Modifier;
+import java.util.Collections;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -35,6 +36,7 @@ import com.oracle.graal.pointsto.flow.ArrayElementsTypeFlow;
 import com.oracle.graal.pointsto.flow.FieldFilterTypeFlow;
 import com.oracle.graal.pointsto.flow.FieldTypeFlow;
 import com.oracle.graal.pointsto.meta.AnalysisField;
+import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.graal.pointsto.typestore.FieldTypeStore;
@@ -46,7 +48,7 @@ public class ContextSensitiveAnalysisObject extends AnalysisObject {
 
     public ContextSensitiveAnalysisObject(AnalysisUniverse universe, AnalysisType type, AnalysisObjectKind kind) {
         super(universe, type, kind);
-        assert PointstoOptions.AllocationSiteSensitiveHeap.getValue(universe.getHostVM().options());
+        assert PointstoOptions.AllocationSiteSensitiveHeap.getValue(universe.hostVM().options());
     }
 
     /** The object has been in contact with an context insensitive object in an union operation. */
@@ -92,7 +94,7 @@ public class ContextSensitiveAnalysisObject extends AnalysisObject {
         }
     }
 
-    private void mergeInstanceFieldFlow(BigBang bb, FieldTypeStore fieldTypeStore) {
+    protected void mergeInstanceFieldFlow(BigBang bb, FieldTypeStore fieldTypeStore) {
         mergeInstanceFieldFlow(bb, fieldTypeStore, type.getContextInsensitiveAnalysisObject());
     }
 
@@ -100,7 +102,7 @@ public class ContextSensitiveAnalysisObject extends AnalysisObject {
      * Merge the read and write flows of the fieldTypeStore with those of the context insensitive
      * object.
      */
-    private static void mergeInstanceFieldFlow(BigBang bb, FieldTypeStore fieldTypeStore, AnalysisObject object) {
+    protected static void mergeInstanceFieldFlow(BigBang bb, FieldTypeStore fieldTypeStore, AnalysisObject object) {
         AnalysisField field = fieldTypeStore.field();
 
         FieldTypeFlow readFieldFlow = fieldTypeStore.readFlow();
@@ -123,37 +125,44 @@ public class ContextSensitiveAnalysisObject extends AnalysisObject {
 
     /** Returns the filter field flow corresponding to an unsafe accessed field. */
     @Override
-    public FieldFilterTypeFlow getInstanceFieldFilterFlow(BigBang bb, AnalysisField field) {
+    public FieldFilterTypeFlow getInstanceFieldFilterFlow(BigBang bb, AnalysisMethod context, AnalysisField field) {
         assert !Modifier.isStatic(field.getModifiers()) && field.isUnsafeAccessed() && PointstoOptions.AllocationSiteSensitiveHeap.getValue(bb.getOptions());
 
-        FieldTypeStore fieldTypeStore = getInstanceFieldTypeStore(bb, field);
+        FieldTypeStore fieldTypeStore = getInstanceFieldTypeStore(bb, context, field);
 
-        if (merged) {
-            /*
-             * If this object has already been merged all the other fields have been merged as well.
-             * Merge the type flows for the newly accessed field too.
-             */
-            mergeInstanceFieldFlow(bb, fieldTypeStore);
+        /*
+         * If this object has already been merged all the other fields have been merged as well.
+         * Merge the type flows for the newly accessed field too.
+         */
+        for (AnalysisObject mergedWith : getAllObjectsMergedWith()) {
+            mergeInstanceFieldFlow(bb, fieldTypeStore, mergedWith);
         }
 
-        return fieldTypeStore.filterFlow(bb);
+        return fieldTypeStore.writeFlow().filterFlow(bb);
     }
 
     @Override
-    public FieldTypeFlow getInstanceFieldFlow(BigBang bb, AnalysisField field, boolean isStore) {
+    public FieldTypeFlow getInstanceFieldFlow(BigBang bb, AnalysisMethod context, AnalysisField field, boolean isStore) {
         assert !Modifier.isStatic(field.getModifiers()) && PointstoOptions.AllocationSiteSensitiveHeap.getValue(bb.getOptions());
 
-        FieldTypeStore fieldTypeStore = getInstanceFieldTypeStore(bb, field);
+        FieldTypeStore fieldTypeStore = getInstanceFieldTypeStore(bb, context, field);
 
-        if (merged) {
-            /*
-             * If this object has already been merged all the other fields have been merged as well.
-             * Merge the type flows for the newly accessed field too.
-             */
-            mergeInstanceFieldFlow(bb, fieldTypeStore);
+        /*
+         * If this object has already been merged all the other fields have been merged as well.
+         * Merge the type flows for the newly accessed field too.
+         */
+        for (AnalysisObject mergedWith : getAllObjectsMergedWith()) {
+            mergeInstanceFieldFlow(bb, fieldTypeStore, mergedWith);
         }
 
         return isStore ? fieldTypeStore.writeFlow() : fieldTypeStore.readFlow();
+    }
+
+    /**
+     * This returns all the objects this object was ever merged with.
+     */
+    protected List<AnalysisObject> getAllObjectsMergedWith() {
+        return merged ? Collections.singletonList(type().getContextInsensitiveAnalysisObject()) : Collections.emptyList();
     }
 
     /**

@@ -26,6 +26,7 @@ package com.oracle.svm.core.stack;
 
 import org.graalvm.nativeimage.IsolateThread;
 
+import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.core.threadlocal.FastThreadLocalWord;
 
@@ -47,10 +48,12 @@ public class JavaFrameAnchors {
         return result;
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static JavaFrameAnchor getFrameAnchor() {
         return lastAnchor.get();
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static JavaFrameAnchor getFrameAnchor(IsolateThread vmThread) {
         return lastAnchor.get(vmThread);
     }

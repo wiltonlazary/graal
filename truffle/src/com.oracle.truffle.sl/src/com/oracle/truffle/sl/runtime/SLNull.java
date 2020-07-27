@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,8 +40,13 @@
  */
 package com.oracle.truffle.sl.runtime;
 
-import com.oracle.truffle.api.interop.ForeignAccess;
+import com.oracle.truffle.api.TruffleLanguage;
+import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.TruffleObject;
+import com.oracle.truffle.api.library.ExportLibrary;
+import com.oracle.truffle.api.library.ExportMessage;
+import com.oracle.truffle.api.utilities.TriState;
+import com.oracle.truffle.sl.SLLanguage;
 
 /**
  * The SL type for a {@code null} (i.e., undefined) value. In Truffle, it is generally discouraged
@@ -51,12 +56,15 @@ import com.oracle.truffle.api.interop.TruffleObject;
  * language {@code null} as a singleton, as in {@link #SINGLETON this class}, is the recommended
  * practice.
  */
+@ExportLibrary(InteropLibrary.class)
+@SuppressWarnings("static-method")
 public final class SLNull implements TruffleObject {
 
     /**
      * The canonical value to represent {@code null} in SL.
      */
     public static final SLNull SINGLETON = new SLNull();
+    private static final int IDENTITY_HASH = System.identityHashCode(SINGLETON);
 
     /**
      * Disallow instantiation from outside to ensure that the {@link #SINGLETON} is the only
@@ -71,16 +79,55 @@ public final class SLNull implements TruffleObject {
      */
     @Override
     public String toString() {
-        return "null";
+        return "NULL";
+    }
+
+    @ExportMessage
+    boolean hasLanguage() {
+        return true;
+    }
+
+    @ExportMessage
+    Class<? extends TruffleLanguage<?>> getLanguage() {
+        return SLLanguage.class;
     }
 
     /**
-     * In case you want some of your objects to co-operate with other languages, you need to make
-     * them implement {@link TruffleObject} and provide additional {@link SLNullMessageResolution
-     * foreign access implementation}.
+     * {@link SLNull} values are interpreted as null values by other languages.
      */
-    @Override
-    public ForeignAccess getForeignAccess() {
-        return SLNullMessageResolutionForeign.ACCESS;
+    @ExportMessage
+    boolean isNull() {
+        return true;
+    }
+
+    @ExportMessage
+    boolean hasMetaObject() {
+        return true;
+    }
+
+    @ExportMessage
+    Object getMetaObject() {
+        return SLType.NULL;
+    }
+
+    @ExportMessage
+    static TriState isIdenticalOrUndefined(@SuppressWarnings("unused") SLNull receiver, Object other) {
+        /*
+         * SLNull values are identical to other SLNull values.
+         */
+        return TriState.valueOf(SLNull.SINGLETON == other);
+    }
+
+    @ExportMessage
+    static int identityHashCode(@SuppressWarnings("unused") SLNull receiver) {
+        /*
+         * We do not use 0, as we want consistency with System.identityHashCode(receiver).
+         */
+        return IDENTITY_HASH;
+    }
+
+    @ExportMessage
+    Object toDisplayString(@SuppressWarnings("unused") boolean allowSideEffects) {
+        return "NULL";
     }
 }

@@ -24,11 +24,13 @@
  */
 package com.oracle.svm.driver;
 
+import java.util.List;
 import java.util.Queue;
 
 class ServerOptionHandler extends NativeImage.OptionHandler<NativeImageServer> {
 
     private static final String helpTextServer = NativeImage.getResource("/HelpServer.txt");
+    private static final String enableServerOption = "--experimental-build-server";
 
     ServerOptionHandler(NativeImageServer nativeImage) {
         super(nativeImage);
@@ -38,33 +40,36 @@ class ServerOptionHandler extends NativeImage.OptionHandler<NativeImageServer> {
     public boolean consume(Queue<String> args) {
         String headArg = args.peek();
         switch (headArg) {
-            case "--help-extra":
+            case "--help-experimental-build-server":
                 args.poll();
-                nativeImage.showMessage(DefaultOptionHandler.helpExtraText);
                 nativeImage.showMessage(helpTextServer);
+                nativeImage.showNewline();
                 System.exit(0);
                 return true;
-
-            case "--no-server":
+            case DefaultOptionHandler.noServerOption:
                 args.poll();
                 nativeImage.setUseServer(false);
                 return true;
-            case "--verbose-server":
+            case enableServerOption:
+                args.poll();
+                if (!nativeImage.isDryRun()) {
+                    nativeImage.setUseServer(true);
+                }
+                return true;
+            case DefaultOptionHandler.verboseServerOption:
                 args.poll();
                 nativeImage.setVerboseServer(true);
                 return true;
         }
 
-        String oServer = "--server";
-        if (headArg.startsWith(oServer)) {
-            String optionTail = args.poll().substring(oServer.length());
-            String oAll = "-all";
+        if (headArg.startsWith(DefaultOptionHandler.serverOptionPrefix)) {
+            String optionTail = args.poll().substring(DefaultOptionHandler.serverOptionPrefix.length());
             boolean machineWide = false;
-            String oList = "-list";
-            String oCleanup = "-cleanup";
-            String oShutdown = "-shutdown";
-            String oWipe = "-wipe";
-            String oSession = "-session=";
+            String oList = "list";
+            String oCleanup = "cleanup";
+            String oShutdown = "shutdown";
+            String oWipe = "wipe";
+            String oSession = "session=";
             boolean serverCleanup = false;
             boolean serverShutdown = false;
             if (optionTail.startsWith(oList)) {
@@ -87,6 +92,7 @@ class ServerOptionHandler extends NativeImage.OptionHandler<NativeImageServer> {
             } else if (optionTail.startsWith(oShutdown)) {
                 optionTail = optionTail.substring(oShutdown.length());
                 serverShutdown = true;
+                String oAll = "-all";
                 if (optionTail.startsWith(oAll)) {
                     optionTail = optionTail.substring(oAll.length());
                     machineWide = true;
@@ -105,5 +111,15 @@ class ServerOptionHandler extends NativeImage.OptionHandler<NativeImageServer> {
             NativeImage.showError("Invalid server option: " + headArg);
         }
         return false;
+    }
+
+    @Override
+    void addFallbackBuildArgs(List<String> buildArgs) {
+        if (!nativeImage.useServer()) {
+            buildArgs.add(DefaultOptionHandler.noServerOption);
+        }
+        if (nativeImage.verboseServer()) {
+            buildArgs.add(DefaultOptionHandler.verboseServerOption);
+        }
     }
 }

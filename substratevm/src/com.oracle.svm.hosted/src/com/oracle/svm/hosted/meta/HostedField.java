@@ -25,8 +25,10 @@
 package com.oracle.svm.hosted.meta;
 
 import java.lang.annotation.Annotation;
+import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 
+import com.oracle.graal.pointsto.infrastructure.OriginalFieldProvider;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.svm.core.meta.ReadableJavaField;
 import com.oracle.svm.core.meta.SharedField;
@@ -39,7 +41,7 @@ import jdk.vm.ci.meta.JavaTypeProfile;
 /**
  * Store the compile-time information for a field in the Substrate VM, such as the field offset.
  */
-public class HostedField implements ReadableJavaField, SharedField, Comparable<HostedField> {
+public class HostedField implements ReadableJavaField, OriginalFieldProvider, SharedField, Comparable<HostedField> {
 
     private final HostedUniverse universe;
     private final HostedMetaAccess metaAccess;
@@ -52,7 +54,7 @@ public class HostedField implements ReadableJavaField, SharedField, Comparable<H
 
     private final JavaTypeProfile typeProfile;
 
-    private static final int LOC_CONSTANT_STATIC_FIELD = -10;
+    private static final int LOC_UNMATERIALIZED_STATIC_CONSTANT = -10;
 
     public HostedField(HostedUniverse universe, HostedMetaAccess metaAccess, AnalysisField wrapped, HostedType holder, HostedType type, JavaTypeProfile typeProfile) {
         this.universe = universe;
@@ -74,14 +76,14 @@ public class HostedField implements ReadableJavaField, SharedField, Comparable<H
         this.location = location;
     }
 
-    protected void setConstantValue() {
-        assert this.location == LOC_UNINITIALIZED;
-        this.location = LOC_CONSTANT_STATIC_FIELD;
+    protected void setUnmaterializedStaticConstant() {
+        assert this.location == LOC_UNINITIALIZED && isStatic();
+        this.location = LOC_UNMATERIALIZED_STATIC_CONSTANT;
     }
 
     public JavaConstant getConstantValue() {
-        if (location == LOC_CONSTANT_STATIC_FIELD) {
-            return universe.getConstantReflectionProvider().readFieldValue(wrapped, null);
+        if (isStatic() && allowConstantFolding()) {
+            return readValue(null);
         } else {
             return null;
         }
@@ -144,31 +146,21 @@ public class HostedField implements ReadableJavaField, SharedField, Comparable<H
 
     @Override
     public JavaConstant readValue(JavaConstant receiver) {
-        JavaConstant result;
-        if (location == LOC_CONSTANT_STATIC_FIELD) {
-            return getConstantValue();
+        JavaConstant wrappedReceiver;
+        if (receiver != null && SubstrateObjectConstant.asObject(receiver) instanceof Class) {
+            /* Manual object replacement from java.lang.Class to DynamicHub. */
+            wrappedReceiver = SubstrateObjectConstant.forObject(metaAccess.lookupJavaType((Class<?>) SubstrateObjectConstant.asObject(receiver)).getHub());
         } else {
-            JavaConstant wrappedReceiver;
-            if (receiver != null && SubstrateObjectConstant.asObject(receiver) instanceof Class) {
-                /* Manual object replacement from java.lang.Class to DynamicHub. */
-                wrappedReceiver = SubstrateObjectConstant.forObject(metaAccess.lookupJavaType((Class<?>) SubstrateObjectConstant.asObject(receiver)).getHub());
-            } else {
-                wrappedReceiver = receiver;
-            }
-            result = universe.lookup(universe.getConstantReflectionProvider().readFieldValue(wrapped, wrappedReceiver));
+            wrappedReceiver = receiver;
         }
-
-        return result;
+        return universe.lookup(universe.getConstantReflectionProvider().readFieldValue(wrapped, wrappedReceiver));
     }
 
     @Override
     public boolean allowConstantFolding() {
-        if (location == LOC_CONSTANT_STATIC_FIELD) {
-            return true;
-        } else if (getDeclaringClass().isEnum()) {
+        if (location == LOC_UNMATERIALIZED_STATIC_CONSTANT) {
             return true;
         } else if (!wrapped.isWritten()) {
-            assert !Modifier.isStatic(getModifiers()) : "should have constantValue in this case";
             return true;
         } else if (Modifier.isFinal(getModifiers()) && !Modifier.isStatic(getModifiers())) {
             /*
@@ -246,5 +238,10 @@ public class HostedField implements ReadableJavaField, SharedField, Comparable<H
          * order unchanged and therefore keeps the field order we get from the hosting VM.
          */
         return result;
+    }
+
+    @Override
+    public Field getJavaField() {
+        return OriginalFieldProvider.getJavaField(getDeclaringClass().universe.getSnippetReflection(), wrapped);
     }
 }

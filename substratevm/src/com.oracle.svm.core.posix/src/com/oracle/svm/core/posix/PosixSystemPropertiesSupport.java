@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,21 +24,16 @@
  */
 package com.oracle.svm.core.posix;
 
-import static com.oracle.svm.core.posix.headers.Limits.MAXPATHLEN;
-import static com.oracle.svm.core.posix.headers.Pwd.getpwuid;
-
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.jdk.SystemPropertiesSupport;
-import com.oracle.svm.core.posix.headers.Pwd.passwd;
+import com.oracle.svm.core.posix.headers.Limits;
+import com.oracle.svm.core.posix.headers.Pwd;
 import com.oracle.svm.core.posix.headers.Unistd;
 
-@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
 public abstract class PosixSystemPropertiesSupport extends SystemPropertiesSupport {
 
     /*
@@ -48,19 +43,19 @@ public abstract class PosixSystemPropertiesSupport extends SystemPropertiesSuppo
 
     @Override
     protected String userNameValue() {
-        passwd pwent = getpwuid(Unistd.getuid());
+        Pwd.passwd pwent = Pwd.getpwuid(Unistd.getuid());
         return pwent.isNull() ? "?" : CTypeConversion.toJavaString(pwent.pw_name());
     }
 
     @Override
     protected String userHomeValue() {
-        passwd pwent = getpwuid(Unistd.getuid());
+        Pwd.passwd pwent = Pwd.getpwuid(Unistd.getuid());
         return pwent.isNull() ? "?" : CTypeConversion.toJavaString(pwent.pw_dir());
     }
 
     @Override
     protected String userDirValue() {
-        int bufSize = MAXPATHLEN();
+        int bufSize = Limits.MAXPATHLEN();
         CCharPointer buf = StackValue.get(bufSize);
         if (Unistd.getcwd(buf, WordFactory.unsigned(bufSize)).isNonNull()) {
             return CTypeConversion.toJavaString(buf);

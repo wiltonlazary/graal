@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,14 +24,17 @@
  */
 package org.graalvm.compiler.replacements;
 
+import static org.graalvm.compiler.nodes.util.ConstantReflectionUtil.loadByteArrayConstant;
+import static org.graalvm.compiler.nodes.util.ConstantReflectionUtil.loadCharArrayConstant;
+import static org.graalvm.compiler.replacements.ReplacementsUtil.byteArrayBaseOffset;
+import static org.graalvm.compiler.replacements.ReplacementsUtil.charArrayBaseOffset;
 import static org.graalvm.compiler.replacements.SnippetTemplate.DEFAULT_REPLACER;
+import static org.graalvm.compiler.serviceprovider.GraalUnsafeAccess.getUnsafe;
 
-import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.compiler.api.replacements.Fold.InjectedParameter;
 import org.graalvm.compiler.api.replacements.Snippet;
 import org.graalvm.compiler.api.replacements.Snippet.ConstantParameter;
 import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-import org.graalvm.compiler.core.common.spi.ArrayOffsetProvider;
 import org.graalvm.compiler.debug.DebugHandlersFactory;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.spi.LoweringTool;
@@ -43,9 +46,14 @@ import org.graalvm.compiler.replacements.SnippetTemplate.SnippetInfo;
 import org.graalvm.compiler.replacements.nodes.ExplodeLoopNode;
 
 import jdk.vm.ci.code.TargetDescription;
+import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
+import jdk.vm.ci.meta.MetaAccessProvider;
+import sun.misc.Unsafe;
 
 public class ConstantStringIndexOfSnippets implements Snippets {
+    private static final Unsafe UNSAFE = getUnsafe();
+
     public static class Templates extends AbstractTemplates {
 
         private final SnippetInfo indexOfConstant = snippet(ConstantStringIndexOfSnippets.class, "indexOfConstant");
@@ -66,7 +74,8 @@ public class ConstantStringIndexOfSnippets implements Snippets {
             args.add("targetOffset", stringIndexOf.getArgument(4));
             args.add("targetCount", stringIndexOf.getArgument(5));
             args.add("origFromIndex", stringIndexOf.getArgument(6));
-            char[] targetCharArray = snippetReflection.asObject(char[].class, stringIndexOf.getArgument(3).asJavaConstant());
+            JavaConstant targetArg = stringIndexOf.getArgument(3).asJavaConstant();
+            char[] targetCharArray = loadCharArrayConstant(providers.getConstantReflection(), targetArg, Integer.MAX_VALUE);
             args.addConst("md2", md2(targetCharArray));
             args.addConst("cache", computeCache(targetCharArray));
             template(stringIndexOf, args).instantiate(providers.getMetaAccess(), stringIndexOf, DEFAULT_REPLACER, args);
@@ -80,13 +89,15 @@ public class ConstantStringIndexOfSnippets implements Snippets {
             args.addConst("target", latin1IndexOf.getArgument(2));
             args.add("targetCount", latin1IndexOf.getArgument(3));
             args.add("origFromIndex", latin1IndexOf.getArgument(4));
-            byte[] targetByteArray = snippetReflection.asObject(byte[].class, latin1IndexOf.getArgument(2).asJavaConstant());
+            JavaConstant targetArg = latin1IndexOf.getArgument(2).asJavaConstant();
+            byte[] targetByteArray = loadByteArrayConstant(providers.getConstantReflection(), targetArg, Integer.MAX_VALUE);
             args.addConst("md2", md2(targetByteArray));
             args.addConst("cache", computeCache(targetByteArray));
             template(latin1IndexOf, args).instantiate(providers.getMetaAccess(), latin1IndexOf, DEFAULT_REPLACER, args);
         }
 
         public void lowerUTF16(SnippetLowerableMemoryNode utf16IndexOf, LoweringTool tool) {
+
             StructuredGraph graph = utf16IndexOf.graph();
             Arguments args = new Arguments(utf16IndexOfConstant, graph.getGuardsStage(), tool.getLoweringStage());
             args.add("source", utf16IndexOf.getArgument(0));
@@ -94,9 +105,10 @@ public class ConstantStringIndexOfSnippets implements Snippets {
             args.addConst("target", utf16IndexOf.getArgument(2));
             args.add("targetCount", utf16IndexOf.getArgument(3));
             args.add("origFromIndex", utf16IndexOf.getArgument(4));
-            byte[] targetByteArray = snippetReflection.asObject(byte[].class, utf16IndexOf.getArgument(2).asJavaConstant());
-            args.addConst("md2", md2Utf16(targetByteArray));
-            args.addConst("cache", computeCacheUtf16(targetByteArray));
+            JavaConstant targetArg = utf16IndexOf.getArgument(2).asJavaConstant();
+            byte[] targetByteArray = loadByteArrayConstant(providers.getConstantReflection(), targetArg, Integer.MAX_VALUE);
+            args.addConst("md2", md2Utf16(tool.getMetaAccess(), targetByteArray));
+            args.addConst("cache", computeCacheUtf16(tool.getMetaAccess(), targetByteArray));
             template(utf16IndexOf, args).instantiate(providers.getMetaAccess(), utf16IndexOf, DEFAULT_REPLACER, args);
         }
     }
@@ -151,16 +163,16 @@ public class ConstantStringIndexOfSnippets implements Snippets {
         return cache;
     }
 
-    static int md2Utf16(byte[] target) {
+    static int md2Utf16(MetaAccessProvider metaAccess, byte[] target) {
         int c = target.length / 2;
         if (c == 0) {
             return 0;
         }
-        long base = UnsafeAccess.UNSAFE.arrayBaseOffset(byte[].class);
-        char lastChar = UnsafeAccess.UNSAFE.getChar(target, base + (c - 1) * 2);
+        long base = metaAccess.getArrayBaseOffset(JavaKind.Byte);
+        char lastChar = UNSAFE.getChar(target, base + (c - 1) * 2);
         int md2 = c;
         for (int i = 0; i < c - 1; i++) {
-            char currChar = UnsafeAccess.UNSAFE.getChar(target, base + i * 2);
+            char currChar = UNSAFE.getChar(target, base + i * 2);
             if (currChar == lastChar) {
                 md2 = (c - 1) - i;
             }
@@ -168,30 +180,20 @@ public class ConstantStringIndexOfSnippets implements Snippets {
         return md2;
     }
 
-    static long computeCacheUtf16(byte[] s) {
+    static long computeCacheUtf16(MetaAccessProvider metaAccess, byte[] s) {
         int c = s.length / 2;
         int cache = 0;
         int i;
-        long base = UnsafeAccess.UNSAFE.arrayBaseOffset(byte[].class);
+        long base = metaAccess.getArrayBaseOffset(JavaKind.Byte);
         for (i = 0; i < c - 1; i++) {
-            char currChar = UnsafeAccess.UNSAFE.getChar(s, base + i * 2);
+            char currChar = UNSAFE.getChar(s, base + i * 2);
             cache |= (1 << (currChar & 63));
         }
         return cache;
     }
 
-    @Fold
-    static int byteArrayBaseOffset(@InjectedParameter ArrayOffsetProvider arrayOffsetProvider) {
-        return arrayOffsetProvider.arrayBaseOffset(JavaKind.Byte);
-    }
-
-    @Fold
-    static int charArrayBaseOffset(@InjectedParameter ArrayOffsetProvider arrayOffsetProvider) {
-        return arrayOffsetProvider.arrayBaseOffset(JavaKind.Char);
-    }
-
     /** Marker value for the {@link InjectedParameter} injected parameter. */
-    static final ArrayOffsetProvider INJECTED = null;
+    static final MetaAccessProvider INJECTED = null;
 
     @Snippet
     public static int indexOfConstant(char[] source, int sourceOffset, int sourceCount,
@@ -212,10 +214,10 @@ public class ConstantStringIndexOfSnippets implements Snippets {
         int sourceEnd = sourceCount - targetCountLess1;
 
         long base = charArrayBaseOffset(INJECTED);
-        int lastChar = UnsafeAccess.UNSAFE.getChar(target, base + targetCountLess1 * 2);
+        int lastChar = UNSAFE.getChar(target, base + targetCountLess1 * 2);
 
         outer_loop: for (long i = sourceOffset + fromIndex; i < sourceEnd;) {
-            int src = UnsafeAccess.UNSAFE.getChar(source, base + (i + targetCountLess1) * 2);
+            int src = UNSAFE.getChar(source, base + (i + targetCountLess1) * 2);
             if (src == lastChar) {
                 // With random strings and a 4-character alphabet,
                 // reverse matching at this point sets up 0.8% fewer
@@ -229,8 +231,8 @@ public class ConstantStringIndexOfSnippets implements Snippets {
                     ExplodeLoopNode.explodeLoop();
                 }
                 for (long j = 0; j < targetCountLess1; j++) {
-                    char sourceChar = UnsafeAccess.UNSAFE.getChar(source, base + (i + j) * 2);
-                    if (UnsafeAccess.UNSAFE.getChar(target, base + (targetOffset + j) * 2) != sourceChar) {
+                    char sourceChar = UNSAFE.getChar(source, base + (i + j) * 2);
+                    if (UNSAFE.getChar(target, base + (targetOffset + j) * 2) != sourceChar) {
                         if ((cache & (1 << sourceChar)) == 0) {
                             if (md2 < j + 1) {
                                 i += j + 1;
@@ -270,10 +272,10 @@ public class ConstantStringIndexOfSnippets implements Snippets {
         int sourceEnd = sourceCount - targetCountLess1;
 
         long base = byteArrayBaseOffset(INJECTED);
-        int lastChar = UnsafeAccess.UNSAFE.getChar(target, base + targetCountLess1 * 2);
+        int lastChar = UNSAFE.getChar(target, base + targetCountLess1 * 2);
 
         outer_loop: for (long i = fromIndex; i < sourceEnd;) {
-            int src = UnsafeAccess.UNSAFE.getChar(source, base + (i + targetCountLess1) * 2);
+            int src = UNSAFE.getChar(source, base + (i + targetCountLess1) * 2);
             if (src == lastChar) {
                 // With random strings and a 4-character alphabet,
                 // reverse matching at this point sets up 0.8% fewer
@@ -287,8 +289,8 @@ public class ConstantStringIndexOfSnippets implements Snippets {
                     ExplodeLoopNode.explodeLoop();
                 }
                 for (long j = 0; j < targetCountLess1; j++) {
-                    char sourceChar = UnsafeAccess.UNSAFE.getChar(source, base + (i + j) * 2);
-                    if (UnsafeAccess.UNSAFE.getChar(target, base + j * 2) != sourceChar) {
+                    char sourceChar = UNSAFE.getChar(source, base + (i + j) * 2);
+                    if (UNSAFE.getChar(target, base + j * 2) != sourceChar) {
                         if ((cache & (1 << sourceChar)) == 0) {
                             if (md2 < j + 1) {
                                 i += j + 1;
@@ -328,10 +330,10 @@ public class ConstantStringIndexOfSnippets implements Snippets {
         int sourceEnd = sourceCount - targetCountLess1;
 
         long base = byteArrayBaseOffset(INJECTED);
-        int lastByte = UnsafeAccess.UNSAFE.getByte(target, base + targetCountLess1);
+        int lastByte = UNSAFE.getByte(target, base + targetCountLess1);
 
         outer_loop: for (long i = fromIndex; i < sourceEnd;) {
-            int src = UnsafeAccess.UNSAFE.getByte(source, base + i + targetCountLess1);
+            int src = UNSAFE.getByte(source, base + i + targetCountLess1);
             if (src == lastByte) {
                 // With random strings and a 4-character alphabet,
                 // reverse matching at this point sets up 0.8% fewer
@@ -345,8 +347,8 @@ public class ConstantStringIndexOfSnippets implements Snippets {
                     ExplodeLoopNode.explodeLoop();
                 }
                 for (long j = 0; j < targetCountLess1; j++) {
-                    byte sourceByte = UnsafeAccess.UNSAFE.getByte(source, base + i + j);
-                    if (UnsafeAccess.UNSAFE.getByte(target, base + j) != sourceByte) {
+                    byte sourceByte = UNSAFE.getByte(source, base + i + j);
+                    if (UNSAFE.getByte(target, base + j) != sourceByte) {
                         if ((cache & (1 << sourceByte)) == 0) {
                             if (md2 < j + 1) {
                                 i += j + 1;

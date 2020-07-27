@@ -1,20 +1,14 @@
-# overlay version
-overlay = 0b7edfaa83017fcf38687f2615533dbdbe21dab1
+specVersion = "2"
 
 # oraclejdk* are released OracleJDK binaries
-# labsjdk* are JDKs based on OracleJDK binaries
+# oraclejdk* are JDKs based on OracleJDK binaries
 # openjdk8 JDKs on Linux are built by Oracle Labs
 # openjdk8 JDKs on macOS are based on AdoptOpenJDK binaries
-jdks: {
-  labsjdk8:      {name : labsjdk,   version : "8u172-jvmci-0.47", platformspecific: true}
-  openjdk8:      {name : openjdk,   version : "8u172-jvmci-0.47", platformspecific: true}
-  labsjdk8Debug: {name : labsjdk,   version : "8u172-jvmci-0.47-fastdebug", platformspecific: true}
-  oraclejdk11:   {name : oraclejdk, version : "11+25", platformspecific: true}
+include "common.json"
+include "graal-common.json"
 
-  # Snapshot of http://hg.openjdk.java.net/jdk/jdk
-  oraclejdkSNAPSHOT : {name : labsjdk, version : "20180808-073750", platformspecific: true}
-
-}
+# overlay version
+overlay = ${ci.overlay}
 
 # This must always point to HEAD in the master branch but can be used to point
 # to another branch/commit in a Graal PR when mx changes are required for the PR.
@@ -24,26 +18,46 @@ mx : {
   }
 }
 
-labsjdk8 :      { downloads : { JAVA_HOME : ${jdks.labsjdk8},      EXTRA_JAVA_HOMES : { pathlist :[ ${jdks.oraclejdk11} ]} }}
-labsjdk8Debug : { downloads : { JAVA_HOME : ${jdks.labsjdk8Debug}, EXTRA_JAVA_HOMES : { pathlist :[ ${jdks.oraclejdk11} ]} }}
+download-hsdis : {
+  setup : [
+    ["mx", "hsdis", "||", "true"]
+  ]
+}
 
-openjdk8 :        { downloads : { JAVA_HOME : ${jdks.openjdk8} }}
+oraclejdk8 :          { downloads : { JAVA_HOME : ${jdks.oraclejdk8},      EXTRA_JAVA_HOMES : { pathlist :[ ${jdks.labsjdk-ee-11} ]} }}
+oraclejdk8Only :      { downloads : { JAVA_HOME : ${jdks.oraclejdk8} }}
+oraclejdk8Debug :     { downloads : { JAVA_HOME : ${jdks.oraclejdk8Debug}, EXTRA_JAVA_HOMES : { pathlist :[ ${jdks.labsjdk-ee-11} ]} }}
+oraclejdk8OnlyDebug : { downloads : { JAVA_HOME : ${jdks.oraclejdk8Debug} }}
 
-oraclejdk11 :     { downloads : { JAVA_HOME : ${jdks.oraclejdk11} }}
+openjdk8 :          { downloads : { JAVA_HOME : ${jdks.openjdk8} }}
+
+oraclejdk11 :       { downloads : { JAVA_HOME : ${jdks.oraclejdk11} }}
+oraclejdk15 :       { downloads : { JAVA_HOME : ${jdks.oraclejdk15} }}
+openjdk11 :         { downloads : { JAVA_HOME : ${jdks.openjdk11} }}
+openjdk15 :         { downloads : { JAVA_HOME : ${jdks.openjdk15} }}
+
+labsjdk-ce-11 :         { downloads : { JAVA_HOME : ${jdks.labsjdk-ce-11} }}
+labsjdk-ee-11 :         { downloads : { JAVA_HOME : ${jdks.labsjdk-ee-11} }}
 
 common : ${mx} {
   timelimit : "30:00"
+  environment : {
+    MX_PYTHON: "python3"
+  }
   catch_files : [
     "Graal diagnostic output saved in (?P<filename>.+\.zip)"
   ]
+  packages : {
+    "pip:logilab-common ": "==1.4.4"
+    "pip:pylint" : "==1.9.3"
+    "pip:ninja_syntax" : "==1.7.2"
+  }
 }
 
 linux : ${common} {
   packages : {
     git : ">=1.8.3"
     mercurial : ">=2.2"
-    "pip:astroid" : "==1.1.0"
-    "pip:pylint" : "==1.1.0"
     "apache/ant": ">=1.9.4"
   }
 }
@@ -52,20 +66,19 @@ solaris : ${common} {
   packages : {
     git : ">=1.8.3"
     mercurial : ">=2.2"
-    "pip:astroid" : "==1.1.0"
-    "pip:pylint" : "==1.1.0"
     "apache/ant": ">=1.9.4"
   }
 }
 
 darwin : ${common} {
-  packages : {
-    "pip:astroid" : "==1.1.0"
-    "pip:pylint" : "==1.1.0"
-  }
   environment : {
-    PATH : "/usr/local/bin:$PATH"
+    # Required to keep pylint happy on Darwin
+    # https://coderwall.com/p/-k_93g/mac-os-x-valueerror-unknown-locale-utf-8-in-python
+    LC_ALL : "en_US.UTF-8"
   }
+}
+
+windows : ${common} {
 }
 
 linux-amd64 : ${linux} {
@@ -73,7 +86,11 @@ linux-amd64 : ${linux} {
 }
 
 darwin-amd64 : ${darwin} {
-  capabilities : [darwin_next, amd64]
+  capabilities : [darwin, amd64]
+}
+
+windows-amd64 : ${windows} {
+  capabilities : [windows, amd64]
 }
 
 solaris-sparcv9 : ${solaris} {
@@ -88,9 +105,13 @@ linux-aarch64 : ${linux} {
   capabilities : [linux, aarch64]
 }
 
+DEFAULT_HEAP_SIZE : "8G"
+LARGE_HEAP_SIZE : "31G"
+LARGE_YOUNG_GEN_SIZE : "27G"
+
 eclipse : {
   downloads : {
-    ECLIPSE : {name: eclipse, version: "4.5.2", platformspecific: true}
+    ECLIPSE : {name: eclipse, version: "4.14.0", platformspecific: true}
   }
   environment : {
     ECLIPSE_EXE : "$ECLIPSE/eclipse"
@@ -99,7 +120,7 @@ eclipse : {
 
 jdt : {
   downloads : {
-    JDT : {name: ecj, version: "4.5.1", platformspecific: false}
+    JDT : {name: ecj, version: "4.14.0", platformspecific: false}
   }
 }
 
@@ -127,30 +148,36 @@ darwin-deploy : ${darwin} ${maven-download-unix} {
   }
 }
 
-maven-deploy-dry-run : {
-  targets : [gate]
-  run : [
-    ["mx", "--strict-compliance", "build"]
-    ["mx", "maven-deploy", "--validate", "full", "--licenses", "GPLv2-CPE,UPL", "--dry-run", "ossrh", "https://this-is-only-a-test"]
-  ]
-}
-
 svm-common: ${mx} {
   environment: {
     DEFAULT_VM: "server"
     LANG: "en_US.UTF-8"
   }
   logs: [
-    "*/native_image_server.log"
+    "../.native-image/*/*/*/*.log"
+    "../*/*/*.log"
+    "*/*.log"
     "*/svmbuild/*.log"
     "*/svmbuild/images/*.log"
     "*/*/stripped/*.map"
     "*/callgrind.*"
     "*.bgv"
+    "*.log"
   ]
 }
 
-svm-common-linux: ${svm-common} ${linux-amd64} {
+svm-common-linux-amd64: ${svm-common} ${linux-amd64} {
+  packages: {
+    make: ">=3.83"
+    gcc-build-essentials: ">=4.9.1" # GCC 4.9.0 fails on cluster
+    binutils: ">=2.30"
+    ruby: ">=2.1.0"
+    valgrind: ">=3.9.0"
+  }
+  timelimit: "55:00"
+}
+
+svm-common-linux-aarch64: ${svm-common} ${linux-aarch64} {
   packages: {
     make: ">=3.83"
     gcc-build-essentials: ">=4.9.1" # GCC 4.9.0 fails on cluster
@@ -178,8 +205,31 @@ svm-common-darwin: ${svm-common} ${darwin-amd64} {
   timelimit: "45:00"
 }
 
+svm-common-windows: ${svm-common} ${windows-amd64} {
+  packages : {
+    msvc : "==10.0"
+  }
+  timelimit: "45:00"
+}
+
+windows-devkit-jdk11: {
+  packages : {
+    "devkit:VS2017-15.9.16+1" : "==0"
+  }
+}
+
+windows-devkit-jdk15: {
+  packages : {
+    "devkit:VS2019-16.5.3+1" : "==0"
+  }
+}
+
+svm-common-windows-jdk11: ${svm-common} ${windows-amd64} ${windows-devkit-jdk11} {
+  timelimit: "45:00"
+}
+
 svm-common-sulong: {
   packages: {
-    llvm: "==3.8"
+    llvm: "==6.0.1"
   }
 }

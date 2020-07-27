@@ -24,56 +24,42 @@
  */
 package com.oracle.svm.core.jdk;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.List;
-import java.util.ListIterator;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.Arrays;
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.VMRuntime;
+import org.graalvm.nativeimage.impl.VMRuntimeSupport;
 
-import com.oracle.svm.core.CompilerCommandPlugin;
-import com.oracle.svm.core.log.Log;
-import com.oracle.svm.core.util.VMError;
+public final class RuntimeSupport implements VMRuntimeSupport {
 
-public final class RuntimeSupport {
+    /** Hooks that run before calling Java {@code main} or in {@link VMRuntime#initialize()}. */
+    private AtomicReference<Runnable[]> startupHooks = new AtomicReference<>();
 
-    /** A list of startup hooks. */
-    private CopyOnWriteArrayList<Runnable> startupHooks;
+    /**
+     * Hooks that run after the Java {@code main} method or when calling {@link Runtime#exit} (or
+     * {@link System#exit}).
+     */
+    private AtomicReference<Runnable[]> shutdownHooks = new AtomicReference<>();
 
-    /** A list of shutdown hooks. */
-    private CopyOnWriteArrayList<Runnable> shutdownHooks;
+    /** Hooks that run during isolate initialization. */
+    private AtomicReference<Runnable[]> initializationHooks = new AtomicReference<>();
 
-    /** A list of tear down hooks. */
-    private CopyOnWriteArrayList<Runnable> tearDownHooks;
+    /** Hooks that run during isolate tear-down. */
+    private AtomicReference<Runnable[]> tearDownHooks = new AtomicReference<>();
 
-    /** A list of CompilerCommandPlugins. */
-    private static final Comparator<CompilerCommandPlugin> PluginComparator = Comparator.comparing(CompilerCommandPlugin::name);
-    private CopyOnWriteArrayList<CompilerCommandPlugin> commandPlugins;
-    @Platforms(Platform.HOSTED_ONLY.class)//
-    private boolean commandPluginsSorted;
-
-    /** A constructor for the singleton instance. */
     private RuntimeSupport() {
-        super();
-        startupHooks = new CopyOnWriteArrayList<>();
-        shutdownHooks = new CopyOnWriteArrayList<>();
-        tearDownHooks = new CopyOnWriteArrayList<>();
-        commandPlugins = new CopyOnWriteArrayList<>();
-        commandPluginsSorted = false;
     }
 
-    /** Construct and register the singleton instance, if necessary. */
     public static void initializeRuntimeSupport() {
         assert ImageSingletons.contains(RuntimeSupport.class) == false : "Initializing RuntimeSupport again.";
         ImageSingletons.add(RuntimeSupport.class, new RuntimeSupport());
     }
 
-    /** Get the singleton instance. */
     @Fold
     public static RuntimeSupport getRuntimeSupport() {
         return ImageSingletons.lookup(RuntimeSupport.class);
@@ -81,112 +67,69 @@ public final class RuntimeSupport {
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public void addStartupHook(Runnable hook) {
-        if (startupHooks.contains(hook)) {
-            throw new IllegalArgumentException("StartupHook previously registered");
-        }
-        startupHooks.add(hook);
+        addHook(startupHooks, hook);
     }
 
+    @Override
     public void executeStartupHooks() {
         executeHooks(startupHooks);
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public void addShutdownHook(Runnable hook) {
-        if (shutdownHooks.contains(hook)) {
-            throw new IllegalArgumentException("ShutdownHook previously registered");
-        }
-        shutdownHooks.add(hook);
+        addHook(shutdownHooks, hook);
     }
 
-    /**
-     * Called only internally as part of the JDK shutdown process, use {@link #shutdown()} to
-     * trigger the whoke JDK shutdown process.
-     */
     static void executeShutdownHooks() {
         executeHooks(getRuntimeSupport().shutdownHooks);
     }
 
-    /**
-     * Adds a tear down hook that is executed before the isolate torn down.
-     *
-     * @param tearDownHook hook to executed on isolate tear down.
-     */
-    public void addTearDownHook(Runnable tearDownHook) {
-        tearDownHooks.add(tearDownHook);
+    public void addInitializationHook(Runnable initHook) {
+        addHook(initializationHooks, initHook);
     }
 
-    /**
-     * Called only internally as part of the isolate tear down process. These hooks clean up all
-     * running threads to allow proper isolate tear down.
-     *
-     * Although public, this method should not go to the public API.
-     */
+    /** Runs isolate initialization hooks. Although public, this method should not be public API. */
+    public static void executeInitializationHooks() {
+        executeHooks(getRuntimeSupport().initializationHooks);
+    }
+
+    public void addTearDownHook(Runnable tearDownHook) {
+        addHook(tearDownHooks, tearDownHook);
+    }
+
+    /** Runs isolate tear-down hooks. Although public, this method should not be public API. */
     public static void executeTearDownHooks() {
         executeHooks(getRuntimeSupport().tearDownHooks);
     }
 
-    private static void executeHooks(CopyOnWriteArrayList<Runnable> hooks) {
-        /* Iterate a snapshot of the hooks. */
-        final ListIterator<Runnable> hookIterator = hooks.listIterator();
-        final List<Throwable> hookExceptions = new ArrayList<>();
+    private static void addHook(AtomicReference<Runnable[]> hooksReference, Runnable newHook) {
+        Objects.requireNonNull(newHook);
 
-        while (hookIterator.hasNext()) {
-            final Runnable hook = hookIterator.next();
-            try {
+        Runnable[] existingHooks;
+        Runnable[] newHooks;
+        do {
+            existingHooks = hooksReference.get();
+            if (existingHooks != null) {
+                newHooks = Arrays.copyOf(existingHooks, existingHooks.length + 1);
+                newHooks[newHooks.length - 1] = newHook;
+            } else {
+                newHooks = new Runnable[]{newHook};
+            }
+        } while (!hooksReference.compareAndSet(existingHooks, newHooks));
+    }
+
+    private static void executeHooks(AtomicReference<Runnable[]> hooksReference) {
+        Runnable[] hooks = hooksReference.getAndSet(null);
+        if (hooks != null) {
+            for (Runnable hook : hooks) {
                 hook.run();
-            } catch (Throwable ex) {
-                hookExceptions.add(ex);
-            }
-        }
-
-        /* Report all hook exceptions, but do not re-throw. */
-        if (hookExceptions.size() > 0) {
-            for (Throwable ex : hookExceptions) {
-                ex.printStackTrace(Log.logStream());
             }
         }
     }
 
-    @Platforms(Platform.HOSTED_ONLY.class)
-    public void addCommandPlugin(CompilerCommandPlugin plugin) {
-        assert !commandPluginsSorted;
-        if (commandPlugins.stream().anyMatch(p -> p.name().equals(plugin.name()))) {
-            throw new IllegalArgumentException("CompilerCommandPlugin previously registered");
-        }
-
-        commandPlugins.add(plugin);
-    }
-
-    Object runCommand(String cmd, Object[] args) {
-        CompilerCommandPlugin key = new CompilerCommandPlugin() {
-
-            @Override
-            public String name() {
-                return cmd;
-            }
-
-            @Override
-            public Object apply(Object[] ignore) {
-                throw VMError.shouldNotReachHere();
-            }
-        };
-        int index = Collections.binarySearch(commandPlugins, key, PluginComparator);
-        if (index >= 0) {
-            return commandPlugins.get(index).apply(args);
-        }
-        throw new IllegalArgumentException("Could not find SVM command with the name " + cmd);
-    }
-
-    @SuppressWarnings("static-method")
+    @Override
     public void shutdown() {
         Target_java_lang_Shutdown.shutdown();
     }
 
-    @Platforms(Platform.HOSTED_ONLY.class)
-    void sortCommandPlugins() {
-        commandPlugins.sort(PluginComparator);
-        assert !commandPluginsSorted;
-        commandPluginsSorted = true;
-    }
 }

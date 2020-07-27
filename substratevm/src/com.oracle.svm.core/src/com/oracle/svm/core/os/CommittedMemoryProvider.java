@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.core.os;
 
+import java.util.EnumSet;
+
 import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.c.type.WordPointer;
@@ -34,6 +36,7 @@ import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.c.function.CEntryPointCreateIsolateParameters;
+import com.oracle.svm.core.heap.Heap;
 
 /**
  * A provider of ranges of committed memory, which is virtual memory that is backed by physical
@@ -50,6 +53,14 @@ public interface CommittedMemoryProvider {
     static CommittedMemoryProvider get() {
         return ImageSingletons.lookup(CommittedMemoryProvider.class);
     }
+
+    /**
+     * Returns whether this provider will always guarantee a heap address space alignment of
+     * {@link Heap#getPreferredAddressSpaceAlignment()} at image runtime, which may also depend on
+     * {@link ImageHeapProvider#guaranteesHeapPreferredAddressSpaceAlignment()}.
+     */
+    @Fold
+    boolean guaranteesHeapPreferredAddressSpaceAlignment();
 
     /**
      * Performs initializations <em>for the current isolate</em>, before any other methods of this
@@ -73,17 +84,20 @@ public interface CommittedMemoryProvider {
      * Returns the granularity of committed memory management, which is typically the same as that
      * of {@linkplain VirtualMemoryProvider#getGranularity() virtual memory management}.
      */
-    UnsignedWord getGranularity();
+    @Uninterruptible(reason = "Still being initialized.", mayBeInlined = true)
+    default UnsignedWord getGranularity() {
+        return VirtualMemoryProvider.get().getGranularity();
+    }
 
     /**
      * Allocate a block of committed memory.
      *
      * @param nbytes The number of bytes to allocate, which is rounded up to the next multiple of
      *            the {@linkplain #getGranularity() granularity} if required.
-     * @param alignment The required alignment of the block start, which should be a multiple of the
-     *            {@linkplain #getGranularity() granularity}, or {@link #UNALIGNED}.
+     * @param alignment The required alignment of the block start, or {@link #UNALIGNED}.
      * @param executable Whether the block must be executable.
-     * @return the start of the allocated block.
+     * @return The start of the allocated block, or {@link WordFactory#nullPointer()} in case of an
+     *         error.
      */
     Pointer allocate(UnsignedWord nbytes, UnsignedWord alignment, boolean executable);
 
@@ -97,6 +111,7 @@ public interface CommittedMemoryProvider {
      * @param executable Whether the block was requested to be executable.
      * @return true on success, or false otherwise.
      */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     boolean free(PointerBase start, UnsignedWord nbytes, UnsignedWord alignment, boolean executable);
 
     /**
@@ -114,4 +129,21 @@ public interface CommittedMemoryProvider {
      */
     default void afterGarbageCollection(boolean completeCollection) {
     }
+
+    enum Access {
+        READ,
+        WRITE,
+        EXECUTE
+    }
+
+    /**
+     * Change access permissions for a block of committed memory that was allocated with
+     * {@link #allocate}.
+     *
+     * @param start The start of the memory block
+     * @param nbytes Length of the memory block
+     * @param access protection setting
+     * @return true on success, false otherwise
+     */
+    boolean protect(PointerBase start, UnsignedWord nbytes, EnumSet<Access> access);
 }

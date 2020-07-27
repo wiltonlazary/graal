@@ -1,29 +1,46 @@
 /*
- * Copyright (c) 2013, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.object;
 
+import com.oracle.truffle.api.nodes.UnexpectedResultException;
 import com.oracle.truffle.api.object.DynamicObject;
 import com.oracle.truffle.api.object.FinalLocationException;
 import com.oracle.truffle.api.object.IncompatibleLocationException;
@@ -32,6 +49,7 @@ import com.oracle.truffle.api.object.LongLocation;
 import com.oracle.truffle.api.object.Shape;
 
 /** @since 0.17 or earlier */
+@SuppressWarnings("deprecation")
 public abstract class LocationImpl extends Location {
     /**
      * @since 0.17 or earlier
@@ -66,7 +84,21 @@ public abstract class LocationImpl extends Location {
     /** @since 0.17 or earlier */
     @Override
     public void set(DynamicObject store, Object value, Shape shape) throws IncompatibleLocationException, FinalLocationException {
-        setInternal(store, value);
+        set(store, value, checkShape(store, shape));
+    }
+
+    @Override
+    public void set(DynamicObject store, Object value, Shape oldShape, Shape newShape) throws IncompatibleLocationException {
+        if (canStore(value)) {
+            LayoutImpl.ACCESS.growAndSetShape(store, oldShape, newShape);
+            try {
+                setInternal(store, value);
+            } catch (IncompatibleLocationException ex) {
+                throw new IllegalStateException();
+            }
+        } else {
+            throw incompatibleLocation();
+        }
     }
 
     /** @since 0.17 or earlier */
@@ -75,9 +107,49 @@ public abstract class LocationImpl extends Location {
         throw new UnsupportedOperationException();
     }
 
+    /**
+     * Get object value as object at this location in store. For internal use only.
+     *
+     * @param condition the result of a shape check or {@code false}
+     */
+    @Override
+    public abstract Object get(DynamicObject store, boolean condition);
+
+    protected long getLong(DynamicObject store, boolean condition) throws UnexpectedResultException {
+        return expectLong(get(store, condition));
+    }
+
+    protected int getInt(DynamicObject store, boolean condition) throws UnexpectedResultException {
+        return expectInteger(get(store, condition));
+    }
+
+    protected double getDouble(DynamicObject store, boolean condition) throws UnexpectedResultException {
+        return expectDouble(get(store, condition));
+    }
+
+    protected boolean getBoolean(DynamicObject store, boolean condition) throws UnexpectedResultException {
+        return expectBoolean(get(store, condition));
+    }
+
+    @SuppressWarnings("unused")
+    protected void set(DynamicObject store, Object value, boolean condition) throws IncompatibleLocationException, FinalLocationException {
+        setInternal(store, value, condition);
+    }
+
+    protected abstract void setInternal(DynamicObject store, Object value, boolean condition) throws IncompatibleLocationException;
+
+    /**
+     * Equivalent to {@link Shape#check(DynamicObject)}.
+     */
+    protected static final boolean checkShape(DynamicObject store, Shape shape) {
+        return store.getShape() == shape;
+    }
+
     /** @since 0.17 or earlier */
     @Override
-    protected abstract void setInternal(DynamicObject store, Object value) throws IncompatibleLocationException;
+    protected final void setInternal(DynamicObject store, Object value) throws IncompatibleLocationException {
+        setInternal(store, value, false);
+    }
 
     /** @since 0.17 or earlier */
     @Override
@@ -134,10 +206,6 @@ public abstract class LocationImpl extends Location {
             return false;
         }
         if (getClass() != obj.getClass()) {
-            return false;
-        }
-        Location other = (Location) obj;
-        if (isFinal() != other.isFinal()) {
             return false;
         }
         return true;
@@ -200,17 +268,74 @@ public abstract class LocationImpl extends Location {
      */
     public abstract void accept(LocationVisitor locationVisitor);
 
-    /**
-     * Boxed values need to be compared by value not by reference.
-     *
-     * The first parameter should be the one with the more precise type information.
-     *
-     * For sets to final locations, otherValue.equals(thisValue) seems more beneficial, since we
-     * usually know more about the value to be set.
-     *
-     * @since 0.17 or earlier
-     */
-    public static boolean valueEquals(Object val1, Object val2) {
-        return val1 == val2 || (val1 != null && val1.equals(val2));
+    protected LocationImpl getInternalLocation() {
+        return this;
+    }
+
+    static boolean isSameLocation(LocationImpl loc1, LocationImpl loc2) {
+        return loc1 == loc2 || loc1.getInternalLocation().equals(loc2.getInternalLocation());
+    }
+
+    @SuppressWarnings("unused")
+    protected void setInt(DynamicObject store, int value, boolean condition) throws IncompatibleLocationException, FinalLocationException {
+        set(store, value, condition);
+    }
+
+    @SuppressWarnings("unused")
+    protected void setLong(DynamicObject store, long value, boolean condition) throws IncompatibleLocationException, FinalLocationException {
+        set(store, value, condition);
+    }
+
+    @SuppressWarnings("unused")
+    protected void setDouble(DynamicObject store, double value, boolean condition) throws IncompatibleLocationException, FinalLocationException {
+        set(store, value, condition);
+    }
+
+    protected boolean isIntLocation() {
+        return false;
+    }
+
+    protected boolean isLongLocation() {
+        return false;
+    }
+
+    protected boolean isDoubleLocation() {
+        return false;
+    }
+
+    protected boolean isImplicitCastIntToLong() {
+        return false;
+    }
+
+    protected boolean isImplicitCastIntToDouble() {
+        return false;
+    }
+
+    static boolean expectBoolean(Object value) throws UnexpectedResultException {
+        if (value instanceof Boolean) {
+            return (boolean) value;
+        }
+        throw new UnexpectedResultException(value);
+    }
+
+    static int expectInteger(Object value) throws UnexpectedResultException {
+        if (value instanceof Integer) {
+            return (int) value;
+        }
+        throw new UnexpectedResultException(value);
+    }
+
+    static double expectDouble(Object value) throws UnexpectedResultException {
+        if (value instanceof Double) {
+            return (double) value;
+        }
+        throw new UnexpectedResultException(value);
+    }
+
+    static long expectLong(Object value) throws UnexpectedResultException {
+        if (value instanceof Long) {
+            return (long) value;
+        }
+        throw new UnexpectedResultException(value);
     }
 }

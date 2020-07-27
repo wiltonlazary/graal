@@ -1,32 +1,49 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.tck;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -39,23 +56,24 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
-import org.junit.Assert;
-
-import com.oracle.truffle.api.debug.Breakpoint;
-import com.oracle.truffle.api.debug.Debugger;
-import com.oracle.truffle.api.debug.DebuggerSession;
-import com.oracle.truffle.api.debug.SuspendedCallback;
-import com.oracle.truffle.api.debug.SuspendedEvent;
-import com.oracle.truffle.api.debug.SourceElement;
-import com.oracle.truffle.api.source.SourceSection;
 
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.Source;
+import org.graalvm.polyglot.Value;
+import org.junit.Assert;
+
+import com.oracle.truffle.api.debug.Breakpoint;
+import com.oracle.truffle.api.debug.Debugger;
+import com.oracle.truffle.api.debug.DebuggerSession;
+import com.oracle.truffle.api.debug.SourceElement;
+import com.oracle.truffle.api.debug.SuspendedCallback;
+import com.oracle.truffle.api.debug.SuspendedEvent;
+import com.oracle.truffle.api.source.SourceSection;
 
 /**
  * Test utility class that makes it easier to test and debug debugger functionality for guest
@@ -216,30 +234,36 @@ public final class DebuggerTester implements AutoCloseable {
     }
 
     /**
-     * @since 0.16
-     * @deprecated Use {@link #startEval(org.graalvm.polyglot.Source)} instead.
-     */
-    @Deprecated
-    public void startEval(com.oracle.truffle.api.source.Source s) {
-        if (this.executingSource != null) {
-            throw new IllegalStateException("Already executing other source " + s);
-        }
-        throw new UnsupportedOperationException("Call startEval(org.graalvm.polyglot.Source) instead.");
-    }
-
-    /**
      * Starts a new {@link Context#eval(Source) evaluation} on the background thread. Only one
      * evaluation can be active at a time. Please ensure that {@link #expectDone()} completed
-     * successfully before starting a new evaluation. Throws an {@link IllegalStateException} if
+     * successfully before starting a new evaluation. When no source is available please refer to
+     * {@link DebuggerTester#startExecute(Function)}. Throws an {@link IllegalStateException} if
      * another evaluation is still executing or the tester is already closed.
      *
      * @since 0.27
      */
     public void startEval(Source s) {
+        startExecute(new Function<Context, Value>() {
+            public Value apply(Context c) {
+                return c.eval(s);
+            }
+        });
+    }
+
+    /**
+     * Starts a new script evaluation on the background thread. Only one evaluation can be active at
+     * a time. Please ensure that {@link #expectDone()} completed successfully before starting a new
+     * evaluation. If a Source is available please refer to {@link DebuggerTester#startEval(Source)}
+     * . Throws an {@link IllegalStateException} if another evaluation is still executing or the
+     * tester is already closed.
+     *
+     * @since 20.0
+     */
+    public void startExecute(Function<Context, Value> script) {
         if (this.executingSource != null) {
-            throw new IllegalStateException("Already executing other source " + s);
+            throw new IllegalStateException("Already executing other source ");
         }
-        this.executingSource = new ExecutingSource(s);
+        this.executingSource = new ExecutingSource(script);
     }
 
     /**
@@ -445,6 +469,16 @@ public final class DebuggerTester implements AutoCloseable {
      * @since 0.33
      */
     public void assertLineBreakpointsResolution(String sourceWithMarks, String resolvedMarkName, String language) {
+        assertLineBreakpointsResolution(sourceWithMarks, null, resolvedMarkName, language);
+    }
+
+    /**
+     * @param positionPredicate <code>null</code> to test line breakpoints on all lines, or a
+     *            predicate that limits the testable lines.
+     * @see #assertLineBreakpointsResolution(java.lang.String, java.lang.String, java.lang.String)
+     * @since 19.3.0
+     */
+    public void assertLineBreakpointsResolution(String sourceWithMarks, PositionPredicate positionPredicate, String resolvedMarkName, String language) {
         Pattern br = Pattern.compile("(" + resolvedMarkName + "\\d+_|" + resolvedMarkName + "\\d+-\\d+_)");
         Map<Integer, Integer> bps = new HashMap<>();
         String sourceString = sourceWithMarks;
@@ -479,7 +513,7 @@ public final class DebuggerTester implements AutoCloseable {
         final Source source = Source.newBuilder(language, sourceString, "testMisplacedLineBreakpoint." + language).buildLiteral();
         com.oracle.truffle.api.source.Source tsource = DebuggerTester.getSourceImpl(source);
         for (int l = 1; l < source.getLineCount(); l++) {
-            if (!bps.containsKey(l)) {
+            if ((positionPredicate == null || positionPredicate.testLine(l)) && !bps.containsKey(l)) {
                 Assert.fail("Line " + l + " is missing.");
             }
         }
@@ -614,13 +648,13 @@ public final class DebuggerTester implements AutoCloseable {
                                 }).build());
 
                 expectSuspended((SuspendedEvent event) -> {
-                    Assert.assertEquals("Expected " + bp[0] + " => " + bp[1] + ", resolved at " + resolvedIndexPtr[0],
+                    Assert.assertEquals("B" + bpId + ": Expected " + bp[0] + " => " + bp[1] + ", resolved at " + resolvedIndexPtr[0],
                                     bp[1], event.getSourceSection().getCharIndex() + 1);
                     Assert.assertSame(breakpoint, event.getBreakpoints().iterator().next());
                     event.prepareContinue();
                 });
                 expectDone();
-                Assert.assertEquals("Expected resolved " + bp[0] + " => " + bp[1],
+                Assert.assertEquals("B" + bpId + ": Expected resolved " + bp[0] + " => " + bp[1],
                                 bp[1], resolvedIndexPtr[0]);
             }
         }
@@ -637,6 +671,24 @@ public final class DebuggerTester implements AutoCloseable {
      * @since 0.33
      */
     public void assertBreakpointsBreakEverywhere(Source source) {
+        assertBreakpointsBreakEverywhere(source, null);
+    }
+
+    /**
+     * Utility method that tests if a breakpoint submitted to any location permitted by the
+     * {@link PositionPredicate} in the source code suspends the execution. A two-pass test is
+     * performed. In the first pass, line breakpoints are submitted to every testable line. In the
+     * second pass, breakpoints are submitted to every testable line and column combination, even
+     * outside the source scope, if permitted by the {@link PositionPredicate}. It is expected that
+     * the breakpoints resolve to a nearest suspendable location and it is checked that all
+     * submitted breakpoints are hit.
+     *
+     * @param source a source to evaluate with breakpoints submitted everywhere
+     * @param positionPredicate <code>null</code> to submit breakpoints everywhere, or a predicate
+     *            that limits the testable positions.
+     * @since 19.3.0
+     */
+    public void assertBreakpointsBreakEverywhere(Source source, PositionPredicate positionPredicate) {
         int numLines = source.getLineCount();
         int numColumns = 0;
         for (int i = 1; i <= numLines; i++) {
@@ -658,8 +710,10 @@ public final class DebuggerTester implements AutoCloseable {
         };
         // Test all line breakpoints
         for (int l = 1; l < (numLines + 5); l++) {
-            Breakpoint breakpoint = Breakpoint.newBuilder(tsource).lineIs(l).oneShot().resolveListener(resolveListener).build();
-            breakpoints.add(breakpoint);
+            if (positionPredicate == null || positionPredicate.testLine(l)) {
+                Breakpoint breakpoint = Breakpoint.newBuilder(tsource).lineIs(l).oneShot().resolveListener(resolveListener).build();
+                breakpoints.add(breakpoint);
+            }
         }
         assertBreakpoints(source, breakpoints, breakpointsResolved, breakpointsHit);
 
@@ -670,8 +724,10 @@ public final class DebuggerTester implements AutoCloseable {
         // Test all line/column breakpoints
         for (int l = 1; l < (numLines + 5); l++) {
             for (int c = 1; c < (numColumns + 5); c++) {
-                Breakpoint breakpoint = Breakpoint.newBuilder(tsource).lineIs(l).columnIs(c).oneShot().resolveListener(resolveListener).build();
-                breakpoints.add(breakpoint);
+                if (positionPredicate == null || positionPredicate.testLineColumn(l, c)) {
+                    Breakpoint breakpoint = Breakpoint.newBuilder(tsource).lineIs(l).columnIs(c).oneShot().resolveListener(resolveListener).build();
+                    breakpoints.add(breakpoint);
+                }
             }
         }
         assertBreakpoints(source, breakpoints, breakpointsResolved, breakpointsHit);
@@ -826,14 +882,36 @@ public final class DebuggerTester implements AutoCloseable {
 
     private static final class ExecutingSource {
 
-        private final Source source;
+        private final Function<Context, Value> function;
         private Throwable error;
         private String returnValue;
 
-        ExecutingSource(Source source) {
-            this.source = source;
+        ExecutingSource(Function<Context, Value> function) {
+            this.function = function;
         }
 
+    }
+
+    /**
+     * Predicate of testable positions.
+     *
+     * @since 19.3.0
+     */
+    public interface PositionPredicate {
+
+        /**
+         * Whether to test at the line.
+         *
+         * @since 19.3.0
+         */
+        boolean testLine(int line);
+
+        /**
+         * Whether to test at the line and column position.
+         *
+         * @since 19.3.0
+         */
+        boolean testLineColumn(int line, int column);
     }
 
     class ExecutingLoop implements Runnable {
@@ -869,7 +947,7 @@ public final class DebuggerTester implements AutoCloseable {
                     ExecutingSource s = executingSource;
                     try {
                         trace("Start executing " + this);
-                        s.returnValue = context.eval(s.source).toString();
+                        s.returnValue = s.function.apply(context).toString();
                         trace("Done executing " + this);
                     } catch (Throwable e) {
                         s.error = e;

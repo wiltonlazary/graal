@@ -34,25 +34,36 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.jar.JarFile;
+import org.graalvm.component.installer.DownloadURLIterable.DownloadURLParam;
 import org.graalvm.component.installer.commands.MockStorage;
+import org.graalvm.component.installer.jar.JarMetaLoader;
+import org.graalvm.component.installer.model.CatalogContents;
 import org.graalvm.component.installer.model.ComponentInfo;
 import org.graalvm.component.installer.model.ComponentRegistry;
+import org.graalvm.component.installer.model.ComponentStorage;
+import org.graalvm.component.installer.os.DefaultFileOperations;
+import org.graalvm.component.installer.os.WindowsFileOperations;
 import org.graalvm.component.installer.persist.ComponentPackageLoader;
+import org.graalvm.component.installer.remote.FileDownloader;
 import org.graalvm.component.installer.persist.test.Handler;
+import org.graalvm.component.installer.remote.RemoteComponentParam;
+import org.graalvm.component.installer.remote.CatalogIterable.CatalogItemParam;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.rules.ExpectedException;
 import org.junit.rules.TemporaryFolder;
 
-public class CommandTestBase extends TestBase implements CommandInput {
+public class CommandTestBase extends TestBase implements CommandInput, SoftwareChannel, ComponentCatalog.DownloadInterceptor {
     @Rule public ExpectedException exception = ExpectedException.none();
     protected JarFile componentJarFile;
     @Rule public TemporaryFolder folder = new TemporaryFolder();
 
     protected Path targetPath;
 
+    protected FileOperations fileOps;
     protected MockStorage storage;
-    protected ComponentRegistry registry;
+    protected MockStorage catalogStorage;
+    protected ComponentCatalog registry;
     protected ComponentRegistry localRegistry;
 
     protected List<File> files = new ArrayList<>();
@@ -60,13 +71,18 @@ public class CommandTestBase extends TestBase implements CommandInput {
     protected List<String> textParams = new ArrayList<>();
     protected Map<String, String> options = new HashMap<>();
 
+    protected Map<String, String> propParameters = new HashMap<>();
+    protected Map<String, String> envParameters = new HashMap<>();
+
     ComponentParam param;
-    CatalogIterable.RemoteComponentParam rparam;
+    RemoteComponentParam rparam;
     URL url;
     URL clu;
     ComponentInfo info;
 
     public CommandTestBase() {
+        fileOps = SystemUtils.isWindows() ? new WindowsFileOperations() : new DefaultFileOperations();
+        fileOps.init(this);
     }
 
     protected void initRemoteComponent(String relativeJar, String u, String disp, String spec) throws IOException {
@@ -76,12 +92,12 @@ public class CommandTestBase extends TestBase implements CommandInput {
 
         File f = dataFile(relativeJar).toFile();
         JarFile jf = new JarFile(f, false);
-        ComponentPackageLoader cpl = new ComponentPackageLoader(jf, this);
+        ComponentPackageLoader cpl = new JarMetaLoader(jf, this);
         info = cpl.getComponentInfo();
         // unknown in catalog metadata
         info.setLicensePath(null);
         info.setRemoteURL(url);
-        param = rparam = new CatalogIterable.RemoteComponentParam(info, disp, spec, this, false);
+        param = rparam = new CatalogItemParam(this, info, disp, spec, this, false);
     }
 
     protected void initURLComponent(String relativeJar, String spec) throws IOException {
@@ -91,52 +107,94 @@ public class CommandTestBase extends TestBase implements CommandInput {
 
         File f = dataFile(relativeJar).toFile();
         JarFile jf = new JarFile(f, false);
-        ComponentPackageLoader cpl = new ComponentPackageLoader(jf, this);
+        ComponentPackageLoader cpl = new JarMetaLoader(jf, this);
         info = cpl.getComponentInfo();
         // unknown in catalog metadata
         info.setLicensePath(null);
         info.setRemoteURL(url);
-        param = rparam = new CatalogIterable.RemoteComponentParam(url, spec, spec, this, false);
+        param = rparam = new DownloadURLParam(url, spec, spec, this, false);
     }
 
-    protected Iterable<ComponentParam> paramIterable;
+    protected ComponentIterable paramIterable;
+
+    boolean verifyJars;
 
     @Override
-    public Iterable<ComponentParam> existingFiles() throws FailedOperationException {
+    public FileOperations getFileOperations() {
+        return fileOps;
+    }
+
+    protected class CompIterableImpl implements ComponentIterable {
+        @Override
+        public void setVerifyJars(boolean verify) {
+            verifyJars = verify;
+        }
+
+        @Override
+        public ComponentParam createParam(String cmdString, ComponentInfo nfo) {
+            return null;
+        }
+
+        @Override
+        public Iterator<ComponentParam> iterator() {
+            return new Iterator<ComponentParam>() {
+                private Iterator<ComponentParam> pit = components.iterator();
+                private Iterator<ComponentParam> fit;
+                {
+                    FileIterable ff = new FileIterable(CommandTestBase.this, CommandTestBase.this);
+                    ff.setVerifyJars(verifyJars);
+                    fit = ff.iterator();
+                }
+
+                @Override
+                public boolean hasNext() {
+                    return fit.hasNext() || pit.hasNext();
+                }
+
+                @Override
+                public ComponentParam next() {
+                    ComponentParam p = null;
+
+                    if (pit.hasNext()) {
+                        p = pit.next();
+                        // discard one parameter from files:
+                        files.remove(0);
+                        if (p != null) {
+                            return p;
+                        }
+                    }
+                    return fit.next();
+                }
+
+            };
+        }
+
+        @Override
+        public ComponentIterable matchVersion(Version.Match m) {
+            return this;
+        }
+
+        @Override
+        public ComponentIterable allowIncompatible() {
+            return this;
+        }
+    }
+
+    protected ComponentIterable iterableInstance;
+
+    protected ComponentIterable createComponentIterable() {
+        if (iterableInstance != null) {
+            return iterableInstance;
+        }
+        return new CompIterableImpl();
+    }
+
+    @Override
+    public ComponentIterable existingFiles() throws FailedOperationException {
         if (paramIterable != null) {
             return paramIterable;
         }
-        return new Iterable<ComponentParam>() {
-            @Override
-            public Iterator<ComponentParam> iterator() {
-                return new Iterator<ComponentParam>() {
-                    private Iterator<ComponentParam> fit = new FileIterable(CommandTestBase.this, CommandTestBase.this).iterator();
-                    private Iterator<ComponentParam> pit = components.iterator();
-
-                    @Override
-                    public boolean hasNext() {
-                        return fit.hasNext() || pit.hasNext();
-                    }
-
-                    @Override
-                    public ComponentParam next() {
-                        ComponentParam p = null;
-
-                        if (pit.hasNext()) {
-                            p = pit.next();
-                            // discard one parameter from files:
-                            files.remove(0);
-                            if (p != null) {
-                                return p;
-                            }
-                        }
-                        return fit.next();
-                    }
-
-                };
-            }
-
-        };
+        return createComponentIterable();
     }
 
     @Override
@@ -156,6 +214,14 @@ public class CommandTestBase extends TestBase implements CommandInput {
     }
 
     @Override
+    public String peekParameter() {
+        if (!textParams.isEmpty()) {
+            return textParams.get(0);
+        }
+        return files.isEmpty() ? null : files.get(0).toString();
+    }
+
+    @Override
     public boolean hasParameter() {
         return (!textParams.isEmpty() || !files.isEmpty());
     }
@@ -166,12 +232,18 @@ public class CommandTestBase extends TestBase implements CommandInput {
     }
 
     @Override
-    public ComponentRegistry getRegistry() {
+    public ComponentCatalog getRegistry() {
+        if (registry == null) {
+            registry = getCatalogFactory().createComponentCatalog(this, getLocalRegistry());
+        }
         return registry;
     }
 
     @Override
     public ComponentRegistry getLocalRegistry() {
+        if (localRegistry == null) {
+            localRegistry = new ComponentRegistry(this, storage);
+        }
         return localRegistry;
     }
 
@@ -184,6 +256,42 @@ public class CommandTestBase extends TestBase implements CommandInput {
     public void setUp() throws Exception {
         targetPath = folder.newFolder("inst").toPath();
         storage = new MockStorage();
-        localRegistry = registry = new ComponentRegistry(this, storage);
+        catalogStorage = new MockStorage();
+        fileOps.setRootPath(targetPath);
     }
+
+    @Override
+    public FileDownloader processDownloader(ComponentInfo ci, FileDownloader dn) {
+        return dn;
+    }
+
+    @Override
+    public FileDownloader configureDownloader(ComponentInfo ci, FileDownloader dn) {
+        return dn;
+    }
+
+    @Override
+    public ComponentStorage getStorage() {
+        return catalogStorage;
+    }
+
+    @Override
+    public CatalogFactory getCatalogFactory() {
+        if (registry != null) {
+            return (a, b) -> registry;
+        } else {
+            return (a, b) -> new CatalogContents(this, catalogStorage, getLocalRegistry());
+        }
+    }
+
+    @Override
+    public String getParameter(String key, boolean cmdLine) {
+        return (cmdLine ? propParameters : envParameters).get(key);
+    }
+
+    @Override
+    public Map<String, String> parameters(boolean cmdLine) {
+        return (cmdLine ? propParameters : envParameters);
+    }
+
 }

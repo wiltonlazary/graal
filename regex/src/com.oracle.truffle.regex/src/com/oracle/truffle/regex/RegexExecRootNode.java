@@ -1,66 +1,95 @@
 /*
- * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.regex;
 
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.regex.result.RegexResult;
-import com.oracle.truffle.regex.tregex.nodes.input.InputCharAtNode;
 import com.oracle.truffle.regex.tregex.nodes.input.InputLengthNode;
-import com.oracle.truffle.regex.util.NumberConversion;
+import com.oracle.truffle.regex.tregex.nodes.input.InputReadNode;
 
 public abstract class RegexExecRootNode extends RegexBodyNode {
 
-    @Child private InputLengthNode inputLengthNode = InputLengthNode.create();
-    @Child private InputCharAtNode inputCharAtNode = InputCharAtNode.create();
+    private final boolean mustCheckUnicodeSurrogates;
+    private @Child InputLengthNode lengthNode;
+    private @Child InputReadNode charAtNode;
 
-    public RegexExecRootNode(RegexLanguage language, RegexSource source) {
+    public RegexExecRootNode(RegexLanguage language, RegexSource source, boolean mustCheckUnicodeSurrogates) {
         super(language, source);
+        this.mustCheckUnicodeSurrogates = mustCheckUnicodeSurrogates;
     }
 
     @Override
     public final RegexResult execute(VirtualFrame frame) {
         Object[] args = frame.getArguments();
-        assert args.length == 3;
+        assert args.length == 2;
+        Object input = args[0];
+        int fromIndex = (int) args[1];
+        return execute(input, adjustFromIndex(fromIndex, input));
+    }
 
-        RegexObject regex = (RegexObject) args[0];
-        Object input = args[1];
-        int fromIndex = NumberConversion.intValue((Number) args[2]);
-        if (sourceIsUnicode(regex) && fromIndex > 0 && fromIndex < inputLengthNode.execute(input)) {
-            if (Character.isLowSurrogate(inputCharAtNode.execute(input, fromIndex)) &&
-                            Character.isHighSurrogate(inputCharAtNode.execute(input, fromIndex - 1))) {
-                fromIndex = fromIndex - 1;
+    private int adjustFromIndex(int fromIndex, Object input) {
+        if (mustCheckUnicodeSurrogates && fromIndex > 0 && fromIndex < inputLength(input)) {
+            if (Character.isLowSurrogate((char) inputRead(input, fromIndex)) && Character.isHighSurrogate((char) inputRead(input, fromIndex - 1))) {
+                return fromIndex - 1;
             }
         }
-
-        return execute(frame, regex, input, fromIndex);
+        return fromIndex;
     }
 
-    protected abstract RegexResult execute(VirtualFrame frame, RegexObject regex, Object input, int fromIndex);
-
-    @SuppressWarnings("unused")
-    protected boolean sourceIsUnicode(RegexObject regex) {
-        return getSource().getFlags().isUnicode();
+    public int inputLength(Object input) {
+        if (lengthNode == null) {
+            CompilerDirectives.transferToInterpreterAndInvalidate();
+            lengthNode = insert(InputLengthNode.create());
+        }
+        return lengthNode.execute(input);
     }
+
+    public int inputRead(Object input, int i) {
+        if (charAtNode == null) {
+            CompilerDirectives.transferToInterpreterAndInvalidate();
+            charAtNode = insert(InputReadNode.create());
+        }
+        return charAtNode.execute(input, i);
+    }
+
+    protected abstract RegexResult execute(Object input, int fromIndex);
 }

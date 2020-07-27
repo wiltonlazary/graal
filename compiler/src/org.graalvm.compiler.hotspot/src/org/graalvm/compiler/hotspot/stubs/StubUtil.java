@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,13 +24,8 @@
  */
 package org.graalvm.compiler.hotspot.stubs;
 
-import static jdk.vm.ci.meta.DeoptimizationReason.RuntimeConstraint;
-import static org.graalvm.compiler.hotspot.GraalHotSpotVMConfigBase.INJECTED_VMCONFIG;
-import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.clearPendingException;
-import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.getPendingException;
-import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.getAndClearObjectResult;
-import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.loadHubIntrinsic;
-import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.verifyOops;
+import static org.graalvm.compiler.hotspot.meta.HotSpotForeignCallDescriptor.Reexecutability.REEXECUTABLE;
+import static org.graalvm.compiler.hotspot.meta.HotSpotForeignCallDescriptor.Transition.SAFEPOINT;
 import static org.graalvm.compiler.replacements.nodes.CStringConstant.cstring;
 
 import java.lang.reflect.Method;
@@ -44,19 +39,13 @@ import org.graalvm.compiler.core.common.spi.ForeignCallDescriptor;
 import org.graalvm.compiler.graph.Node.ConstantNodeParameter;
 import org.graalvm.compiler.graph.Node.NodeIntrinsic;
 import org.graalvm.compiler.hotspot.GraalHotSpotVMConfig;
-import org.graalvm.compiler.hotspot.nodes.DeoptimizeCallerNode;
+import org.graalvm.compiler.hotspot.meta.HotSpotForeignCallDescriptor;
 import org.graalvm.compiler.hotspot.nodes.StubForeignCallNode;
 import org.graalvm.compiler.hotspot.nodes.VMErrorNode;
-import org.graalvm.compiler.hotspot.word.KlassPointer;
-import org.graalvm.compiler.nodes.PiNode;
-import org.graalvm.compiler.nodes.SnippetAnchorNode;
-import org.graalvm.compiler.nodes.extended.GuardingNode;
-import org.graalvm.compiler.replacements.Log;
+import org.graalvm.compiler.hotspot.replacements.Log;
 import org.graalvm.compiler.word.Word;
-import org.graalvm.word.Pointer;
+import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.WordFactory;
-
-import jdk.vm.ci.meta.DeoptimizationAction;
 
 //JaCoCo Exclude
 
@@ -65,11 +54,14 @@ import jdk.vm.ci.meta.DeoptimizationAction;
  */
 public class StubUtil {
 
-    public static final ForeignCallDescriptor VM_MESSAGE_C = newDescriptor(StubUtil.class, "vmMessageC", void.class, boolean.class, Word.class, long.class, long.class, long.class);
+    public static final HotSpotForeignCallDescriptor VM_MESSAGE_C = newDescriptor(SAFEPOINT, REEXECUTABLE, null, StubUtil.class, "vmMessageC", void.class, boolean.class, Word.class, long.class,
+                    long.class, long.class);
 
-    public static ForeignCallDescriptor newDescriptor(Class<?> stubClass, String name, Class<?> resultType, Class<?>... argumentTypes) {
-        ForeignCallDescriptor d = new ForeignCallDescriptor(name, resultType, argumentTypes);
-        assert descriptorFor(stubClass, name).equals(d) : descriptorFor(stubClass, name) + " != " + d;
+    public static HotSpotForeignCallDescriptor newDescriptor(HotSpotForeignCallDescriptor.Transition safepoint, HotSpotForeignCallDescriptor.Reexecutability reexecutable,
+                    LocationIdentity killLocation,
+                    Class<?> stubClass, String name, Class<?> resultType, Class<?>... argumentTypes) {
+        HotSpotForeignCallDescriptor d = new HotSpotForeignCallDescriptor(safepoint, reexecutable, killLocation, name, resultType, argumentTypes);
+        assert descriptorFor(stubClass, name, resultType, argumentTypes);
         return d;
     }
 
@@ -78,14 +70,14 @@ public class StubUtil {
      * {@code stubClass} and returns a {@link ForeignCallDescriptor} based on its signature and the
      * value of {@code hasSideEffect}.
      */
-    private static ForeignCallDescriptor descriptorFor(Class<?> stubClass, String name) {
+    private static boolean descriptorFor(Class<?> stubClass, String name, Class<?> resultType, Class<?>[] argumentTypes) {
         Method found = null;
         for (Method method : stubClass.getDeclaredMethods()) {
             if (Modifier.isStatic(method.getModifiers()) && method.getAnnotation(NodeIntrinsic.class) != null && method.getName().equals(name)) {
                 if (method.getAnnotation(NodeIntrinsic.class).value().equals(StubForeignCallNode.class)) {
                     assert found == null : "found more than one foreign call named " + name + " in " + stubClass;
-                    assert method.getParameterTypes().length != 0 && method.getParameterTypes()[0] == ForeignCallDescriptor.class : "first parameter of foreign call '" + name + "' in " + stubClass +
-                                    " must be of type " + ForeignCallDescriptor.class.getSimpleName();
+                    assert method.getParameterTypes().length != 0 && method.getParameterTypes()[0] == ForeignCallDescriptor.class : "first parameter of foreign call '" + name + "' in " +
+                                    stubClass + " must be of type " + ForeignCallDescriptor.class.getSimpleName();
                     found = method;
                 }
             }
@@ -93,16 +85,9 @@ public class StubUtil {
         assert found != null : "could not find foreign call named " + name + " in " + stubClass;
         List<Class<?>> paramList = Arrays.asList(found.getParameterTypes());
         Class<?>[] cCallTypes = paramList.subList(1, paramList.size()).toArray(new Class<?>[paramList.size() - 1]);
-        return new ForeignCallDescriptor(name, found.getReturnType(), cCallTypes);
-    }
-
-    public static void handlePendingException(Word thread, boolean shouldClearException, boolean isObjectResult) {
-        if ((shouldClearException && clearPendingException(thread) != null) || (!shouldClearException && getPendingException(thread) != null)) {
-            if (isObjectResult) {
-                getAndClearObjectResult(thread);
-            }
-            DeoptimizeCallerNode.deopt(DeoptimizationAction.None, RuntimeConstraint);
-        }
+        assert resultType.equals(found.getReturnType()) : found;
+        assert Arrays.equals(cCallTypes, argumentTypes) : found;
+        return true;
     }
 
     /**
@@ -229,51 +214,6 @@ public class StubUtil {
      */
     public static void fatal(String format, long v1, long v2, long v3) {
         vmMessageC(VM_MESSAGE_C, true, cstring(format), v1, v2, v3);
-    }
-
-    /**
-     * Verifies that a given object value is well formed if {@code -XX:+VerifyOops} is enabled.
-     */
-    public static Object verifyObject(Object object) {
-        if (verifyOops(INJECTED_VMCONFIG)) {
-            Word verifyOopCounter = WordFactory.unsigned(verifyOopCounterAddress(INJECTED_VMCONFIG));
-            verifyOopCounter.writeInt(0, verifyOopCounter.readInt(0) + 1);
-
-            Pointer oop = Word.objectToTrackedPointer(object);
-            if (object != null) {
-                GuardingNode anchorNode = SnippetAnchorNode.anchor();
-                // make sure object is 'reasonable'
-                if (!oop.and(WordFactory.unsigned(verifyOopMask(INJECTED_VMCONFIG))).equal(WordFactory.unsigned(verifyOopBits(INJECTED_VMCONFIG)))) {
-                    fatal("oop not in heap: %p", oop.rawValue());
-                }
-
-                KlassPointer klass = loadHubIntrinsic(PiNode.piCastNonNull(object, anchorNode));
-                if (klass.isNull()) {
-                    fatal("klass for oop %p is null", oop.rawValue());
-                }
-            }
-        }
-        return object;
-    }
-
-    @Fold
-    static long verifyOopCounterAddress(@InjectedParameter GraalHotSpotVMConfig config) {
-        return config.verifyOopCounterAddress;
-    }
-
-    @Fold
-    static long verifyOopMask(@InjectedParameter GraalHotSpotVMConfig config) {
-        return config.verifyOopMask;
-    }
-
-    @Fold
-    static long verifyOopBits(@InjectedParameter GraalHotSpotVMConfig config) {
-        return config.verifyOopBits;
-    }
-
-    @Fold
-    static int hubOffset(@InjectedParameter GraalHotSpotVMConfig config) {
-        return config.hubOffset;
     }
 
     /**

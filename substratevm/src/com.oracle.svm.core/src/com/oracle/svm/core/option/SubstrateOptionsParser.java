@@ -24,9 +24,15 @@
  */
 package com.oracle.svm.core.option;
 
+// Checkstyle: allow reflection
+
 import java.io.PrintStream;
+import java.lang.reflect.Array;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map.Entry;
 import java.util.Set;
@@ -36,12 +42,16 @@ import java.util.function.Predicate;
 
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.compiler.core.CompilationWrapper;
+import org.graalvm.compiler.debug.DebugOptions;
 import org.graalvm.compiler.options.OptionDescriptor;
 import org.graalvm.compiler.options.OptionKey;
 import org.graalvm.compiler.options.OptionType;
 import org.graalvm.compiler.options.OptionsParser;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.util.InterruptImageBuilding;
 import com.oracle.svm.core.util.VMError;
 
@@ -53,17 +63,27 @@ public class SubstrateOptionsParser {
 
     public static final String HOSTED_OPTION_PREFIX = "-H:";
     public static final String RUNTIME_OPTION_PREFIX = "-R:";
+    public static final int PRINT_OPTION_INDENTATION = 2;
+    public static final int PRINT_OPTION_WIDTH = 45;
+    public static final int PRINT_OPTION_WRAP_WIDTH = 120;
 
     /**
      * The result of {@link SubstrateOptionsParser#parseOption}.
      */
     static final class OptionParseResult {
         private final EnumSet<OptionType> printFlags;
+        private final Set<String> optionNameFilter;
         private final String error;
+        private static final String EXTRA_HELP_OPTIONS_WILDCARD = "*";
 
-        private OptionParseResult(EnumSet<OptionType> printFlags, String error) {
+        private OptionParseResult(EnumSet<OptionType> printFlags, String error, Set<String> optionNameFilter) {
             this.printFlags = printFlags;
             this.error = error;
+            this.optionNameFilter = optionNameFilter;
+        }
+
+        private OptionParseResult(EnumSet<OptionType> printFlags, String error) {
+            this(printFlags, error, new HashSet<>());
         }
 
         static OptionParseResult error(String message) {
@@ -78,12 +98,25 @@ public class SubstrateOptionsParser {
             return new OptionParseResult(selectedOptionTypes, null);
         }
 
+        static OptionParseResult printFlagsWithExtraHelp(Set<String> optionNameFilter) {
+            Set<String> optionNames = optionNameFilter;
+            if (optionNames.contains(EXTRA_HELP_OPTIONS_WILDCARD)) {
+                optionNames = new HashSet<>();
+                optionNames.add(EXTRA_HELP_OPTIONS_WILDCARD);
+            }
+            return new OptionParseResult(EnumSet.noneOf(OptionType.class), null, optionNames);
+        }
+
         boolean printFlags() {
             return !printFlags.isEmpty();
         }
 
+        boolean printFlagsWithExtraHelp() {
+            return !optionNameFilter.isEmpty();
+        }
+
         public boolean isValid() {
-            return printFlags.isEmpty() && error == null;
+            return printFlags.isEmpty() && optionNameFilter.isEmpty() && error == null;
         }
 
         public String getError() {
@@ -91,8 +124,17 @@ public class SubstrateOptionsParser {
         }
 
         private boolean matchesFlags(OptionDescriptor d, boolean svmOption) {
-            boolean showAll = printFlags.equals(EnumSet.allOf(OptionType.class));
-            return showAll || svmOption && printFlags.contains(d.getOptionType());
+            if (!printFlags.isEmpty()) {
+                boolean showAll = printFlags.equals(EnumSet.allOf(OptionType.class));
+                return showAll || svmOption && printFlags.contains(d.getOptionType());
+            }
+            if (!optionNameFilter.isEmpty()) {
+                if (optionNameFilter.contains(EXTRA_HELP_OPTIONS_WILDCARD) && !d.getExtraHelp().isEmpty()) {
+                    return true;
+                }
+                return optionNameFilter.contains(d.getName());
+            }
+            return false;
         }
 
         boolean matchesFlagsRuntime(OptionDescriptor d) {
@@ -111,6 +153,7 @@ public class SubstrateOptionsParser {
     public enum BooleanOptionFormat {
         NAME_VALUE("<name>=<value>"),
         PLUS_MINUS("+/-<name>");
+
         BooleanOptionFormat(String help) {
             this.help = help;
         }
@@ -139,7 +182,7 @@ public class SubstrateOptionsParser {
             if (eqIndex != -1) {
                 return OptionParseResult.error("Cannot mix +/- with <name>=<value> format: '" + optionPrefix + option + "'");
             }
-            optionName = option.substring(1, eqIndex == -1 ? option.length() : eqIndex);
+            optionName = option.substring(1, option.length());
             if (booleanOptionFormat == BooleanOptionFormat.NAME_VALUE) {
                 return OptionParseResult.error("Option '" + optionName + "' must use <name>=<value> format, not +/- prefix");
             }
@@ -185,36 +228,26 @@ public class SubstrateOptionsParser {
             if (valueString == null) {
                 return OptionParseResult.error("Missing value for option '" + optionName + "'");
             }
-
             try {
-                if (optionType == Integer.class) {
-                    long longValue = parseLong(valueString);
-                    if ((int) longValue != longValue) {
-                        return OptionParseResult.error("Wrong value for option '" + optionName + "': '" + valueString + "' is not a valid number");
-                    }
-                    value = (int) longValue;
-                } else if (optionType == Long.class) {
-                    value = parseLong(valueString);
-                } else if (optionType == String.class) {
-                    value = valueString;
-                } else if (optionType == Double.class) {
-                    value = Double.parseDouble(valueString);
-                } else if (optionType == Boolean.class) {
-                    if (valueString.equals("true")) {
-                        value = true;
-                    } else if (valueString.equals("false")) {
-                        value = false;
+                if (optionType.isArray()) {
+                    OptionKey<?> optionKey = desc.getOptionKey();
+                    Object addValue = parseValue(optionType.getComponentType(), optionName, valueString);
+                    Object previous = valuesMap.get(optionKey);
+                    if (previous == null) {
+                        value = Array.newInstance(optionType.getComponentType(), 1);
+                        ((Object[]) value)[0] = addValue;
                     } else {
-                        return OptionParseResult.error("Boolean option '" + optionName + "' must have value 'true' or 'false'");
+                        Object[] previousValues = (Object[]) previous;
+                        value = Arrays.copyOf(previousValues, previousValues.length + 1);
+                        ((Object[]) value)[previousValues.length] = addValue;
                     }
-                } else if (optionType == CompilationWrapper.ExceptionAction.class) {
-                    value = CompilationWrapper.ExceptionAction.valueOf(valueString);
                 } else {
-                    throw VMError.shouldNotReachHere("Unsupported option value class: " + optionType.getSimpleName());
+                    value = parseValue(optionType, optionName, valueString);
                 }
             } catch (NumberFormatException ex) {
                 return OptionParseResult.error("Invalid value for option '" + optionName + "': '" + valueString + "' is not a valid number");
             }
+
         } else {
             if (optionType != Boolean.class) {
                 return OptionParseResult.error("Non-boolean option '" + optionName + "' can not use +/- prefix. Use '" + optionName + "=<value>' format");
@@ -232,7 +265,7 @@ public class SubstrateOptionsParser {
                 selectedOptionTypes = EnumSet.noneOf(OptionType.class);
                 String enumString = null;
                 try {
-                    String[] enumStrings = optionValue.split(",");
+                    String[] enumStrings = SubstrateUtil.split(optionValue, ",");
                     for (int i = 0; i < enumStrings.length; i++) {
                         enumString = enumStrings[i];
                         selectedOptionTypes.add(OptionType.valueOf(enumString));
@@ -254,8 +287,46 @@ public class SubstrateOptionsParser {
             }
             return OptionParseResult.printFlags(selectedOptionTypes);
         }
+        if (SubstrateOptions.PrintFlagsWithExtraHelp.getName().equals(optionName)) {
+            String optionValue = (String) value;
+            String[] optionNames = SubstrateUtil.split(optionValue, ",");
+            HashSet<String> selectedOptionNames = new HashSet<>(Arrays.asList(optionNames));
+            return OptionParseResult.printFlagsWithExtraHelp(selectedOptionNames);
+        }
 
         return OptionParseResult.correct();
+    }
+
+    static Object parseValue(Class<?> optionType, String optionName, String valueString) throws NumberFormatException {
+        Object value;
+        if (optionType == Integer.class) {
+            long longValue = parseLong(valueString);
+            if ((int) longValue != longValue) {
+                return OptionParseResult.error("Wrong value for option '" + optionName + "': '" + valueString + "' is not a valid number");
+            }
+            value = (int) longValue;
+        } else if (optionType == Long.class) {
+            value = parseLong(valueString);
+        } else if (optionType == String.class) {
+            value = valueString;
+        } else if (optionType == Double.class) {
+            value = parseDouble(valueString);
+        } else if (optionType == Boolean.class) {
+            if (valueString.equals("true")) {
+                value = true;
+            } else if (valueString.equals("false")) {
+                value = false;
+            } else {
+                return OptionParseResult.error("Boolean option '" + optionName + "' must have value 'true' or 'false'");
+            }
+        } else if (optionType == CompilationWrapper.ExceptionAction.class) {
+            value = CompilationWrapper.ExceptionAction.valueOf(valueString);
+        } else if (optionType == DebugOptions.PrintGraphTarget.class) {
+            value = DebugOptions.PrintGraphTarget.valueOf(valueString);
+        } else {
+            throw VMError.shouldNotReachHere("Unsupported option value class: " + optionType.getSimpleName());
+        }
+        return value;
     }
 
     /**
@@ -277,8 +348,8 @@ public class SubstrateOptionsParser {
         }
 
         OptionParseResult optionParseResult = SubstrateOptionsParser.parseOption(options, arg.substring(optionPrefix.length()), valuesMap, optionPrefix, booleanOptionFormat);
-        if (optionParseResult.printFlags()) {
-            SubstrateOptionsParser.printFlags(optionParseResult::matchesFlagsHosted, options, optionPrefix, out);
+        if (optionParseResult.printFlags() || optionParseResult.printFlagsWithExtraHelp()) {
+            SubstrateOptionsParser.printFlags(optionParseResult::matchesFlagsHosted, options, optionPrefix, out, optionParseResult.printFlagsWithExtraHelp());
             throw new InterruptImageBuilding();
         }
         if (!optionParseResult.isValid()) {
@@ -309,15 +380,16 @@ public class SubstrateOptionsParser {
         return sb.toString();
     }
 
-    private static void printOption(PrintStream out, String option, String description) {
-        printOption(out::println, option, description, 2, 45, 120);
+    private static void printOption(PrintStream out, String option, String description, int wrap) {
+        printOption(out::println, option, description, PRINT_OPTION_INDENTATION, PRINT_OPTION_WIDTH, wrap);
     }
 
     public static void printOption(Consumer<String> println, String option, String description, int indentation, int optionWidth, int wrapWidth) {
         String indent = spaces(indentation);
-        String desc = wrap(description != null ? description : "", wrapWidth);
+        String desc = description != null ? description : "";
+        desc = wrapWidth > 0 ? wrap(desc, wrapWidth) : desc;
         String nl = System.lineSeparator();
-        String[] descLines = desc.split(nl);
+        String[] descLines = SubstrateUtil.split(desc, nl);
         if (option.length() >= optionWidth && description != null) {
             println.accept(indent + option + nl + indent + spaces(optionWidth) + descLines[0]);
         } else {
@@ -328,40 +400,89 @@ public class SubstrateOptionsParser {
         }
     }
 
-    static void printFlags(Predicate<OptionDescriptor> filter, SortedMap<String, OptionDescriptor> sortedOptions, String prefix, PrintStream out) {
+    static void printFlags(Predicate<OptionDescriptor> filter, SortedMap<String, OptionDescriptor> sortedOptions, String prefix, PrintStream out, boolean verbose) {
         for (Entry<String, OptionDescriptor> entry : sortedOptions.entrySet()) {
             OptionDescriptor descriptor = entry.getValue();
             if (!filter.test(descriptor)) {
                 continue;
             }
-            String helpMsg = descriptor.getHelp();
+            String helpMsg = verbose && !descriptor.getExtraHelp().isEmpty() ? "" : descriptor.getHelp();
             int helpLen = helpMsg.length();
             if (helpLen > 0 && helpMsg.charAt(helpLen - 1) != '.') {
                 helpMsg += '.';
             }
+            boolean stringifiedArrayValue = false;
+            Object defaultValue = descriptor.getOptionKey().getDefaultValue();
+            if (defaultValue != null && defaultValue.getClass().isArray()) {
+                Object[] defaultValues = (Object[]) defaultValue;
+                if (defaultValues.length == 1) {
+                    defaultValue = defaultValues[0];
+                } else {
+                    List<String> stringList = new ArrayList<>();
+                    String optionPrefix = prefix + entry.getKey() + "=";
+                    for (Object rawValue : defaultValues) {
+                        String value;
+                        if (rawValue instanceof String) {
+                            value = '"' + String.valueOf(rawValue) + '"';
+                        } else {
+                            value = String.valueOf(rawValue);
+                        }
+                        stringList.add(optionPrefix + value);
+                    }
+                    if (helpLen != 0) {
+                        helpMsg += ' ';
+                    }
+                    helpMsg += "Default: ";
+                    if (stringList.isEmpty()) {
+                        helpMsg += "None";
+                    } else {
+                        helpMsg += String.join(" ", stringList);
+                    }
+                    stringifiedArrayValue = true;
+                }
+            }
+            String verboseHelp = "";
+            if (verbose) {
+                verboseHelp = System.lineSeparator() + descriptor.getHelp() + System.lineSeparator() + String.join(System.lineSeparator(), descriptor.getExtraHelp());
+            } else if (!descriptor.getExtraHelp().isEmpty()) {
+                verboseHelp = " [Extra help available]";
+            }
+            int wrapWidth = verbose ? 0 : PRINT_OPTION_WRAP_WIDTH;
             if (descriptor.getOptionValueType() == Boolean.class) {
-                Boolean val = (Boolean) descriptor.getOptionKey().getDefaultValue();
+                Boolean val = (Boolean) defaultValue;
                 if (helpLen != 0) {
                     helpMsg += ' ';
                 }
-                if (val == null || !((boolean) val)) {
-                    helpMsg += "Default: - (disabled).";
-                } else {
-                    helpMsg += "Default: + (enabled).";
+                if (val != null) {
+                    if (val) {
+                        helpMsg += "Default: + (enabled).";
+                    } else {
+                        helpMsg += "Default: - (disabled).";
+                    }
                 }
-                printOption(out, prefix + "\u00b1" + entry.getKey(), helpMsg);
+                printOption(out, prefix + "\u00b1" + entry.getKey(), helpMsg + verboseHelp, wrapWidth);
             } else {
-                Object def = descriptor.getOptionKey().getDefaultValue();
-                if (def instanceof String) {
-                    def = '"' + String.valueOf(def) + '"';
+                if (defaultValue == null) {
+                    if (helpLen != 0) {
+                        helpMsg += ' ';
+                    }
+                    helpMsg += "Default: None";
                 }
-                printOption(out, prefix + entry.getKey() + "=" + def, helpMsg);
+                helpMsg += verboseHelp;
+                if (stringifiedArrayValue || defaultValue == null) {
+                    printOption(out, prefix + entry.getKey() + "=...", helpMsg, wrapWidth);
+                } else {
+                    if (defaultValue instanceof String) {
+                        defaultValue = '"' + String.valueOf(defaultValue) + '"';
+                    }
+                    printOption(out, prefix + entry.getKey() + "=" + defaultValue, helpMsg, wrapWidth);
+                }
             }
         }
     }
 
     public static long parseLong(String v) {
-        String valueString = v.toLowerCase();
+        String valueString = v.trim().toLowerCase();
         long scale = 1;
         if (valueString.endsWith("k")) {
             scale = 1024L;
@@ -382,17 +503,107 @@ public class SubstrateOptionsParser {
     }
 
     /**
-     * Returns a string to be used on command line to set the option to a desirable value.
+     * Parses the provide string to a double number, avoiding the JDK dependencies (which pull in a
+     * lot of classes, including the regular expression library). Only simple numbers are supported,
+     * without fancy exponent styles.
+     */
+    public static double parseDouble(String v) {
+        String valueString = v.trim();
+
+        int dotPos = valueString.indexOf('.');
+        if (dotPos == -1) {
+            return parseLong(valueString);
+        }
+
+        String beforeDot = valueString.substring(0, dotPos);
+        String afterDot = valueString.substring(dotPos + 1);
+
+        double sign = 1;
+        if (beforeDot.startsWith("-")) {
+            sign = -1;
+            beforeDot = beforeDot.substring(1);
+        } else if (beforeDot.startsWith("+")) {
+            beforeDot = beforeDot.substring(1);
+        }
+
+        if (beforeDot.startsWith("-") || beforeDot.startsWith("+") || afterDot.startsWith("-") || afterDot.startsWith("+") ||
+                        (beforeDot.length() == 0 && afterDot.length() == 0)) {
+            throw new NumberFormatException(v);
+        }
+
+        double integral = 0;
+        if (beforeDot.length() > 0) {
+            integral = Long.parseLong(beforeDot);
+        }
+
+        double fraction = 0;
+        if (afterDot.length() > 0) {
+            fraction = Long.parseLong(afterDot) * Math.pow(10, -afterDot.length());
+        }
+
+        return sign * (integral + fraction);
+    }
+
+    /**
+     * Returns a string to be used on command line to set the option to a desirable value. If the
+     * option has one or more {@link APIOption} annotations, preference is given to a matching
+     * {@link APIOption} syntax.
      *
      * @param option for which the command line argument is created
      * @return recommendation for setting a option value (e.g., for option 'Name' and value 'file'
      *         it returns "-H:Name=file")
      */
+    @Platforms(Platform.HOSTED_ONLY.class)
     public static String commandArgument(OptionKey<?> option, String value) {
+        return commandArgument(option, value, null);
+    }
+
+    /**
+     * Returns a string to be used on command line to set the option to a desirable value. If the
+     * option has one or more {@link APIOption} annotations, preference is given to a matching
+     * {@link APIOption} syntax.
+     *
+     * @param option for which the command line argument is created
+     * @param apiOptionName name of the API option (in case there are multiple)
+     * @return recommendation for setting a option value (e.g., for option 'Name' and value 'file'
+     *         it returns "-H:Name=file")
+     */
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public static String commandArgument(OptionKey<?> option, String value, String apiOptionName) {
+        Field field;
+        try {
+            field = option.getDescriptor().getDeclaringClass().getDeclaredField(option.getDescriptor().getFieldName());
+        } catch (ReflectiveOperationException ex) {
+            throw VMError.shouldNotReachHere(ex);
+        }
+
+        APIOption[] apiOptions = field.getAnnotationsByType(APIOption.class);
+
+        for (APIOption apiOption : apiOptions) {
+            assert !apiOption.name().equals(apiOptionName) || apiOption.deprecated().equals("") : "Using the deprecated option in a description: " + apiOption;
+        }
+
         if (option.getDescriptor().getOptionValueType() == Boolean.class) {
-            assert value.equals("+") || value.equals("-") || value.equals("[+|-]") : "Boolean option can be only + or - or [+|-].";
+            VMError.guarantee(value.equals("+") || value.equals("-"), "Boolean option value can be only + or -");
+            for (APIOption apiOption : apiOptions) {
+                String apiValue = apiOption.kind() == APIOption.APIOptionKind.Negated ? "-" : "+";
+                if (apiValue.equals(value)) {
+                    return APIOption.Utils.name(apiOption);
+                }
+            }
             return HOSTED_OPTION_PREFIX + value + option;
         } else {
+            for (APIOption apiOption : apiOptions) {
+                String fixedValue = apiOption.fixedValue().length == 0 ? null : apiOption.fixedValue()[0];
+                if (apiOption.name().equals(apiOptionName)) {
+                    if (fixedValue == null) {
+                        return APIOption.Utils.name(apiOption) + "=" + value;
+                    } else if (value.equals(fixedValue)) {
+                        return APIOption.Utils.name(apiOption);
+                    }
+                }
+            }
+            assert apiOptionName == null : "invalid API option name " + apiOptionName;
             return HOSTED_OPTION_PREFIX + option.getName() + "=" + value;
         }
     }

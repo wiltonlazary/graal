@@ -31,11 +31,14 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.jar.JarFile;
 import org.graalvm.component.installer.CommonConstants;
 import org.graalvm.component.installer.FailedOperationException;
 import org.graalvm.component.installer.TestBase;
+import org.graalvm.component.installer.Version;
 import org.graalvm.component.installer.commands.MockStorage;
+import org.graalvm.component.installer.jar.JarMetaLoader;
 import org.graalvm.component.installer.persist.ComponentPackageLoader;
 import org.junit.After;
 import org.junit.AfterClass;
@@ -83,14 +86,14 @@ public class ComponentRegistryTest extends TestBase {
         registry = new ComponentRegistry(this, mockStorage);
 
         try (JarFile jf = new JarFile(dataFile("truffleruby2.jar").toFile())) {
-            ComponentPackageLoader ldr = new ComponentPackageLoader(jf, this);
+            ComponentPackageLoader ldr = new JarMetaLoader(jf, this);
 
             rubyInfo = ldr.createComponentInfo();
             ldr.loadPaths();
             ldr.loadSymlinks();
         }
 
-        fakeInfo = new ComponentInfo("org.graalvm.fake", "Fake component", "1.0");
+        fakeInfo = new ComponentInfo("org.graalvm.fake", "Fake component", "0.32");
         fakeInfo.addPaths(Arrays.asList(
                         "jre/bin/ruby",
                         "jre/languages/fake/nothing"));
@@ -98,15 +101,18 @@ public class ComponentRegistryTest extends TestBase {
     }
 
     private void registerAdditionalComponents() {
-        ComponentInfo tmp = new ComponentInfo("org.graalvm.foobar", "Test component 1", "1.0");
+        ComponentInfo tmp = new ComponentInfo("org.graalvm.foobar", "Test component 1", "0.32");
         mockStorage.installed.add(tmp);
 
-        tmp = new ComponentInfo("org.graalvm.clash", "Test component 2", "1.0");
+        tmp = new ComponentInfo("org.graalvm.clash", "Test component 2", "0.32");
         mockStorage.installed.add(tmp);
         tmp1 = tmp;
-        tmp = new ComponentInfo("org.github.clash", "Test component 3", "1.0");
+        tmp = new ComponentInfo("org.github.clash", "Test component 3", "0.32");
         mockStorage.installed.add(tmp);
         tmp2 = tmp;
+
+        tmp = new ComponentInfo("org.graalvm.Uppercase", "Test component 4", "0.32");
+        mockStorage.installed.add(tmp);
     }
 
     @After
@@ -279,4 +285,67 @@ public class ComponentRegistryTest extends TestBase {
         assertFalse(registry.isReplacedFilesChanged());
     }
 
+    @Test
+    public void testFindUppercaseIDComponent() throws Exception {
+        registerAdditionalComponents();
+        ComponentInfo ci = registry.findComponent("org.graalvm.Uppercase");
+        assertNotNull(ci);
+    }
+
+    @Test
+    public void testFindUppercaseIDComponentWithLowercaseExor() throws Exception {
+        registerAdditionalComponents();
+        ComponentInfo ci = registry.findComponent("org.graalvm.uppercase");
+        assertNotNull(ci);
+    }
+
+    ComponentInfo ruby;
+    ComponentInfo fastr;
+    ComponentInfo llvm;
+    ComponentInfo image;
+
+    private void setupComponentsWithDependencies() {
+        llvm = new ComponentInfo("org.graalvm.llvm-toolchain", "LLVM", Version.fromString("19.3"));
+        image = new ComponentInfo("org.graalvm.native-image", "Native Image", Version.fromString("19.3"));
+        image.setDependencies(Collections.singleton(llvm.getId()));
+
+        fastr = new ComponentInfo("org.graalvm.r", "R", Version.fromString("19.3"));
+        fastr.setDependencies(Collections.singleton(llvm.getId()));
+        ruby = new ComponentInfo("org.graalvm.ruby", "Ruby", Version.fromString("19.3"));
+        ruby.setDependencies(new HashSet<>(Arrays.asList(image.getId())));
+
+        mockStorage.installed.add(llvm);
+        mockStorage.installed.add(image);
+        mockStorage.installed.add(fastr);
+        mockStorage.installed.add(ruby);
+    }
+
+    @Test
+    public void testDependentComponents() throws Exception {
+        setupComponentsWithDependencies();
+
+        Set<ComponentInfo> comps = registry.findDependentComponents(image, false);
+        assertEquals(1, comps.size());
+        assertSame(ruby, comps.iterator().next());
+
+        comps = registry.findDependentComponents(llvm, false);
+        assertEquals(2, comps.size());
+        assertTrue(comps.contains(fastr));
+        assertTrue(comps.contains(image));
+    }
+
+    @Test
+    public void testDependentComponentsRecursive() throws Exception {
+        setupComponentsWithDependencies();
+
+        Set<ComponentInfo> comps = registry.findDependentComponents(image, true);
+        assertEquals(1, comps.size());
+        assertSame(ruby, comps.iterator().next());
+
+        comps = registry.findDependentComponents(llvm, true);
+        assertEquals(3, comps.size());
+        assertTrue(comps.contains(fastr));
+        assertTrue(comps.contains(ruby));
+        assertTrue(comps.contains(image));
+    }
 }

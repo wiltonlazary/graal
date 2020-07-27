@@ -30,10 +30,11 @@ import org.graalvm.word.UnsignedWord;
 
 import com.oracle.svm.core.annotate.AlwaysInline;
 import com.oracle.svm.core.annotate.NeverInline;
+import com.oracle.svm.core.c.NonmovableArray;
+import com.oracle.svm.core.heap.InstanceReferenceMapDecoder;
 import com.oracle.svm.core.heap.ObjectHeader;
 import com.oracle.svm.core.heap.ObjectReferenceVisitor;
 import com.oracle.svm.core.heap.ReferenceAccess;
-import com.oracle.svm.core.heap.ReferenceMapDecoder;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
 
 /**
@@ -69,16 +70,17 @@ public class InteriorObjRefWalker {
                 final UnsignedWord elementOffset = LayoutEncoding.getArrayElementOffset(layoutEncoding, index);
                 final Pointer elementPointer = objPointer.add(elementOffset);
                 boolean isCompressed = ReferenceAccess.singleton().haveCompressedReferences();
-                final boolean visitResult = visitor.visitObjectReferenceInline(elementPointer, isCompressed);
+                final boolean visitResult = visitor.visitObjectReferenceInline(elementPointer, isCompressed, obj);
                 if (!visitResult) {
                     return false;
                 }
             }
         }
 
-        // Visit Object reference in the fields of the Object.
-        byte[] referenceMapEncoding = DynamicHubSupport.getReferenceMapEncoding();
+        NonmovableArray<Byte> referenceMapEncoding = DynamicHubSupport.getReferenceMapEncoding();
         long referenceMapIndex = objHub.getReferenceMapIndex();
-        return ReferenceMapDecoder.walkOffsetsFromPointer(objPointer, referenceMapEncoding, referenceMapIndex, visitor);
+
+        // Visit Object reference in the fields of the Object.
+        return InstanceReferenceMapDecoder.walkOffsetsFromPointer(objPointer, referenceMapEncoding, referenceMapIndex, visitor, obj);
     }
 }

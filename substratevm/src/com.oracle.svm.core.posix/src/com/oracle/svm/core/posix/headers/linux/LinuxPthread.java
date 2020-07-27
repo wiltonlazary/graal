@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,15 +32,12 @@ import org.graalvm.nativeimage.c.type.CCharPointer;
 import com.oracle.svm.core.posix.headers.PosixDirectives;
 import com.oracle.svm.core.posix.headers.Pthread.pthread_t;
 
+// Checkstyle: stop
+
 @CContext(PosixDirectives.class)
 @CLibrary("pthread")
 public class LinuxPthread {
 
-    /* { Allow names with underscores: Checkstyle: stop */
-
-    /** Set thread name visible in the kernel and its interfaces. */
     @CFunction
     public static native int pthread_setname_np(pthread_t target_thread, CCharPointer name);
-
-    /* } Allow names with underscores: Checkstyle: resume */
 }

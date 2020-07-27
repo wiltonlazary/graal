@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -67,7 +67,7 @@ import org.graalvm.compiler.nodes.java.LoadIndexedNode;
 import org.graalvm.compiler.nodes.java.LogicCompareAndSwapNode;
 import org.graalvm.compiler.nodes.java.StoreIndexedNode;
 import org.graalvm.compiler.nodes.java.ValueCompareAndSwapNode;
-import org.graalvm.compiler.nodes.memory.HeapAccess.BarrierType;
+import org.graalvm.compiler.nodes.memory.OnHeapMemoryAccess.BarrierType;
 import org.graalvm.compiler.nodes.memory.address.AddressNode;
 import org.graalvm.compiler.nodes.memory.address.OffsetAddressNode;
 import org.graalvm.compiler.nodes.type.StampTool;
@@ -317,8 +317,9 @@ public class WordOperationPlugin implements NodePlugin, TypePlugin, InlineInvoke
                 if (args.length == 2) {
                     location = any();
                 } else {
-                    assert args[2].isConstant();
+                    assert args[2].isConstant() : args[2];
                     location = snippetReflection.asObject(LocationIdentity.class, args[2].asJavaConstant());
+                    assert location != null : snippetReflection.asObject(Object.class, args[2].asJavaConstant());
                 }
                 b.push(returnKind, readOp(b, readKind, address, location, operation.opcode()));
                 break;
@@ -334,7 +335,8 @@ public class WordOperationPlugin implements NodePlugin, TypePlugin, InlineInvoke
             case WRITE_POINTER:
             case WRITE_OBJECT:
             case WRITE_BARRIERED:
-            case INITIALIZE: {
+            case INITIALIZE:
+            case WRITE_POINTER_SIDE_EFFECT_FREE: {
                 assert args.length == 3 || args.length == 4;
                 JavaKind writeKind = wordTypes.asKind(wordMethod.getSignature().getParameterType(wordMethod.isStatic() ? 2 : 1, wordMethod.getDeclaringClass()));
                 AddressNode address = makeAddress(b, args[0], args[1]);
@@ -446,7 +448,7 @@ public class WordOperationPlugin implements NodePlugin, TypePlugin, InlineInvoke
 
     protected ValueNode readOp(GraphBuilderContext b, JavaKind readKind, AddressNode address, LocationIdentity location, Opcode op) {
         assert op == Opcode.READ_POINTER || op == Opcode.READ_OBJECT || op == Opcode.READ_BARRIERED;
-        final BarrierType barrier = (op == Opcode.READ_BARRIERED ? BarrierType.PRECISE : BarrierType.NONE);
+        final BarrierType barrier = (op == Opcode.READ_BARRIERED ? BarrierType.UNKNOWN : BarrierType.NONE);
         final boolean compressible = (op == Opcode.READ_OBJECT || op == Opcode.READ_BARRIERED);
 
         return readOp(b, readKind, address, location, barrier, compressible);
@@ -463,11 +465,12 @@ public class WordOperationPlugin implements NodePlugin, TypePlugin, InlineInvoke
     }
 
     protected void writeOp(GraphBuilderContext b, JavaKind writeKind, AddressNode address, LocationIdentity location, ValueNode value, Opcode op) {
-        assert op == Opcode.WRITE_POINTER || op == Opcode.WRITE_OBJECT || op == Opcode.WRITE_BARRIERED || op == Opcode.INITIALIZE;
-        final BarrierType barrier = (op == Opcode.WRITE_BARRIERED ? BarrierType.PRECISE : BarrierType.NONE);
+        assert op == Opcode.WRITE_POINTER || op == Opcode.WRITE_POINTER_SIDE_EFFECT_FREE || op == Opcode.WRITE_OBJECT || op == Opcode.WRITE_BARRIERED || op == Opcode.INITIALIZE;
+        final BarrierType barrier = (op == Opcode.WRITE_BARRIERED ? BarrierType.UNKNOWN : BarrierType.NONE);
         final boolean compressible = (op == Opcode.WRITE_OBJECT || op == Opcode.WRITE_BARRIERED);
         assert op != Opcode.INITIALIZE || location.isInit() : "must use init location for initializing";
-        b.add(new JavaWriteNode(writeKind, address, location, value, barrier, compressible));
+        final boolean hasSideEffect = (op != Opcode.WRITE_POINTER_SIDE_EFFECT_FREE);
+        b.add(new JavaWriteNode(writeKind, address, location, value, barrier, compressible, hasSideEffect));
     }
 
     protected AbstractCompareAndSwapNode casOp(JavaKind writeKind, JavaKind returnKind, AddressNode address, LocationIdentity location, ValueNode expectedValue, ValueNode newValue) {
@@ -508,7 +511,7 @@ public class WordOperationPlugin implements NodePlugin, TypePlugin, InlineInvoke
             return b.add(new NarrowNode(value, 32));
         } else {
             assert toKind == JavaKind.Long;
-            assert value.getStackKind() == JavaKind.Int;
+            assert value.getStackKind() == JavaKind.Int : value;
             if (unsigned) {
                 return b.add(new ZeroExtendNode(value, 64));
             } else {

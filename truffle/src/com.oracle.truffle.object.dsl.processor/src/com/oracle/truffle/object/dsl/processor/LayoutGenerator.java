@@ -1,47 +1,71 @@
 /*
- * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.object.dsl.processor;
 
+import java.io.PrintStream;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
+import java.util.stream.Collectors;
+
+import javax.annotation.processing.ProcessingEnvironment;
+import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 
-import com.oracle.truffle.api.object.Layout;
 import com.oracle.truffle.object.dsl.processor.model.LayoutModel;
 import com.oracle.truffle.object.dsl.processor.model.NameUtils;
 import com.oracle.truffle.object.dsl.processor.model.PropertyModel;
 
-import java.io.PrintStream;
-import java.util.ArrayList;
-import java.util.List;
-
 public class LayoutGenerator {
 
     private final LayoutModel layout;
+    private ProcessingEnvironment processingEnv;
+    private final TypeMirror dispatchDefaultValue;
 
-    public LayoutGenerator(LayoutModel layout) {
+    public LayoutGenerator(LayoutModel layout, ProcessingEnvironment processingEnv) {
         this.layout = layout;
+        this.processingEnv = processingEnv;
+        this.dispatchDefaultValue = processingEnv.getElementUtils().getTypeElement("com.oracle.truffle.api.object.dsl.Layout.DispatchDefaultValue").asType();
     }
 
     public void generate(final PrintStream stream) {
@@ -202,6 +226,14 @@ public class LayoutGenerator {
 
         stream.printf("    public static class %sType extends %s {%n", layout.getName(), typeSuperclass);
 
+        if (!processingEnv.getTypeUtils().isSameType(layout.getDispatch(), dispatchDefaultValue)) {
+            stream.println("        ");
+            stream.println("        @Override");
+            stream.println("        public Class<?> dispatch() {");
+            stream.printf("            return %s.class;%n", layout.getDispatch().toString());
+            stream.println("        }");
+        }
+
         if (layout.hasShapeProperties()) {
             stream.println("        ");
 
@@ -308,9 +340,9 @@ public class LayoutGenerator {
         if (layout.getSuperLayout() == null) {
             stream.print("    protected static final Layout LAYOUT = Layout.newLayout()");
 
-            for (Layout.ImplicitCast implicitCast : layout.getImplicitCasts()) {
+            for (VariableElement implicitCast : layout.getImplicitCasts()) {
                 stream.print(".addAllowedImplicitCast(Layout.ImplicitCast.");
-                stream.print(implicitCast.name());
+                stream.print(implicitCast.getSimpleName().toString());
                 stream.print(")");
             }
 
@@ -714,7 +746,7 @@ public class LayoutGenerator {
             }
 
             if (property.hasGetter()) {
-                addUncheckedCastWarning(stream, property);
+                addSuppressWarningsUncheckedCast(stream, property);
                 stream.println("    @Override");
                 stream.printf("    public %s %s(DynamicObject object) {%n", property.getType(), NameUtils.asGetter(property.getName()));
                 stream.printf("        assert is%s(object);%n", layout.getName());
@@ -744,6 +776,7 @@ public class LayoutGenerator {
             }
 
             if (property.hasShapeSetter()) {
+                addSuppressWarnings(stream, Collections.singleton("deprecation"));
                 stream.println("    @TruffleBoundary");
                 stream.println("    @Override");
                 stream.printf("    public DynamicObjectFactory %s(DynamicObjectFactory factory, %s value) {%n", NameUtils.asSetter(property.getName()), property.getType());
@@ -755,7 +788,7 @@ public class LayoutGenerator {
             }
 
             if (property.hasSetter() || property.hasUnsafeSetter()) {
-                addUncheckedCastWarning(stream, property);
+                addSuppressWarningsForSetter(stream, property);
                 if (property.isShapeProperty()) {
                     stream.println("    @TruffleBoundary");
                 }
@@ -811,7 +844,7 @@ public class LayoutGenerator {
             }
 
             if (property.hasCompareAndSet()) {
-                addUncheckedCastWarning(stream, property);
+                addSuppressWarningsUncheckedCast(stream, property);
 
                 stream.println("    @Override");
                 stream.printf("    public boolean %s(DynamicObject object, %s expected_value, %s value) {%n",
@@ -846,7 +879,7 @@ public class LayoutGenerator {
             }
 
             if (property.hasGetAndSet()) {
-                addUncheckedCastWarning(stream, property);
+                addSuppressWarningsUncheckedCast(stream, property);
 
                 stream.println("    @Override");
                 stream.printf("    public %s %s(DynamicObject object, %s value) {%n",
@@ -896,10 +929,30 @@ public class LayoutGenerator {
         }
     }
 
-    private static void addUncheckedCastWarning(final PrintStream stream, PropertyModel property) {
-        if (property.getType().toString().indexOf('<') != -1 ||
-                        (property.isVolatile() && !property.getType().getKind().isPrimitive())) {
-            stream.println("    @SuppressWarnings(\"unchecked\")");
+    private static boolean needsUncheckedCast(PropertyModel property) {
+        return property.getType().toString().indexOf('<') != -1 || (property.isVolatile() && !property.getType().getKind().isPrimitive());
+    }
+
+    private static void addSuppressWarningsUncheckedCast(final PrintStream stream, PropertyModel property) {
+        if (needsUncheckedCast(property)) {
+            addSuppressWarnings(stream, Collections.singleton("unchecked"));
+        }
+    }
+
+    private static void addSuppressWarningsForSetter(final PrintStream stream, PropertyModel property) {
+        Collection<String> warnings = new ArrayList<>(2);
+        if (needsUncheckedCast(property)) {
+            warnings.add("unchecked");
+        }
+        if (property.hasUnsafeSetter() || property.isShapeProperty()) {
+            warnings.add("deprecation");
+        }
+        addSuppressWarnings(stream, warnings);
+    }
+
+    private static void addSuppressWarnings(final PrintStream stream, Collection<String> warnings) {
+        if (!warnings.isEmpty()) {
+            stream.printf("    @SuppressWarnings({%s})\n", warnings.stream().map(s -> '\"' + s + '\"').collect(Collectors.joining(", ")));
         }
     }
 

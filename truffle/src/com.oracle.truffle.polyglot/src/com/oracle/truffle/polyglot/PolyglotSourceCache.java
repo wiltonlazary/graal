@@ -1,30 +1,46 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.polyglot;
 
-import static com.oracle.truffle.polyglot.VMAccessor.LANGUAGE;
+import static com.oracle.truffle.polyglot.EngineAccessor.LANGUAGE;
 
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
@@ -50,11 +66,11 @@ final class PolyglotSourceCache {
 
         CallTarget target;
         if (source.isCached()) {
-            Object sourceId = VMAccessor.SOURCE.getSourceIdentifier(source);
+            Object sourceId = EngineAccessor.SOURCE.getSourceIdentifier(source);
             WeakSourceKey ref = new WeakSourceKey(sourceId, source, argumentNames, deadSources);
             target = sourceCache.get(ref);
             if (target == null) {
-                target = parseImpl(context, argumentNames, VMAccessor.SOURCE.copySource(source));
+                target = parseImpl(context, argumentNames, EngineAccessor.SOURCE.copySource(source));
                 CallTarget prev = sourceCache.putIfAbsent(ref, target);
                 if (prev != null) {
                     /*
@@ -70,9 +86,7 @@ final class PolyglotSourceCache {
     }
 
     private static CallTarget parseImpl(PolyglotLanguageContext context, String[] argumentNames, Source source) {
-        if (!VMAccessor.SOURCE.isLegacySource(source)) {
-            validateSource(context, source);
-        }
+        validateSource(context, source);
         CallTarget parsedTarget = LANGUAGE.parse(context.requireEnv(), source, null, argumentNames);
         if (parsedTarget == null) {
             throw new IllegalStateException(String.format("Parsing resulted in a null CallTarget for %s.", source));
@@ -81,10 +95,13 @@ final class PolyglotSourceCache {
     }
 
     private static void validateSource(PolyglotLanguageContext context, Source source) {
+        if (!source.hasBytes() && !source.hasCharacters()) {
+            throw PolyglotEngineException.illegalArgument(String.format("Error evaluating the source. The source does not specify characters nor bytes."));
+        }
         String mimeType = source.getMimeType();
         Set<String> mimeTypes = context.language.cache.getMimeTypes();
         if (mimeType != null && !mimeTypes.contains(mimeType)) {
-            throw new PolyglotIllegalArgumentException(String.format("Error evaluating the source. The language %s does not support MIME type %s. Supported MIME types are %s.",
+            throw PolyglotEngineException.illegalArgument(String.format("Error evaluating the source. The language %s does not support MIME type %s. Supported MIME types are %s.",
                             source.getLanguage(), mimeType, mimeTypes));
         }
         String activeMimeType = mimeType;
@@ -95,11 +112,11 @@ final class PolyglotSourceCache {
         boolean expectCharacters = activeMimeType != null ? context.language.cache.isCharacterMimeType(activeMimeType) : true;
         if (mimeType != null && source.hasCharacters() != expectCharacters) {
             if (source.hasBytes()) {
-                throw new PolyglotIllegalArgumentException(
+                throw PolyglotEngineException.illegalArgument(
                                 String.format("Error evaluating the source. MIME type '%s' is character based for language '%s' but the source contents are byte based.", mimeType,
                                                 source.getLanguage()));
             } else {
-                throw new PolyglotIllegalArgumentException(
+                throw PolyglotEngineException.illegalArgument(
                                 String.format("Error evaluating the source. MIME type '%s' is byte based for language '%s' but the source contents are character based.", mimeType,
                                                 source.getLanguage()));
             }
@@ -117,11 +134,11 @@ final class PolyglotSourceCache {
             }
             if (expectCharacters) {
                 if (binaryMimeTypes.isEmpty()) {
-                    throw new PolyglotIllegalArgumentException(String.format(
+                    throw PolyglotEngineException.illegalArgument(String.format(
                                     "Error evaluating the source. The language %s only supports character based sources but a binary based source was provided.",
                                     source.getLanguage()));
                 } else {
-                    throw new PolyglotIllegalArgumentException(String.format(
+                    throw PolyglotEngineException.illegalArgument(String.format(
                                     "Error evaluating the source. The language %s expects character based sources by default but a binary based source was provided. " +
                                                     "Provide a binary based source instead or specify a MIME type for the source. " +
                                                     "Available MIME types for binary based sources are %s.",
@@ -129,11 +146,11 @@ final class PolyglotSourceCache {
                 }
             } else {
                 if (characterMimeTypes.isEmpty()) {
-                    throw new PolyglotIllegalArgumentException(String.format(
+                    throw PolyglotEngineException.illegalArgument(String.format(
                                     "Error evaluating the source. The language %s only supports binary based sources but a character based source was provided.",
                                     source.getLanguage()));
                 } else {
-                    throw new PolyglotIllegalArgumentException(String.format(
+                    throw PolyglotEngineException.illegalArgument(String.format(
                                     "Error evaluating the source. The language %s expects character based sources by default but a binary based source was provided. " +
                                                     "Provide a character based source instead or specify a MIME type for the source. " +
                                                     "Available MIME types for character based sources are %s.",

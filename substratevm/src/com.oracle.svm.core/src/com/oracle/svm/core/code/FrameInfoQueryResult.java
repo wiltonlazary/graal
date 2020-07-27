@@ -26,9 +26,12 @@ package com.oracle.svm.core.code;
 
 import org.graalvm.nativeimage.c.function.CodePointer;
 
+import com.oracle.svm.core.CalleeSavedRegisters;
+import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.meta.SharedMethod;
 
+import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.StackSlot;
 import jdk.vm.ci.code.VirtualObject;
 import jdk.vm.ci.meta.Constant;
@@ -48,6 +51,13 @@ public class FrameInfoQueryResult {
          * slot.
          */
         StackSlot(true),
+
+        /**
+         * A {@link Register} value. The {@link ValueInfo#data} is the frame offset of the stack
+         * slot in the callee where the register value was spilled to according to the
+         * {@link CalleeSavedRegisters}.
+         */
+        Register(true),
 
         /**
          * A {@link Constant} value. The {@link ValueInfo#data} is the primitive data value of the
@@ -79,10 +89,11 @@ public class FrameInfoQueryResult {
         protected ValueType type;
         protected JavaKind kind;
         protected boolean isCompressedReference; // for JavaKind.Object
+        protected boolean isEliminatedMonitor;
         protected long data;
         protected JavaConstant value;
         protected String name;
-        /** The index of {@link #name} in {@link CodeInfoDecoder#frameInfoNames}. */
+        /** Index of {@link #name} in {@link FrameInfoDecoder#decodeFrameInfo frameInfoNames}. */
         protected int nameIndex = -1;
 
         /**
@@ -105,6 +116,15 @@ public class FrameInfoQueryResult {
          */
         public boolean isCompressedReference() {
             return isCompressedReference;
+        }
+
+        /**
+         * When true, the value is a monitor (a {@link FrameInfoQueryResult#numLocks lock slot},
+         * located after the local variables and expression stack slots) that was eliminated and
+         * re-locking must be performed during deoptimization.
+         */
+        public boolean isEliminatedMonitor() {
+            return isEliminatedMonitor;
         }
 
         /**
@@ -135,19 +155,15 @@ public class FrameInfoQueryResult {
     protected int numLocks;
     protected ValueInfo[] valueInfos;
     protected ValueInfo[][] virtualObjects;
-    protected String sourceClassName;
+    protected Class<?> sourceClass;
     protected String sourceMethodName;
-    protected String sourceFileName;
     protected int sourceLineNumber;
 
-    // Index of sourceClassName in CodeInfoDecoder.frameInfoSourceClassNames
-    protected int sourceClassNameIndex;
+    // Index of sourceClass in CodeInfoDecoder.frameInfoSourceClasses
+    protected int sourceClassIndex;
 
     // Index of sourceMethodName in CodeInfoDecoder.frameInfoSourceMethodNames
     protected int sourceMethodNameIndex;
-
-    // Index of sourceFileName in CodeInfoDecoder.frameInfoSourceFileNames
-    protected int sourceFileNameIndex;
 
     public FrameInfoQueryResult() {
         init();
@@ -165,13 +181,11 @@ public class FrameInfoQueryResult {
         numLocks = 0;
         valueInfos = null;
         virtualObjects = null;
-        sourceClassName = "";
+        sourceClass = null;
         sourceMethodName = "";
-        sourceFileName = null;
         sourceLineNumber = -1;
-        sourceClassNameIndex = -1;
+        sourceClassIndex = -1;
         sourceMethodNameIndex = -1;
-        sourceFileNameIndex = -1;
     }
 
     /**
@@ -191,9 +205,9 @@ public class FrameInfoQueryResult {
 
     /**
      * Returns the offset of the deoptimization target method. The offset is relative to the
-     * {@link AbstractCodeInfo#getCodeStart() code start} of the {@link ImageCodeInfo image}.
-     * Together with the BCI it is used to find the corresponding bytecode frame in the target
-     * method. Note that there is no inlining in target methods, so the method + BCI is unique.
+     * {@link CodeInfoAccess#getCodeStart code start} of the {@link ImageCodeInfo image}. Together
+     * with the BCI it is used to find the corresponding bytecode frame in the target method. Note
+     * that there is no inlining in target methods, so the method + BCI is unique.
      */
     public int getDeoptMethodOffset() {
         return deoptMethodOffset;
@@ -203,7 +217,7 @@ public class FrameInfoQueryResult {
      * Returns the entry point address of the deoptimization target method.
      */
     public CodePointer getDeoptMethodAddress() {
-        return CodeInfoTable.getImageCodeCache().absoluteIP(deoptMethodOffset);
+        return CodeInfoAccess.absoluteIP(CodeInfoTable.getImageCodeInfo(), deoptMethodOffset);
     }
 
     /**
@@ -267,6 +281,26 @@ public class FrameInfoQueryResult {
         return virtualObjects;
     }
 
+    public Class<?> getSourceClass() {
+        return sourceClass;
+    }
+
+    public String getSourceClassName() {
+        return sourceClass != null ? sourceClass.getName() : "";
+    }
+
+    public String getSourceMethodName() {
+        return sourceMethodName;
+    }
+
+    public String getSourceFileName() {
+        return sourceClass != null ? DynamicHub.fromClass(sourceClass).getSourceFileName() : null;
+    }
+
+    public int getSourceLineNumber() {
+        return sourceLineNumber;
+    }
+
     /**
      * Returns the name and source code location of the method, for debugging purposes only.
      */
@@ -275,16 +309,17 @@ public class FrameInfoQueryResult {
          * According to StackTraceElement undefined className is denoted by "", undefined fileName
          * is denoted by null
          */
-        final String className = sourceClassName != null ? sourceClassName : "";
+        final String className = sourceClass != null ? sourceClass.getName() : "";
+        String sourceFileName = sourceClass != null ? DynamicHub.fromClass(sourceClass).getSourceFileName() : null;
         return new StackTraceElement(className, sourceMethodName, sourceFileName, sourceLineNumber);
     }
 
-    private boolean isNativeMethod() {
+    public boolean isNativeMethod() {
         return sourceLineNumber == -2;
     }
 
     public Log log(Log log) {
-        String className = sourceClassName != null ? sourceClassName : "";
+        String className = sourceClass != null ? sourceClass.getName() : "";
         String methodName = sourceMethodName != null ? sourceMethodName : "";
         log.string(className);
         if (!(className.isEmpty() || methodName.isEmpty())) {
@@ -299,6 +334,7 @@ public class FrameInfoQueryResult {
         if (isNativeMethod()) {
             log.string("Native Method");
         } else {
+            String sourceFileName = sourceClass != null ? DynamicHub.fromClass(sourceClass).getSourceFileName() : null;
             if (sourceFileName != null) {
                 if (sourceLineNumber >= 0) {
                     log.string(sourceFileName).string(":").signed(sourceLineNumber);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,13 +32,13 @@ import static org.graalvm.compiler.replacements.nodes.UnaryMathIntrinsicNode.Una
 import static org.graalvm.compiler.replacements.nodes.UnaryMathIntrinsicNode.UnaryOperation.SIN;
 import static org.graalvm.compiler.replacements.nodes.UnaryMathIntrinsicNode.UnaryOperation.TAN;
 
-import org.graalvm.compiler.bytecode.BytecodeProvider;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration.Plugins;
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderContext;
 import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugin;
 import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugins;
 import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugins.Registration;
+import org.graalvm.compiler.nodes.spi.Replacements;
 import org.graalvm.compiler.replacements.IntegerSubstitutions;
 import org.graalvm.compiler.replacements.LongSubstitutions;
 import org.graalvm.compiler.replacements.nodes.BinaryMathIntrinsicNode;
@@ -51,26 +51,26 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 public class SPARCGraphBuilderPlugins {
 
-    public static void register(Plugins plugins, BytecodeProvider bytecodeProvider, boolean explicitUnsafeNullChecks) {
+    public static void register(Plugins plugins, Replacements replacements, boolean explicitUnsafeNullChecks) {
         InvocationPlugins invocationPlugins = plugins.getInvocationPlugins();
         invocationPlugins.defer(new Runnable() {
             @Override
             public void run() {
-                registerIntegerLongPlugins(invocationPlugins, IntegerSubstitutions.class, JavaKind.Int, bytecodeProvider);
-                registerIntegerLongPlugins(invocationPlugins, LongSubstitutions.class, JavaKind.Long, bytecodeProvider);
+                registerIntegerLongPlugins(invocationPlugins, IntegerSubstitutions.class, JavaKind.Int, replacements);
+                registerIntegerLongPlugins(invocationPlugins, LongSubstitutions.class, JavaKind.Long, replacements);
                 registerMathPlugins(invocationPlugins);
                 // This is temporarily disabled until we implement correct emitting of the CAS
                 // instructions of the proper width.
-                registerPlatformSpecificUnsafePlugins(invocationPlugins, bytecodeProvider, explicitUnsafeNullChecks,
+                registerPlatformSpecificUnsafePlugins(invocationPlugins, replacements, explicitUnsafeNullChecks,
                                 new JavaKind[]{JavaKind.Int, JavaKind.Long, JavaKind.Object});
             }
         });
     }
 
-    private static void registerIntegerLongPlugins(InvocationPlugins plugins, Class<?> substituteDeclaringClass, JavaKind kind, BytecodeProvider bytecodeProvider) {
+    private static void registerIntegerLongPlugins(InvocationPlugins plugins, Class<?> substituteDeclaringClass, JavaKind kind, Replacements replacements) {
         Class<?> declaringClass = kind.toBoxedJavaClass();
         Class<?> type = kind.toJavaClass();
-        Registration r = new Registration(plugins, declaringClass, bytecodeProvider);
+        Registration r = new Registration(plugins, declaringClass, replacements);
         r.registerMethodSubstitution(substituteDeclaringClass, "numberOfLeadingZeros", type);
         r.registerMethodSubstitution(substituteDeclaringClass, "numberOfTrailingZeros", type);
 
@@ -93,6 +93,11 @@ public class SPARCGraphBuilderPlugins {
         registerUnaryMath(r, "log10", LOG10);
         r.register2("pow", Double.TYPE, Double.TYPE, new InvocationPlugin() {
             @Override
+            public boolean inlineOnly() {
+                return true;
+            }
+
+            @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode x, ValueNode y) {
                 b.push(JavaKind.Double, b.append(BinaryMathIntrinsicNode.create(x, y, BinaryMathIntrinsicNode.BinaryOperation.POW)));
                 return true;
@@ -102,6 +107,11 @@ public class SPARCGraphBuilderPlugins {
 
     private static void registerUnaryMath(Registration r, String name, UnaryOperation operation) {
         r.register1(name, Double.TYPE, new InvocationPlugin() {
+            @Override
+            public boolean inlineOnly() {
+                return true;
+            }
+
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode value) {
                 b.push(JavaKind.Double, b.append(UnaryMathIntrinsicNode.create(value, operation)));

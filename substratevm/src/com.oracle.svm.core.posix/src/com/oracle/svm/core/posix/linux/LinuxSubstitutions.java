@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,8 +28,6 @@ import static com.oracle.svm.core.posix.headers.Time.gettimeofday;
 import static com.oracle.svm.core.posix.headers.linux.LinuxTime.CLOCK_MONOTONIC;
 import static com.oracle.svm.core.posix.headers.linux.LinuxTime.clock_gettime;
 
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.word.WordFactory;
 
@@ -40,9 +38,8 @@ import com.oracle.svm.core.posix.headers.Time.timespec;
 import com.oracle.svm.core.posix.headers.Time.timeval;
 import com.oracle.svm.core.posix.headers.Time.timezone;
 
-@Platforms(Platform.LINUX.class)
 @TargetClass(java.lang.System.class)
-final class Target_java_lang_System {
+final class Target_java_lang_System_Linux {
 
     @Substitute
     @Uninterruptible(reason = "Does basic math after a simple system call")

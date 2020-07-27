@@ -31,9 +31,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentNavigableMap;
-import java.util.concurrent.atomic.AtomicLong;
-
-import org.graalvm.compiler.serviceprovider.GraalServices;
 
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
@@ -94,7 +91,6 @@ final class Target_java_util_IdentityHashMap {
     Set<?> entrySet;
 }
 
-/* TODO: Why is sun.misc.SoftCache used with JDK-8, but sun.awt.SoftCache is not used with JDK-9? */
 @TargetClass(className = "sun.misc.SoftCache", onlyWith = JDK8OrEarlier.class)
 final class Target_sun_misc_SoftCache {
 
@@ -208,9 +204,9 @@ final class Target_java_util_concurrent_ConcurrentSkipListMap {
     ConcurrentNavigableMap<?, ?> descendingMapJDK8OrEarlier;
 
     @Alias //
-    @TargetElement(name = "descendingMap", onlyWith = JDK9OrLater.class) //
+    @TargetElement(name = "descendingMap", onlyWith = JDK11OrLater.class) //
     @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset)//
-    Target_java_util_concurrent_ConcurrentSkipListMap_SubMap descendingMapJDK9OrLater;
+    Target_java_util_concurrent_ConcurrentSkipListMap_SubMap descendingMapJDK11OrLater;
 }
 
 @TargetClass(value = java.util.concurrent.ConcurrentSkipListMap.class, innerClass = "KeySet")
@@ -221,7 +217,7 @@ final class Target_java_util_concurrent_ConcurrentSkipListMap_KeySet {
 final class Target_java_util_concurrent_ConcurrentSkipListMap_EntrySet {
 }
 
-@TargetClass(value = java.util.concurrent.ConcurrentSkipListMap.class, innerClass = "SubMap", onlyWith = JDK9OrLater.class)
+@TargetClass(value = java.util.concurrent.ConcurrentSkipListMap.class, innerClass = "SubMap", onlyWith = JDK11OrLater.class)
 final class Target_java_util_concurrent_ConcurrentSkipListMap_SubMap {
 }
 
@@ -229,55 +225,11 @@ final class Target_java_util_concurrent_ConcurrentSkipListMap_SubMap {
 final class Target_java_util_concurrent_ConcurrentSkipListMap_Values {
 }
 
-@TargetClass(java.util.SplittableRandom.class)
-final class Target_java_util_SplittableRandom {
-
-    @Alias @TargetElement(name = "GOLDEN_GAMMA") private static long GOLDENGAMMA;
-    @Alias private long seed;
-    @Alias private long gamma;
-
-    @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset)//
-    private static volatile AtomicLong defaultGen;
-
-    @Substitute
-    protected Target_java_util_SplittableRandom() {
-        if (defaultGen == null) {
-            // This is the original expression used for the initialization
-            // of defaultGen but it is invoked in a lazy way as initialSeed()
-            // is derived from the current time (the seed cannot be fixed
-            // in the image because the "random" values would be determined then).
-            if (GraalServices.Java8OrEarlier) {
-                /* src/share/classes/java/util/SplittableRandom.java?v=Java_1.8.0_40_b10#227 */
-                defaultGen = new AtomicLong(initialSeed());
-            } else {
-                /* src/java.base/share/classes/java/util/SplittableRandom.java#230 */
-                defaultGen = new AtomicLong(mix64(System.currentTimeMillis()) ^ mix64(System.nanoTime()));
-            }
-        }
-
-        // The original code of SplittableRandom() constructor
-        long s = defaultGen.getAndAdd(2 * GOLDENGAMMA);
-        this.seed = mix64(s);
-        this.gamma = mixGamma(s + GOLDENGAMMA);
-    }
-
-    @Alias
-    @TargetElement(onlyWith = JDK8OrEarlier.class)
-    private static native long initialSeed();
-
-    @Alias
-    private static native long mix64(long z);
-
-    @Alias
-    private static native long mixGamma(long z);
-
-}
-
 @TargetClass(java.util.Currency.class)
 final class Target_java_util_Currency {
     @Alias//
     @RecomputeFieldValue(kind = Kind.NewInstance, declClass = ConcurrentHashMap.class)//
-    private static ConcurrentMap<String, Currency> instances = new ConcurrentHashMap<>();
+    private static ConcurrentMap<String, Currency> instances;
 }
 
 /** Dummy class to have a class with the file's name. */

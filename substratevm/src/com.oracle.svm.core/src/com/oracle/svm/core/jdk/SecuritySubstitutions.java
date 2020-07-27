@@ -24,36 +24,48 @@
  */
 package com.oracle.svm.core.jdk;
 
-import static com.oracle.svm.core.annotate.RecomputeFieldValue.Kind.Reset;
+import static com.oracle.svm.core.snippets.KnownIntrinsics.readCallerStackPointer;
 
 import java.net.URL;
 import java.security.AccessControlContext;
 import java.security.AccessControlException;
-import java.security.MessageDigestSpi;
-import java.security.NoSuchAlgorithmException;
-import java.security.NoSuchProviderException;
+import java.security.CodeSource;
+import java.security.DomainCombiner;
 import java.security.Permission;
+import java.security.PermissionCollection;
+import java.security.Permissions;
+import java.security.Policy;
 import java.security.PrivilegedAction;
+import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
 import java.security.ProtectionDomain;
 import java.security.Provider;
 import java.security.SecureRandom;
-import java.security.SecureRandomSpi;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 
-import org.graalvm.compiler.api.replacements.Fold;
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.hosted.Feature;
+import org.graalvm.word.Pointer;
 
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.Alias;
+import com.oracle.svm.core.annotate.AutomaticFeature;
+import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.annotate.InjectAccessors;
-import com.oracle.svm.core.annotate.RecomputeFieldValue;
+import com.oracle.svm.core.annotate.NeverInline;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
+import com.oracle.svm.core.log.Log;
+import com.oracle.svm.core.option.SubstrateOptionsParser;
 import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.util.ReflectionUtil;
+
+// Checkstyle: stop
+import sun.security.util.SecurityConstants;
+// Checkstyle: resume
 
 // Checkstyle: allow reflection
 
@@ -66,43 +78,75 @@ import com.oracle.svm.core.util.VMError;
 final class Target_java_security_AccessController {
 
     @Substitute
-    private static <T> T doPrivileged(PrivilegedAction<T> action) {
-        return action.run();
+    private static <T> T doPrivileged(PrivilegedAction<T> action) throws Throwable {
+        try {
+            return action.run();
+        } catch (Throwable ex) {
+            throw AccessControllerUtil.wrapCheckedException(ex);
+        }
     }
 
     @Substitute
-    private static <T> T doPrivilegedWithCombiner(PrivilegedAction<T> action) {
-        return action.run();
+    private static <T> T doPrivilegedWithCombiner(PrivilegedAction<T> action) throws Throwable {
+        try {
+            return action.run();
+        } catch (Throwable ex) {
+            throw AccessControllerUtil.wrapCheckedException(ex);
+        }
     }
 
     @Substitute
-    private static <T> T doPrivileged(PrivilegedAction<T> action, AccessControlContext context) {
-        return action.run();
+    private static <T> T doPrivileged(PrivilegedAction<T> action, AccessControlContext context) throws Throwable {
+        try {
+            return action.run();
+        } catch (Throwable ex) {
+            throw AccessControllerUtil.wrapCheckedException(ex);
+        }
     }
 
     @Substitute
-    private static <T> T doPrivileged(PrivilegedAction<T> action, AccessControlContext context, Permission... perms) {
-        return action.run();
+    private static <T> T doPrivileged(PrivilegedAction<T> action, AccessControlContext context, Permission... perms) throws Throwable {
+        try {
+            return action.run();
+        } catch (Throwable ex) {
+            throw AccessControllerUtil.wrapCheckedException(ex);
+        }
     }
 
     @Substitute
-    private static <T> T doPrivileged(PrivilegedExceptionAction<T> action) throws Exception {
-        return action.run();
+    private static <T> T doPrivileged(PrivilegedExceptionAction<T> action) throws Throwable {
+        try {
+            return action.run();
+        } catch (Throwable ex) {
+            throw AccessControllerUtil.wrapCheckedException(ex);
+        }
     }
 
     @Substitute
-    private static <T> T doPrivilegedWithCombiner(PrivilegedExceptionAction<T> action) throws Exception {
-        return action.run();
+    private static <T> T doPrivilegedWithCombiner(PrivilegedExceptionAction<T> action) throws Throwable {
+        try {
+            return action.run();
+        } catch (Throwable ex) {
+            throw AccessControllerUtil.wrapCheckedException(ex);
+        }
     }
 
     @Substitute
-    private static <T> T doPrivilegedWithCombiner(PrivilegedExceptionAction<T> action, AccessControlContext context, Permission... perms) throws Exception {
-        return action.run();
+    private static <T> T doPrivilegedWithCombiner(PrivilegedExceptionAction<T> action, AccessControlContext context, Permission... perms) throws Throwable {
+        try {
+            return action.run();
+        } catch (Throwable ex) {
+            throw AccessControllerUtil.wrapCheckedException(ex);
+        }
     }
 
     @Substitute
-    private static <T> T doPrivileged(PrivilegedExceptionAction<T> action, AccessControlContext context) throws Exception {
-        return action.run();
+    private static <T> T doPrivileged(PrivilegedExceptionAction<T> action, AccessControlContext context) throws Throwable {
+        try {
+            return action.run();
+        } catch (Throwable ex) {
+            throw AccessControllerUtil.wrapCheckedException(ex);
+        }
     }
 
     @Substitute
@@ -111,9 +155,49 @@ final class Target_java_security_AccessController {
 
     @Substitute
     private static AccessControlContext getContext() {
-        AccessControlContext result = new AccessControlContext(new ProtectionDomain[0]);
-        KnownIntrinsics.unsafeCast(result, Target_java_security_AccessControlContext.class).isPrivileged = true;
-        return result;
+        return AccessControllerUtil.NO_CONTEXT_SINGLETON;
+    }
+
+    @Substitute
+    private static AccessControlContext createWrapper(DomainCombiner combiner, Class<?> caller, AccessControlContext parent, AccessControlContext context, Permission[] perms) {
+        return AccessControllerUtil.NO_CONTEXT_SINGLETON;
+    }
+}
+
+@InternalVMMethod
+class AccessControllerUtil {
+
+    static final AccessControlContext NO_CONTEXT_SINGLETON;
+
+    static {
+        try {
+            NO_CONTEXT_SINGLETON = ReflectionUtil.lookupConstructor(AccessControlContext.class, ProtectionDomain[].class, boolean.class).newInstance(new ProtectionDomain[0], true);
+        } catch (ReflectiveOperationException ex) {
+            throw VMError.shouldNotReachHere(ex);
+        }
+    }
+
+    static Throwable wrapCheckedException(Throwable ex) {
+        if (ex instanceof Exception && !(ex instanceof RuntimeException)) {
+            return new PrivilegedActionException((Exception) ex);
+        } else {
+            return ex;
+        }
+    }
+}
+
+@AutomaticFeature
+class AccessControlContextFeature implements Feature {
+    @Override
+    public void duringSetup(DuringSetupAccess access) {
+        access.registerObjectReplacer(AccessControlContextFeature::replaceAccessControlContext);
+    }
+
+    private static Object replaceAccessControlContext(Object obj) {
+        if (obj instanceof AccessControlContext) {
+            return AccessControllerUtil.NO_CONTEXT_SINGLETON;
+        }
+        return obj;
     }
 }
 
@@ -123,236 +207,15 @@ final class Target_java_security_AccessControlContext {
     @Alias protected boolean isPrivileged;
 }
 
-@Substitute
-@TargetClass(java.security.ProtectionDomain.class)
-final class Target_java_security_ProtectionDomain {
-}
-
-@TargetClass(java.security.SecureRandom.class)
-@SuppressWarnings({"unused"})
-final class Target_java_security_SecureRandom {
-    @Alias
-    Target_java_security_SecureRandom(SecureRandomSpi secureRandomSpi, Provider provider) {
-    }
-
+@TargetClass(SecurityManager.class)
+@SuppressWarnings({"static-method", "unused"})
+final class Target_java_lang_SecurityManager {
     @Substitute
-    private static SecureRandom getInstance(String algorithm) throws NoSuchAlgorithmException {
-        if (!algorithm.equals("SHA1PRNG")) {
-            throw new NoSuchAlgorithmException(algorithm);
-        }
-        return new SecureRandom();
+    @NeverInline("Starting a stack walk in the caller frame")
+    protected Class<?>[] getClassContext() {
+        final Pointer startSP = readCallerStackPointer();
+        return StackTraceUtils.getClassContext(1, startSP);
     }
-
-    @Substitute
-    private static SecureRandom getInstance(String algorithm, String provider) throws NoSuchAlgorithmException, NoSuchProviderException {
-        if (!provider.equals("SUN")) {
-            throw new NoSuchProviderException(provider);
-        }
-        return getInstance(algorithm);
-    }
-
-    @Substitute
-    private static SecureRandom getInstance(String algorithm, Provider provider) throws NoSuchAlgorithmException {
-        if (!algorithm.equals("SHA1PRNG")) {
-            throw new NoSuchAlgorithmException(algorithm);
-        }
-        return KnownIntrinsics.unsafeCast(new Target_java_security_SecureRandom(new sun.security.provider.SecureRandom(), provider), SecureRandom.class);
-    }
-
-    @Fold
-    @Substitute
-    static String getPrngAlgorithm() {
-        return null;
-    }
-}
-
-@TargetClass(className = "sun.security.provider.SeedGenerator")
-final class Target_sun_security_provider_SeedGenerator {
-    @Alias @RecomputeFieldValue(kind = Reset)//
-    private static Target_sun_security_provider_SeedGenerator instance;
-
-    @Alias
-    native void getSeedBytes(byte[] result);
-
-    @Substitute
-    @Platforms({Platform.LINUX.class, Platform.DARWIN.class})
-    static void generateSeed(byte[] result) {
-        if (instance == null) {
-            instance = KnownIntrinsics.unsafeCast(new Target_sun_security_provider_SeedGenerator_URLSeedGenerator("file:/dev/urandom"), Target_sun_security_provider_SeedGenerator.class);
-        }
-        instance.getSeedBytes(result);
-    }
-}
-
-@TargetClass(className = "sun.security.provider.SecureRandom", innerClass = "SeederHolder")
-final class Target_sun_security_provider_SecureRandom_SeederHolder {
-    @Alias @InjectAccessors(SeederAccessors.class) //
-    private static sun.security.provider.SecureRandom seeder;
-
-    static final class SeederAccessors {
-        private static sun.security.provider.SecureRandom instance;
-
-        static sun.security.provider.SecureRandom get() {
-            if (instance == null) {
-                sun.security.provider.SecureRandom obj = new sun.security.provider.SecureRandom();
-                byte[] array = new byte[20];
-                Target_sun_security_provider_SeedGenerator.generateSeed(array);
-                obj.engineSetSeed(array);
-                instance = obj;
-            }
-            return instance;
-        }
-    }
-}
-
-@TargetClass(className = "sun.security.provider.SeedGenerator", innerClass = "URLSeedGenerator")
-final class Target_sun_security_provider_SeedGenerator_URLSeedGenerator {
-    @SuppressWarnings("unused")
-    @Alias
-    Target_sun_security_provider_SeedGenerator_URLSeedGenerator(String egdurl) {
-    }
-}
-
-@TargetClass(sun.security.jca.Providers.class)
-final class Target_sun_security_jca_Providers {
-    @Fold
-    @Substitute
-    static Provider getSunProvider() {
-        return sun.security.jca.Providers.getSunProvider();
-    }
-}
-
-@TargetClass(className = "sun.security.provider.SHA2", innerClass = "SHA224")
-final class Target_sun_security_provider_SHA2_SHA224 {
-    @Alias
-    Target_sun_security_provider_SHA2_SHA224() {
-    }
-}
-
-@TargetClass(className = "sun.security.provider.SHA2", innerClass = "SHA256")
-final class Target_sun_security_provider_SHA2_SHA256 {
-    @Alias
-    Target_sun_security_provider_SHA2_SHA256() {
-    }
-}
-
-@TargetClass(className = "sun.security.provider.SHA5", innerClass = "SHA384")
-final class Target_sun_security_provider_SHA5_SHA384 {
-    @Alias
-    Target_sun_security_provider_SHA5_SHA384() {
-    }
-}
-
-@TargetClass(className = "sun.security.provider.SHA5", innerClass = "SHA512")
-final class Target_sun_security_provider_SHA5_SHA512 {
-    @Alias
-    Target_sun_security_provider_SHA5_SHA512() {
-    }
-}
-
-@TargetClass(value = java.security.MessageDigest.class, innerClass = "Delegate")
-final class Target_java_security_MessageDigest_Delegate {
-    @SuppressWarnings("unused")
-    @Alias
-    Target_java_security_MessageDigest_Delegate(MessageDigestSpi digestSpi, String algorithm) {
-    }
-}
-
-@TargetClass(java.security.MessageDigest.class)
-final class Target_java_security_MessageDigest {
-    @Substitute
-    public static Target_java_security_MessageDigest getInstance(String algorithm) throws NoSuchAlgorithmException {
-        MessageDigestSpi spi = null;
-        switch (algorithm) {
-            case "MD5":
-                spi = new sun.security.provider.MD5();
-                break;
-            case "SHA":
-            case "SHA1":
-            case "SHA-1":
-                spi = new sun.security.provider.SHA();
-                break;
-            case "SHA-224":
-                spi = KnownIntrinsics.unsafeCast(new Target_sun_security_provider_SHA2_SHA224(), MessageDigestSpi.class);
-                break;
-            case "SHA-256":
-                spi = KnownIntrinsics.unsafeCast(new Target_sun_security_provider_SHA2_SHA256(), MessageDigestSpi.class);
-                break;
-            case "SHA-384":
-                spi = KnownIntrinsics.unsafeCast(new Target_sun_security_provider_SHA5_SHA384(), MessageDigestSpi.class);
-                break;
-            case "SHA-512":
-                spi = KnownIntrinsics.unsafeCast(new Target_sun_security_provider_SHA5_SHA512(), MessageDigestSpi.class);
-                break;
-        }
-        if (spi != null) {
-            return KnownIntrinsics.unsafeCast(new Target_java_security_MessageDigest_Delegate(spi, algorithm), Target_java_security_MessageDigest.class);
-        }
-
-        throw new NoSuchAlgorithmException(algorithm);
-    }
-
-    @SuppressWarnings("unused")
-    @Substitute
-    public static Target_java_security_MessageDigest getInstance(String algorithm, String provider) throws NoSuchAlgorithmException {
-        return getInstance(algorithm);
-    }
-}
-
-@TargetClass(className = "sun.security.provider.NativePRNG")
-@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
-final class Target_sun_security_provider_NativePRNG {
-
-    /*
-     * This is originally a static final field, i.e., the RandomIO instance would be created during
-     * image generation. But it opens a file, which we must do at run time. Therefore, we intercept
-     * fields loads and lazily create the RandomIO instance on first access at run time.
-     */
-    @Alias @InjectAccessors(NativePRNGInstanceAccessors.class) //
-    static Target_sun_security_provider_NativePRNG_RandomIO INSTANCE;
-
-    @Alias
-    static native Target_sun_security_provider_NativePRNG_RandomIO initIO(Target_sun_security_provider_NativePRNG_Variant v);
-}
-
-@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
-class NativePRNGInstanceAccessors {
-    static volatile Target_sun_security_provider_NativePRNG_RandomIO INSTANCE;
-
-    static Target_sun_security_provider_NativePRNG_RandomIO get() {
-        Target_sun_security_provider_NativePRNG_RandomIO result = INSTANCE;
-        if (result == null) {
-            /* Lazy initialization on first access. */
-            result = initializeOnce();
-        }
-        return result;
-    }
-
-    // Checkstyle: stop
-    static synchronized Target_sun_security_provider_NativePRNG_RandomIO initializeOnce() {
-        // Checkstyle: resume
-
-        Target_sun_security_provider_NativePRNG_RandomIO result = INSTANCE;
-        if (result != null) {
-            /* Double-checked locking is OK because INSTANCE is volatile. */
-            return result;
-        }
-
-        result = Target_sun_security_provider_NativePRNG.initIO(Target_sun_security_provider_NativePRNG_Variant.MIXED);
-        INSTANCE = result;
-        return result;
-    }
-}
-
-@TargetClass(className = "sun.security.provider.NativePRNG", innerClass = "Variant")
-@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
-final class Target_sun_security_provider_NativePRNG_Variant {
-    @Alias static Target_sun_security_provider_NativePRNG_Variant MIXED;
-}
-
-@TargetClass(className = "sun.security.provider.NativePRNG", innerClass = "RandomIO")
-@Platforms({Platform.LINUX.class, Platform.DARWIN.class})
-final class Target_sun_security_provider_NativePRNG_RandomIO {
 }
 
 @TargetClass(className = "javax.crypto.JceSecurityManager")
@@ -370,27 +233,168 @@ final class Target_javax_crypto_CryptoAllPermission {
     static Target_javax_crypto_CryptoAllPermission INSTANCE;
 }
 
-@TargetClass(className = "javax.crypto.JceSecurity", onlyWith = JDK8OrEarlier.class)
+final class EnableAllSecurityServicesIsSet implements BooleanSupplier {
+    @Override
+    public boolean getAsBoolean() {
+        return SubstrateOptions.EnableAllSecurityServices.getValue();
+    }
+}
+
+/**
+ * This substitution is enabled only when EnableAllSecurityServices is set since the functionality
+ * that it currently provides, i.e., loading security native libraries, is not needed by default.
+ */
+@TargetClass(value = java.security.Provider.class, onlyWith = EnableAllSecurityServicesIsSet.class)
+final class Target_java_security_Provider {
+
+    @Alias //
+    private transient boolean initialized;
+
+    @Alias//
+    private String name;
+
+    /*
+     * Provider.checkInitialized() is called from the other Provider API methods, before any
+     * computation, thus is a convenient location to do our own initialization, i.e., make sure that
+     * the required libraries are loaded.
+     */
+    @Substitute
+    private void checkInitialized() {
+        if (this.name.equals("SunEC")) {
+            ProviderUtil.initSunEC();
+        }
+
+        if (!initialized) {
+            throw new IllegalStateException();
+        }
+    }
+
+}
+
+final class ProviderUtil {
+    private static volatile boolean initialized = false;
+
+    static void initSunEC() {
+        if (initialized) {
+            return;
+        }
+        /* Lazy initialization. */
+        initOnce();
+    }
+
+    // Checkstyle: stop
+    private static synchronized void initOnce() {
+        // Checkstyle: resume
+        if (!initialized) {
+            try {
+                System.loadLibrary("sunec");
+            } catch (UnsatisfiedLinkError e) {
+                /*
+                 * SunEC has a mode where it can function without the full ECC implementation when
+                 * native library is absent, however, then fewer EC algorithms are available). If
+                 * those algorithms are actually used an java.lang.UnsatisfiedLinkError will be
+                 * thrown. Just warn the user that the library could not be loaded.
+                 */
+                Log.log().string("WARNING: The sunec native library, required by the SunEC provider, could not be loaded. " +
+                                "This library is usually shipped as part of the JDK and can be found under <JAVA_HOME>/jre/lib/<platform>/libsunec.so. " +
+                                "It is loaded at run time via System.loadLibrary(\"sunec\"), the first time services from SunEC are accessed. " +
+                                "To use this provider's services the java.library.path system property needs to be set accordingly " +
+                                "to point to a location that contains libsunec.so. " +
+                                "Note that if java.library.path is not set it defaults to the current working directory.").newline();
+            }
+            initialized = true;
+        }
+    }
+
+}
+
+@TargetClass(className = "javax.crypto.ProviderVerifier", onlyWith = JDK11OrLater.class)
+@SuppressWarnings({"unused"})
+final class Target_javax_crypto_ProviderVerifier {
+
+    @Substitute
+    static boolean isTrustedCryptoProvider(Provider provider) {
+        /*
+         * This is just used for fast-path checks, so returning false is a safe default. The
+         * original method accesses the Java home directory.
+         */
+        return false;
+    }
+}
+
+@TargetClass(className = "javax.crypto.JceSecurity")
 @SuppressWarnings({"unused"})
 final class Target_javax_crypto_JceSecurity {
 
+    /*
+     * Lazily recompute the RANDOM field at runtime. We cannot push the entire static initialization
+     * of JceSecurity to run time because we want the JceSecurity.verificationResults initialized at
+     * image build time.
+     */
+    @Alias @InjectAccessors(JceSecurityAccessor.class) //
+    static SecureRandom RANDOM;
+
     @Substitute
+    @TargetElement(onlyWith = JDK8OrEarlier.class)
     static void verifyProviderJar(URL var0) {
-        throw VMError.unimplemented();
+        throw JceSecurityUtil.shouldNotReach("javax.crypto.JceSecurity.verifyProviderJar(URL)");
     }
 
     @Substitute
-    static Exception getVerificationResult(Provider var0) {
-        throw VMError.unimplemented();
+    @TargetElement(onlyWith = JDK11OrLater.class)
+    static void verifyProvider(URL codeBase, Provider p) {
+        throw JceSecurityUtil.shouldNotReach("javax.crypto.JceSecurity.verifyProviderJar(URL, Provider)");
     }
 
     @Substitute
     static URL getCodeBase(final Class<?> var0) {
-        throw VMError.unimplemented();
+        throw JceSecurityUtil.shouldNotReach("javax.crypto.JceSecurity.getCodeBase(Class)");
     }
 }
 
-@TargetClass(className = "javax.crypto.JarVerifier")
+class JceSecurityAccessor {
+    private static volatile SecureRandom RANDOM;
+
+    static SecureRandom get() {
+        SecureRandom result = RANDOM;
+        if (result == null) {
+            /* Lazy initialization on first access. */
+            result = initializeOnce();
+        }
+        return result;
+    }
+
+    // Checkstyle: stop
+    private static synchronized SecureRandom initializeOnce() {
+        // Checkstyle: resume
+
+        SecureRandom result = RANDOM;
+        if (result != null) {
+            /* Double-checked locking is OK because INSTANCE is volatile. */
+            return result;
+        }
+
+        result = new SecureRandom();
+        RANDOM = result;
+        return result;
+    }
+}
+
+final class JceSecurityUtil {
+    private static final String enableAllSecurityServices = SubstrateOptionsParser.commandArgument(SubstrateOptions.EnableAllSecurityServices, "+");
+
+    static RuntimeException shouldNotReach(String method) {
+        throw VMError.shouldNotReachHere(method + " is reached at runtime. " +
+                        "This should not happen. The contents of JceSecurity.verificationResults " +
+                        "are computed and cached at image build time. Try enabling all security services with " + enableAllSecurityServices + ".");
+    }
+}
+
+/**
+ * JDK 8 has the class `javax.crypto.JarVerifier`, but in JDK 11 and later that class is only
+ * available in Oracle builds, and not in OpenJDK builds.
+ */
+@TargetClass(className = "javax.crypto.JarVerifier", onlyWith = PlatformHasClass.class)
 @SuppressWarnings({"static-method", "unused"})
 final class Target_javax_crypto_JarVerifier {
 
@@ -407,6 +411,22 @@ final class Target_javax_crypto_JarVerifier {
     }
 }
 
+/** A predicate to tell whether this platform includes the argument class. */
+final class PlatformHasClass implements Predicate<String> {
+    @Override
+    public boolean test(String className) {
+        try {
+            @SuppressWarnings({"unused"})
+            /* { Allow use of `Class.forName`. Checkstyle: stop. */
+            final Class<?> classForName = Class.forName(className);
+            /* } Allow use of `Class.forName`. Checkstyle: resume. */
+            return true;
+        } catch (ClassNotFoundException cnfe) {
+            return false;
+        }
+    }
+}
+
 final class ContainsVerifyJars implements Predicate<Class<?>> {
     @Override
     public boolean test(Class<?> originalClass) {
@@ -417,6 +437,111 @@ final class ContainsVerifyJars implements Predicate<Class<?>> {
             return false;
         }
     }
+}
+
+@TargetClass(value = java.security.Policy.class, innerClass = "PolicyInfo")
+final class Target_java_security_Policy_PolicyInfo {
+}
+
+@TargetClass(java.security.Policy.class)
+final class Target_java_security_Policy {
+
+    @Delete @TargetElement(onlyWith = JDK8OrEarlier.class) //
+    private static AtomicReference<?> policy;
+
+    @Delete @TargetElement(onlyWith = JDK11OrLater.class) //
+    private static Target_java_security_Policy_PolicyInfo policyInfo;
+
+    @Substitute
+    private static Policy getPolicyNoCheck() {
+        return AllPermissionsPolicy.SINGLETON;
+    }
+
+    @Substitute
+    private static boolean isSet() {
+        return true;
+    }
+
+    @Substitute
+    @SuppressWarnings("unused")
+    private static void setPolicy(Policy p) {
+        /*
+         * We deliberately treat this as a non-recoverable fatal error. We want to prevent bugs
+         * where an exception is silently ignored by an application and then necessary security
+         * checks are not in place.
+         */
+        throw VMError.shouldNotReachHere("Installing a Policy is not yet supported");
+    }
+}
+
+final class AllPermissionsPolicy extends Policy {
+
+    static final Policy SINGLETON = new AllPermissionsPolicy();
+
+    private AllPermissionsPolicy() {
+    }
+
+    private static PermissionCollection allPermissions() {
+        Permissions result = new Permissions();
+        result.add(SecurityConstants.ALL_PERMISSION);
+        return result;
+    }
+
+    @Override
+    public PermissionCollection getPermissions(CodeSource codesource) {
+        return allPermissions();
+    }
+
+    @Override
+    public PermissionCollection getPermissions(ProtectionDomain domain) {
+        return allPermissions();
+    }
+
+    @Override
+    public boolean implies(ProtectionDomain domain, Permission permission) {
+        return true;
+    }
+}
+
+/**
+ * This class is instantiated indirectly from the {@link Policy#getInstance} methods via the
+ * {@link java.security.Security#getProviders security provider} abstractions. We could just
+ * substitute the {@link Policy#getInstance} methods to return
+ * {@link AllPermissionsPolicy#SINGLETON}, this version is more fool-proof in case someone manually
+ * registers security providers for reflective instantiation.
+ */
+@TargetClass(className = "sun.security.provider.PolicySpiFile")
+@SuppressWarnings({"unused", "static-method"})
+final class Target_sun_security_provider_PolicySpiFile {
+
+    @Substitute
+    private Target_sun_security_provider_PolicySpiFile(Policy.Parameters params) {
+    }
+
+    @Substitute
+    private PermissionCollection engineGetPermissions(CodeSource codesource) {
+        return AllPermissionsPolicy.SINGLETON.getPermissions(codesource);
+    }
+
+    @Substitute
+    private PermissionCollection engineGetPermissions(ProtectionDomain d) {
+        return AllPermissionsPolicy.SINGLETON.getPermissions(d);
+    }
+
+    @Substitute
+    private boolean engineImplies(ProtectionDomain d, Permission p) {
+        return AllPermissionsPolicy.SINGLETON.implies(d, p);
+    }
+
+    @Substitute
+    private void engineRefresh() {
+        AllPermissionsPolicy.SINGLETON.refresh();
+    }
+}
+
+@Delete("Substrate VM does not use SecurityManager, so loading a security policy file would be misleading")
+@TargetClass(className = "sun.security.provider.PolicyFile")
+final class Target_sun_security_provider_PolicyFile {
 }
 
 /** Dummy class to have a class with the file's name. */

@@ -1,29 +1,47 @@
 /*
- * Copyright (c) 2012, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.impl;
 
+import java.io.Closeable;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.Iterator;
 import java.util.Objects;
@@ -32,6 +50,7 @@ import java.util.ServiceLoader;
 
 import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.CallTarget;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerOptions;
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.Truffle;
@@ -61,20 +80,32 @@ public final class DefaultTruffleRuntime implements TruffleRuntime {
     private final ThreadLocal<DefaultFrameInstance> stackTraces = new ThreadLocal<>();
     private final DefaultTVMCI tvmci = new DefaultTVMCI();
 
-    private final TVMCI.Test<CallTarget> testTvmci = new TVMCI.Test<CallTarget>() {
+    private final TVMCI.Test<Closeable, CallTarget> testTvmci = new TVMCI.Test<Closeable, CallTarget>() {
 
         @Override
-        public CallTarget createTestCallTarget(RootNode testNode) {
+        protected Closeable createTestContext(String testName) {
+            return null;
+        }
+
+        @Override
+        public CallTarget createTestCallTarget(Closeable testContext, RootNode testNode) {
             return createCallTarget(testNode);
         }
 
         @Override
-        public void finishWarmup(CallTarget callTarget, String testName) {
+        public void finishWarmup(Closeable testContext, CallTarget callTarget) {
             // do nothing if we have no compiler
         }
     };
 
     public DefaultTruffleRuntime() {
+    }
+
+    /**
+     * Utility method that casts the singleton {@link TruffleRuntime}.
+     */
+    static DefaultTruffleRuntime getRuntime() {
+        return (DefaultTruffleRuntime) Truffle.getRuntime();
     }
 
     public DefaultTVMCI getTvmci() {
@@ -90,8 +121,7 @@ public final class DefaultTruffleRuntime implements TruffleRuntime {
     @Override
     public RootCallTarget createCallTarget(RootNode rootNode) {
         DefaultCallTarget target = new DefaultCallTarget(rootNode);
-        rootNode.setCallTarget(target);
-        getTvmci().onLoad(target);
+        DefaultRuntimeAccessor.INSTRUMENT.onLoad(target.getRootNode());
         return target;
     }
 
@@ -173,27 +203,23 @@ public final class DefaultTruffleRuntime implements TruffleRuntime {
         stackTraces.set(topFrame);
     }
 
-    void pushFrame(VirtualFrame frame, CallTarget target) {
-        setThreadLocalStackTrace(new DefaultFrameInstance(frame, target, null, getThreadLocalStackTrace()));
+    DefaultFrameInstance pushFrame(VirtualFrame frame, CallTarget target) {
+        DefaultFrameInstance callerFrame = getThreadLocalStackTrace();
+        setThreadLocalStackTrace(new DefaultFrameInstance(frame, target, null, callerFrame));
+        return callerFrame;
     }
 
-    void pushFrame(VirtualFrame frame, CallTarget target, Node parentCallNode) {
-        DefaultFrameInstance currentFrame = getThreadLocalStackTrace();
+    DefaultFrameInstance pushFrame(VirtualFrame frame, CallTarget target, Node parentCallNode) {
+        DefaultFrameInstance callerFrame = getThreadLocalStackTrace();
         // we need to ensure that frame instances are immutable so we need to recreate the parent
         // frame
-        if (currentFrame != null) {
-            currentFrame = new DefaultFrameInstance(currentFrame.frame, currentFrame.target, parentCallNode, currentFrame.callerFrame);
-        }
-        setThreadLocalStackTrace(new DefaultFrameInstance(frame, target, null, currentFrame));
+        DefaultFrameInstance callerFrameWithCallNode = callerFrame != null ? callerFrame.withCallNode(parentCallNode) : callerFrame;
+        setThreadLocalStackTrace(new DefaultFrameInstance(frame, target, null, callerFrameWithCallNode));
+        return callerFrame;
     }
 
-    void popFrame() {
-        DefaultFrameInstance callerFrame = getThreadLocalStackTrace().callerFrame;
-        if (callerFrame != null) {
-            setThreadLocalStackTrace(new DefaultFrameInstance(callerFrame.frame, callerFrame.target, null, callerFrame.callerFrame));
-        } else {
-            setThreadLocalStackTrace(null);
-        }
+    void popFrame(DefaultFrameInstance callerFrame) {
+        setThreadLocalStackTrace(callerFrame);
     }
 
     @Override
@@ -222,11 +248,30 @@ public final class DefaultTruffleRuntime implements TruffleRuntime {
             } catch (ClassNotFoundException | NoSuchMethodException e) {
                 // Services.load is not available
             }
+            if (loadMethod != null) {
+                try {
+                    try {
+                        loadMethod.invoke(null, (Object) null);
+                    } catch (InvocationTargetException e) {
+                        throw e.getTargetException();
+                    }
+                } catch (NullPointerException npe) {
+                    // Services.load is accessible
+                } catch (IllegalAccessException iae) {
+                    // Services.load is not accessible. This happens on JDK 9+ when EnableJVMCI is
+                    // true (either explicitly or by default) which causes the jdk.internal.vm.ci
+                    // module to be resolved.
+                    loadMethod = null;
+                } catch (Throwable e) {
+                    throw new InternalError(e);
+                }
+            }
             LOAD_METHOD = loadMethod;
         }
 
         @SuppressWarnings("unchecked")
         static <S> Iterable<S> load(Class<S> service) {
+            TruffleJDKServices.addUses(service);
             if (LOAD_METHOD != null) {
                 try {
                     return (Iterable<S>) LOAD_METHOD.invoke(null, service);
@@ -253,7 +298,7 @@ public final class DefaultTruffleRuntime implements TruffleRuntime {
         return false;
     }
 
-    private static class DefaultFrameInstance implements FrameInstance {
+    static final class DefaultFrameInstance implements FrameInstance {
 
         private final CallTarget target;
         private final VirtualFrame frame;
@@ -267,11 +312,7 @@ public final class DefaultTruffleRuntime implements TruffleRuntime {
             this.callerFrame = callerFrame;
         }
 
-        @SuppressWarnings("deprecation")
-        public final Frame getFrame(FrameAccess access) {
-            if (access == FrameAccess.NONE) {
-                return null;
-            }
+        public Frame getFrame(FrameAccess access) {
             Frame localFrame = this.frame;
             switch (access) {
                 case READ_ONLY:
@@ -281,20 +322,25 @@ public final class DefaultTruffleRuntime implements TruffleRuntime {
                     return localFrame;
                 case MATERIALIZE:
                     return localFrame.materialize();
+                default:
+                    throw CompilerDirectives.shouldNotReachHere();
             }
-            throw new AssertionError();
         }
 
-        public final boolean isVirtualFrame() {
+        public boolean isVirtualFrame() {
             return false;
         }
 
-        public final CallTarget getCallTarget() {
+        public CallTarget getCallTarget() {
             return target;
         }
 
         public Node getCallNode() {
             return callNode;
+        }
+
+        DefaultFrameInstance withCallNode(Node otherCallNode) {
+            return new DefaultFrameInstance(frame, target, otherCallNode, callerFrame);
         }
 
     }

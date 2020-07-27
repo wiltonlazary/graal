@@ -24,33 +24,75 @@
  */
 package com.oracle.graal.pointsto.flow;
 
-import java.util.Collection;
+import static com.oracle.graal.pointsto.util.ConcurrentLightHashSet.addElement;
+import static com.oracle.graal.pointsto.util.ConcurrentLightHashSet.getElements;
 
-import org.graalvm.compiler.nodes.CallTargetNode.InvokeKind;
-import org.graalvm.compiler.nodes.Invoke;
-import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.flow.context.BytecodeLocation;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
+import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.typestate.TypeState;
 import com.oracle.graal.pointsto.util.AnalysisError;
-import com.oracle.graal.pointsto.util.ConcurrentLightHashSet;
+
+import jdk.vm.ci.code.BytecodePosition;
 
 public abstract class AbstractVirtualInvokeTypeFlow extends InvokeTypeFlow {
+    private static final AtomicReferenceFieldUpdater<AbstractVirtualInvokeTypeFlow, Object> CALLEES_UPDATER = AtomicReferenceFieldUpdater
+                    .newUpdater(AbstractVirtualInvokeTypeFlow.class, Object.class, "callees");
 
-    protected final ConcurrentLightHashSet<AnalysisMethod> callees;
+    private static final AtomicReferenceFieldUpdater<AbstractVirtualInvokeTypeFlow, Object> INVOKE_LOCATIONS_UPDATER = AtomicReferenceFieldUpdater
+                    .newUpdater(AbstractVirtualInvokeTypeFlow.class, Object.class, "invokeLocations");
 
-    protected AbstractVirtualInvokeTypeFlow(Invoke invoke, MethodCallTargetNode target,
+    @SuppressWarnings("unused") protected volatile Object callees;
+
+    private boolean isContextInsensitive;
+
+    /**
+     * The context insensitive invoke needs to keep track of all the locations it is swapped in. For
+     * all the other invokes this is null, their location is the source node location.
+     */
+    @SuppressWarnings("unused") protected volatile Object invokeLocations;
+
+    protected AbstractVirtualInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, AnalysisMethod targetMethod,
                     TypeFlow<?>[] actualParameters, ActualReturnTypeFlow actualReturn, BytecodeLocation location) {
-        super(invoke, target, actualParameters, actualReturn, location);
-        assert target.invokeKind() == InvokeKind.Virtual || target.invokeKind() == InvokeKind.Interface;
-
-        callees = new ConcurrentLightHashSet<>();
+        super(invokeLocation, receiverType, targetMethod, actualParameters, actualReturn, location);
     }
 
     protected AbstractVirtualInvokeTypeFlow(BigBang bb, MethodFlowsGraph methodFlows, AbstractVirtualInvokeTypeFlow original) {
         super(bb, methodFlows, original);
-        callees = new ConcurrentLightHashSet<>();
+    }
+
+    public void markAsContextInsensitive() {
+        isContextInsensitive = true;
+    }
+
+    public boolean isContextInsensitive() {
+        return isContextInsensitive;
+    }
+
+    public boolean addInvokeLocation(BytecodePosition invokeLocation) {
+        if (invokeLocation != null) {
+            return addElement(this, INVOKE_LOCATIONS_UPDATER, invokeLocation);
+        }
+        return false;
+    }
+
+    /** The context insensitive virual invoke returns all the locations where it is swapped in. */
+    public Collection<BytecodePosition> getInvokeLocations() {
+        if (isContextInsensitive) {
+            return getElements(this, INVOKE_LOCATIONS_UPDATER);
+        } else {
+            return Collections.singleton(getSource());
+        }
+    }
+
+    @Override
+    public final boolean isDirectInvoke() {
+        return false;
     }
 
     @Override
@@ -66,8 +108,15 @@ public abstract class AbstractVirtualInvokeTypeFlow extends InvokeTypeFlow {
     @Override
     public abstract void onObservedUpdate(BigBang bb);
 
+    @Override
+    public void onObservedSaturated(BigBang bb, TypeFlow<?> observed) {
+        assert this.isClone();
+        /* When the receiver flow saturates start observing the flow of the receiver type. */
+        replaceObservedWith(bb, receiverType);
+    }
+
     protected boolean addCallee(AnalysisMethod callee) {
-        boolean add = callees.addElement(callee);
+        boolean add = addElement(this, CALLEES_UPDATER, callee);
         if (this.isClone()) {
             // if this is a clone, register the callee with the original invoke
             ((AbstractVirtualInvokeTypeFlow) originalInvoke).addCallee(callee);
@@ -76,12 +125,12 @@ public abstract class AbstractVirtualInvokeTypeFlow extends InvokeTypeFlow {
     }
 
     @Override
-    public final Collection<AnalysisMethod> getCallees() {
-        return callees.getElements();
+    public Collection<AnalysisMethod> getCallees() {
+        return getElements(this, CALLEES_UPDATER);
     }
 
     @Override
     public String toString() {
-        return "VirtualInvoke<" + getSource().targetMethod().format("%h.%n") + ">" + ":" + getState();
+        return "VirtualInvoke<" + targetMethod.format("%h.%n") + ">" + ":" + getState();
     }
 }

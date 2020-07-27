@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
  */
 package org.graalvm.compiler.replacements;
 
+import static jdk.vm.ci.services.Services.IS_IN_NATIVE_IMAGE;
 import static org.graalvm.compiler.nodes.graphbuilderconf.IntrinsicContext.CompilationContext.INLINE_AFTER_PARSING;
 
 import java.lang.reflect.Method;
@@ -33,6 +34,7 @@ import java.util.List;
 
 import org.graalvm.compiler.core.common.CompilationIdentifier;
 import org.graalvm.compiler.core.common.spi.ConstantFieldProvider;
+import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.core.common.type.StampPair;
 import org.graalvm.compiler.debug.DebugCloseable;
@@ -67,6 +69,7 @@ import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderTool;
 import org.graalvm.compiler.nodes.graphbuilderconf.IntrinsicContext;
 import org.graalvm.compiler.nodes.java.ExceptionObjectNode;
 import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
+import org.graalvm.compiler.nodes.spi.Replacements;
 import org.graalvm.compiler.nodes.spi.StampProvider;
 import org.graalvm.compiler.nodes.type.StampTool;
 import org.graalvm.compiler.phases.OptimisticOptimizations;
@@ -83,6 +86,7 @@ import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
 
 /**
@@ -150,6 +154,11 @@ public class GraphKit implements GraphBuilderTool {
     }
 
     @Override
+    public Replacements getReplacements() {
+        return providers.getReplacements();
+    }
+
+    @Override
     public StampProvider getStampProvider() {
         return providers.getStampProvider();
     }
@@ -177,6 +186,15 @@ public class GraphKit implements GraphBuilderTool {
             node.setStamp(wordTypes.getWordStamp(StampTool.typeOrNull(node)));
         }
         return node;
+    }
+
+    public Stamp wordStamp(ResolvedJavaType type) {
+        assert wordTypes != null && wordTypes.isWord(type);
+        return wordTypes.getWordStamp(type);
+    }
+
+    public final JavaKind asKind(JavaType type) {
+        return wordTypes != null ? wordTypes.asKind(type) : type.getJavaKind();
     }
 
     @Override
@@ -218,11 +236,12 @@ public class GraphKit implements GraphBuilderTool {
     }
 
     public ResolvedJavaMethod findMethod(Class<?> declaringClass, String name, boolean isStatic) {
+        ResolvedJavaType type = providers.getMetaAccess().lookupJavaType(declaringClass);
         ResolvedJavaMethod method = null;
-        for (Method m : declaringClass.getDeclaredMethods()) {
+        for (ResolvedJavaMethod m : type.getDeclaredMethods()) {
             if (Modifier.isStatic(m.getModifiers()) == isStatic && m.getName().equals(name)) {
                 assert method == null : "found more than one method in " + declaringClass + " named " + name;
-                method = providers.getMetaAccess().lookupJavaMethod(m);
+                method = m;
             }
         }
         GraalError.guarantee(method != null, "Could not find %s.%s (%s)", declaringClass, name, isStatic ? "static" : "non-static");
@@ -271,9 +290,9 @@ public class GraphKit implements GraphBuilderTool {
 
     @SuppressWarnings("try")
     public InvokeWithExceptionNode createInvokeWithExceptionAndUnwind(ResolvedJavaMethod method, InvokeKind invokeKind,
-                    FrameStateBuilder frameStateBuilder, int invokeBci, int exceptionEdgeBci, ValueNode... args) {
+                    FrameStateBuilder frameStateBuilder, int invokeBci, ValueNode... args) {
         try (DebugCloseable context = graph.withNodeSourcePosition(NodeSourcePosition.substitution(graph.currentNodeSourcePosition(), method))) {
-            InvokeWithExceptionNode result = startInvokeWithException(method, invokeKind, frameStateBuilder, invokeBci, exceptionEdgeBci, args);
+            InvokeWithExceptionNode result = startInvokeWithException(method, invokeKind, frameStateBuilder, invokeBci, args);
             exceptionPart();
             ExceptionObjectNode exception = exceptionObject();
             append(new UnwindNode(exception));
@@ -283,9 +302,9 @@ public class GraphKit implements GraphBuilderTool {
     }
 
     @SuppressWarnings("try")
-    public InvokeWithExceptionNode createInvokeWithExceptionAndUnwind(MethodCallTargetNode callTarget, FrameStateBuilder frameStateBuilder, int invokeBci, int exceptionEdgeBci) {
+    public InvokeWithExceptionNode createInvokeWithExceptionAndUnwind(MethodCallTargetNode callTarget, FrameStateBuilder frameStateBuilder, int invokeBci) {
         try (DebugCloseable context = graph.withNodeSourcePosition(NodeSourcePosition.substitution(graph.currentNodeSourcePosition(), callTarget.targetMethod()))) {
-            InvokeWithExceptionNode result = startInvokeWithException(callTarget, frameStateBuilder, invokeBci, exceptionEdgeBci);
+            InvokeWithExceptionNode result = startInvokeWithException(callTarget, frameStateBuilder, invokeBci);
             exceptionPart();
             ExceptionObjectNode exception = exceptionObject();
             append(new UnwindNode(exception));
@@ -296,10 +315,6 @@ public class GraphKit implements GraphBuilderTool {
 
     protected MethodCallTargetNode createMethodCallTarget(InvokeKind invokeKind, ResolvedJavaMethod targetMethod, ValueNode[] args, StampPair returnStamp, @SuppressWarnings("unused") int bci) {
         return new MethodCallTargetNode(invokeKind, targetMethod, args, returnStamp, null);
-    }
-
-    protected final JavaKind asKind(JavaType type) {
-        return wordTypes != null ? wordTypes.asKind(type) : type.getJavaKind();
     }
 
     /**
@@ -352,30 +367,27 @@ public class GraphKit implements GraphBuilderTool {
     public void inline(InvokeNode invoke, String reason, String phase) {
         ResolvedJavaMethod method = ((MethodCallTargetNode) invoke.callTarget()).targetMethod();
 
-        MetaAccessProvider metaAccess = providers.getMetaAccess();
         Plugins plugins = new Plugins(graphBuilderPlugins);
         GraphBuilderConfiguration config = GraphBuilderConfiguration.getSnippetDefault(plugins);
 
-        StructuredGraph calleeGraph = new StructuredGraph.Builder(invoke.getOptions(), invoke.getDebug()).method(method).build();
-        if (invoke.graph().trackNodeSourcePosition()) {
-            calleeGraph.setTrackNodeSourcePosition();
+        StructuredGraph calleeGraph;
+        if (IS_IN_NATIVE_IMAGE) {
+            calleeGraph = providers.getReplacements().getSnippet(method, null, null, false, null, invoke.getOptions());
+        } else {
+            calleeGraph = new StructuredGraph.Builder(invoke.getOptions(), invoke.getDebug()).method(method).trackNodeSourcePosition(invoke.graph().trackNodeSourcePosition()).setIsSubstitution(
+                            true).build();
+            IntrinsicContext initialReplacementContext = new IntrinsicContext(method, method, providers.getReplacements().getDefaultReplacementBytecodeProvider(), INLINE_AFTER_PARSING);
+            GraphBuilderPhase.Instance instance = createGraphBuilderInstance(providers, config, OptimisticOptimizations.NONE, initialReplacementContext);
+            instance.apply(calleeGraph);
         }
-        IntrinsicContext initialReplacementContext = new IntrinsicContext(method, method, providers.getReplacements().getDefaultReplacementBytecodeProvider(), INLINE_AFTER_PARSING);
-        GraphBuilderPhase.Instance instance = createGraphBuilderInstance(metaAccess, providers.getStampProvider(), providers.getConstantReflection(), providers.getConstantFieldProvider(), config,
-                        OptimisticOptimizations.NONE,
-                        initialReplacementContext);
-        instance.apply(calleeGraph);
-
-        // Remove all frame states from inlinee
-        calleeGraph.clearAllStateAfter();
         new DeadCodeEliminationPhase(Optionality.Required).apply(calleeGraph);
 
         InliningUtil.inline(invoke, calleeGraph, false, method, reason, phase);
     }
 
-    protected GraphBuilderPhase.Instance createGraphBuilderInstance(MetaAccessProvider metaAccess, StampProvider stampProvider, ConstantReflectionProvider constantReflection,
-                    ConstantFieldProvider constantFieldProvider, GraphBuilderConfiguration graphBuilderConfig, OptimisticOptimizations optimisticOpts, IntrinsicContext initialIntrinsicContext) {
-        return new GraphBuilderPhase.Instance(metaAccess, stampProvider, constantReflection, constantFieldProvider, graphBuilderConfig, optimisticOpts, initialIntrinsicContext);
+    protected GraphBuilderPhase.Instance createGraphBuilderInstance(Providers theProviders, GraphBuilderConfiguration graphBuilderConfig, OptimisticOptimizations optimisticOpts,
+                    IntrinsicContext initialIntrinsicContext) {
+        return new GraphBuilderPhase.Instance(theProviders, graphBuilderConfig, optimisticOpts, initialIntrinsicContext);
     }
 
     protected void pushStructure(Structure structure) {
@@ -517,7 +529,7 @@ public class GraphKit implements GraphBuilderTool {
     }
 
     public InvokeWithExceptionNode startInvokeWithException(ResolvedJavaMethod method, InvokeKind invokeKind,
-                    FrameStateBuilder frameStateBuilder, int invokeBci, int exceptionEdgeBci, ValueNode... args) {
+                    FrameStateBuilder frameStateBuilder, int invokeBci, ValueNode... args) {
 
         assert method.isStatic() == (invokeKind == InvokeKind.Static);
         Signature signature = method.getSignature();
@@ -528,18 +540,11 @@ public class GraphKit implements GraphBuilderTool {
             returnStamp = StampFactory.forDeclaredType(graph.getAssumptions(), returnType, false);
         }
         MethodCallTargetNode callTarget = graph.add(createMethodCallTarget(invokeKind, method, args, returnStamp, invokeBci));
-        return startInvokeWithException(callTarget, frameStateBuilder, invokeBci, exceptionEdgeBci);
+        return startInvokeWithException(callTarget, frameStateBuilder, invokeBci);
     }
 
-    public InvokeWithExceptionNode startInvokeWithException(MethodCallTargetNode callTarget, FrameStateBuilder frameStateBuilder, int invokeBci, int exceptionEdgeBci) {
-        ExceptionObjectNode exceptionObject = add(new ExceptionObjectNode(getMetaAccess()));
-        if (frameStateBuilder != null) {
-            FrameStateBuilder exceptionState = frameStateBuilder.copy();
-            exceptionState.clearStack();
-            exceptionState.push(JavaKind.Object, exceptionObject);
-            exceptionState.setRethrowException(false);
-            exceptionObject.setStateAfter(exceptionState.create(exceptionEdgeBci, exceptionObject));
-        }
+    public InvokeWithExceptionNode startInvokeWithException(MethodCallTargetNode callTarget, FrameStateBuilder frameStateBuilder, int invokeBci) {
+        ExceptionObjectNode exceptionObject = createExceptionObjectNode(frameStateBuilder, invokeBci);
         InvokeWithExceptionNode invoke = append(new InvokeWithExceptionNode(callTarget, exceptionObject, invokeBci));
         AbstractBeginNode noExceptionEdge = graph.add(KillingBeginNode.create(LocationIdentity.any()));
         invoke.setNext(noExceptionEdge);
@@ -562,6 +567,18 @@ public class GraphKit implements GraphBuilderTool {
         pushStructure(s);
 
         return invoke;
+    }
+
+    protected ExceptionObjectNode createExceptionObjectNode(FrameStateBuilder frameStateBuilder, int exceptionEdgeBci) {
+        ExceptionObjectNode exceptionObject = add(new ExceptionObjectNode(getMetaAccess()));
+        if (frameStateBuilder != null) {
+            FrameStateBuilder exceptionState = frameStateBuilder.copy();
+            exceptionState.clearStack();
+            exceptionState.push(JavaKind.Object, exceptionObject);
+            exceptionState.setRethrowException(true);
+            exceptionObject.setStateAfter(exceptionState.create(exceptionEdgeBci, exceptionObject));
+        }
+        return exceptionObject;
     }
 
     private InvokeWithExceptionStructure saveLastInvokeWithExceptionNode() {

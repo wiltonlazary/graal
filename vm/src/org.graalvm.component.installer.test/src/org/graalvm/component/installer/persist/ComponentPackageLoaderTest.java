@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -46,12 +46,13 @@ import org.graalvm.component.installer.BundleConstants;
 import org.graalvm.component.installer.CommonConstants;
 import org.graalvm.component.installer.FailedOperationException;
 import org.graalvm.component.installer.TestBase;
+import org.graalvm.component.installer.jar.JarMetaLoader;
 import org.graalvm.component.installer.model.ComponentInfo;
+import org.graalvm.component.installer.model.DistributionType;
 import org.junit.After;
 import org.junit.Assert;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import org.junit.Before;
@@ -116,7 +117,7 @@ public class ComponentPackageLoaderTest extends TestBase {
         if (jarData == null) {
             return new ComponentPackageLoader(data::getProperty, this).createComponentInfo();
         } else {
-            return new ComponentPackageLoader(jarData, this).createComponentInfo();
+            return new JarMetaLoader(jarData, this).createComponentInfo();
         }
     }
 
@@ -162,7 +163,7 @@ public class ComponentPackageLoaderTest extends TestBase {
     public void testCollectErrors() throws Exception {
         File f = dataFile("broken1.zip").toFile();
         jf = new JarFile(f);
-        loader = new ComponentPackageLoader(jf, this).infoOnly(true);
+        loader = new JarMetaLoader(jf, this).infoOnly(true);
         info = loader.createComponentInfo();
 
         List<String> errs = new ArrayList<>();
@@ -181,7 +182,7 @@ public class ComponentPackageLoaderTest extends TestBase {
     private void setupLoader() throws IOException {
         File f = dataFile("data/truffleruby2.jar").toFile();
         jf = new JarFile(f);
-        loader = new ComponentPackageLoader(jf, this);
+        loader = new JarMetaLoader(jf, this);
         info = loader.createComponentInfo();
     }
 
@@ -215,18 +216,6 @@ public class ComponentPackageLoaderTest extends TestBase {
         Map<String, String> caps = info.getRequiredGraalValues();
         assertNotNull(caps);
         assertNotNull(caps.get(CommonConstants.CAP_GRAALVM_VERSION));
-    }
-
-    @Test
-    public void testComponentLicensePath() throws Exception {
-        setupLoader();
-        // must load file paths
-        loader.loadPaths();
-        assertNotNull(info.getLicensePath());
-        assertNotEquals("LICENSE", info.getLicensePath());
-        assertTrue(info.getLicensePath().contains(info.getVersionString()));
-        // only remapped LICENSE, to avoid some shared file deletion
-        assertFalse(info.getPaths().contains("LICENSE"));
     }
 
     @Test
@@ -316,4 +305,28 @@ public class ComponentPackageLoaderTest extends TestBase {
         assertEquals(4, lines.length);
     }
 
+    @Test
+    public void testFastr() throws Exception {
+        info = info();
+        assertEquals(1, info.getDependencies().size());
+        assertEquals("org.graalvm.llvm-toolchain", info.getDependencies().iterator().next());
+    }
+
+    @Test
+    public void testDistributionTypeMissing() throws Exception {
+        info = info();
+        assertEquals(DistributionType.OPTIONAL, info.getDistributionType());
+    }
+
+    @Test
+    public void testDistributionTypeBundled() throws Exception {
+        info = info();
+        assertEquals(DistributionType.BUNDLED, info.getDistributionType());
+    }
+
+    @Test
+    public void testDistributionTypeInvalid() throws Exception {
+        exception.expect(MetadataException.class);
+        info = info();
+    }
 }

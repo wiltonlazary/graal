@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,6 +38,7 @@ import org.graalvm.compiler.nodes.spi.NodeValueMap;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
+import jdk.vm.ci.meta.SerializableConstant;
 
 /**
  * This class represents a value within the graph, including local variables, phis, and all other
@@ -134,6 +135,11 @@ public abstract class ValueNode extends org.graalvm.compiler.graph.Node implemen
         return value != null && value.isNull();
     }
 
+    public final boolean isDefaultConstant() {
+        Constant value = asConstant();
+        return value != null && value.isDefaultForKind();
+    }
+
     /**
      * Convert this value to a constant if it is a constant, otherwise return null.
      *
@@ -148,6 +154,10 @@ public abstract class ValueNode extends org.graalvm.compiler.graph.Node implemen
         }
     }
 
+    public boolean isIllegalConstant() {
+        return isConstant() && asConstant().equals(JavaConstant.forIllegal());
+    }
+
     public final boolean isJavaConstant() {
         return isConstant() && asConstant() instanceof JavaConstant;
     }
@@ -156,6 +166,19 @@ public abstract class ValueNode extends org.graalvm.compiler.graph.Node implemen
         Constant value = asConstant();
         if (value instanceof JavaConstant) {
             return (JavaConstant) value;
+        } else {
+            return null;
+        }
+    }
+
+    public final boolean isSerializableConstant() {
+        return isConstant() && asConstant() instanceof SerializableConstant;
+    }
+
+    public final SerializableConstant asSerializableConstant() {
+        Constant value = asConstant();
+        if (value instanceof SerializableConstant) {
+            return (SerializableConstant) value;
         } else {
             return null;
         }
@@ -207,4 +230,5 @@ public abstract class ValueNode extends org.graalvm.compiler.graph.Node implemen
         }
         return true;
     }
+
 }

@@ -24,16 +24,20 @@
  */
 package com.oracle.svm.core.hub;
 
-import org.graalvm.nativeimage.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.svm.core.annotate.AutomaticFeature;
+import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.annotate.UnknownObjectField;
+import com.oracle.svm.core.c.NonmovableArray;
+import com.oracle.svm.core.c.NonmovableArrays;
 
 public final class DynamicHubSupport {
 
+    private int maxTypeId;
     @UnknownObjectField(types = {byte[].class}) private byte[] referenceMapEncoding;
 
     @Platforms(Platform.HOSTED_ONLY.class)
@@ -41,25 +45,30 @@ public final class DynamicHubSupport {
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public void setData(byte[] referenceMapEncoding) {
-        this.referenceMapEncoding = referenceMapEncoding;
+    public void setMaxTypeId(int maxTypeId) {
+        this.maxTypeId = maxTypeId;
     }
 
-    public static byte[] getReferenceMapEncoding() {
-        return ImageSingletons.lookup(DynamicHubSupport.class).referenceMapEncoding;
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public int getMaxTypeId() {
+        return maxTypeId;
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void setData(NonmovableArray<Byte> referenceMapEncoding) {
+        this.referenceMapEncoding = NonmovableArrays.getHostedArray(referenceMapEncoding);
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static NonmovableArray<Byte> getReferenceMapEncoding() {
+        return NonmovableArrays.fromImageHeap(ImageSingletons.lookup(DynamicHubSupport.class).referenceMapEncoding);
     }
 }
 
 @AutomaticFeature
 class DynamicHubFeature implements Feature {
-
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
         ImageSingletons.add(DynamicHubSupport.class, new DynamicHubSupport());
-    }
-
-    @Override
-    public void afterCompilation(AfterCompilationAccess config) {
-        config.registerAsImmutable(DynamicHubSupport.getReferenceMapEncoding());
     }
 }

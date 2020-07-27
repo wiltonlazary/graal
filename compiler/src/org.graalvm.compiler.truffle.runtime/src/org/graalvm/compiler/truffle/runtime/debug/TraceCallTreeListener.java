@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,21 +24,19 @@
  */
 package org.graalvm.compiler.truffle.runtime.debug;
 
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TraceTruffleCompilationCallTree;
-
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import org.graalvm.compiler.truffle.common.TruffleCompilerListener.CompilationResultInfo;
 import org.graalvm.compiler.truffle.common.TruffleCompilerListener.GraphInfo;
-import org.graalvm.compiler.truffle.common.TruffleCompilerOptions;
 import org.graalvm.compiler.truffle.runtime.AbstractGraalTruffleRuntimeListener;
 import org.graalvm.compiler.truffle.runtime.GraalTruffleRuntime;
 import org.graalvm.compiler.truffle.runtime.GraalTruffleRuntimeListener;
 import org.graalvm.compiler.truffle.runtime.OptimizedCallTarget;
 import org.graalvm.compiler.truffle.runtime.OptimizedDirectCallNode;
 import org.graalvm.compiler.truffle.runtime.OptimizedIndirectCallNode;
+import org.graalvm.compiler.truffle.options.PolyglotCompilerOptions;
 import org.graalvm.compiler.truffle.runtime.TruffleInlining;
 import org.graalvm.compiler.truffle.runtime.TruffleInlining.CallTreeNodeVisitor;
 import org.graalvm.compiler.truffle.runtime.TruffleInliningDecision;
@@ -55,15 +53,15 @@ public final class TraceCallTreeListener extends AbstractGraalTruffleRuntimeList
     }
 
     public static void install(GraalTruffleRuntime runtime) {
-        if (TruffleCompilerOptions.getValue(TraceTruffleCompilationCallTree)) {
-            runtime.addListener(new TraceCallTreeListener(runtime));
-        }
+        runtime.addListener(new TraceCallTreeListener(runtime));
     }
 
     @Override
     public void onCompilationSuccess(OptimizedCallTarget target, TruffleInlining inliningDecision, GraphInfo graphInfo, CompilationResultInfo compilationResultInfo) {
-        runtime.logEvent(0, "opt call tree", target.toString(), target.getDebugProperties(inliningDecision));
-        logTruffleCallTree(target, inliningDecision);
+        if (target.getOptionValue(PolyglotCompilerOptions.TraceCompilationCallTree)) {
+            runtime.logEvent(target, 0, "opt call tree", target.getDebugProperties(inliningDecision));
+            logTruffleCallTree(target, inliningDecision);
+        }
     }
 
     private void logTruffleCallTree(OptimizedCallTarget compilable, TruffleInlining inliningDecision) {
@@ -82,10 +80,10 @@ public final class TraceCallTreeListener extends AbstractGraalTruffleRuntimeList
                     Map<String, Object> properties = new LinkedHashMap<>();
                     GraalTruffleRuntimeListener.addASTSizeProperty(callNode.getCurrentCallTarget(), inliningDecision, properties);
                     properties.putAll(callNode.getCurrentCallTarget().getDebugProperties(inliningDecision));
-                    runtime.logEvent(depth, "opt call tree", callNode.getCurrentCallTarget().toString() + dispatched, properties);
+                    runtime.logEvent(compilable, depth, "opt call tree", callNode.getCurrentCallTarget().toString() + dispatched, properties, null);
                 } else if (node instanceof OptimizedIndirectCallNode) {
                     int depth = decisionStack == null ? 0 : decisionStack.size() - 1;
-                    runtime.logEvent(depth, "opt call tree", "<indirect>", new LinkedHashMap<>());
+                    runtime.logEvent(compilable, depth, "opt call tree", "<indirect>", null, null);
                 }
                 return true;
             }

@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.test.source;
 
@@ -38,6 +54,7 @@ public class SourceTextTest {
     private final Source emptyLineSource = Source.newBuilder("", "\n", "emptyLineSource").build();
     private final Source shortSource = Source.newBuilder("", "01", "shortSource").build();
     private final Source longSource = Source.newBuilder("", "01234\n67\n9\n", "long").build();
+    private final Source lineDelimitersSource = Source.newBuilder("", "\rA\r\rB\nC\n\nD\r\nE\r\n\r\nF", "lineDelimiters").build();
 
     @Test
     public void emptyTextTest0() {
@@ -273,6 +290,35 @@ public class SourceTextTest {
     @Test(expected = IllegalArgumentException.class)
     public void longTextTest8() {
         longSource.getLineLength(5);
+    }
+
+    @Test
+    public void lineDelimiters0() {
+        assertEquals(10, lineDelimitersSource.getLineCount());
+    }
+
+    @Test
+    public void lineDelimiters1() {
+        int[] lineLengths = new int[]{0, 1, 0, 1, 1, 0, 1, 1, 0, 1};
+        for (int i = 0; i < lineLengths.length; i++) {
+            assertEquals("Wrong length of line " + (i + 1), lineLengths[i], lineDelimitersSource.getLineLength(i + 1));
+        }
+    }
+
+    @Test
+    public void lineDelimiters2() {
+        int[] lineNumbers = new int[]{1, 2, 2, 3, 4, 4, 5, 5, 6, 7, 7, 7, 8, 8, 8, 9, 9, 10, 10};
+        for (int i = 0; i < lineNumbers.length; i++) {
+            assertEquals("Wrong line number at " + i, lineNumbers[i], lineDelimitersSource.getLineNumber(i));
+        }
+    }
+
+    @Test
+    public void lineDelimiters3() {
+        int[] lineStartOffsets = new int[]{0, 1, 3, 4, 6, 8, 9, 12, 15, 17};
+        for (int i = 0; i < lineStartOffsets.length; i++) {
+            assertEquals("Wrong start offset of line " + (i + 1), lineStartOffsets[i], lineDelimitersSource.getLineStartOffset(i + 1));
+        }
     }
 
     @Test

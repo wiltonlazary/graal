@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,27 +24,17 @@
  */
 package com.oracle.svm.core.posix.headers;
 
-import org.graalvm.nativeimage.Platforms;
-import org.graalvm.nativeimage.Platform.DARWIN;
-import org.graalvm.nativeimage.Platform.LINUX;
 import org.graalvm.nativeimage.c.CContext;
 import org.graalvm.nativeimage.c.function.CFunction;
 
-//Allow methods with non-standard names: Checkstyle: stop
+// Checkstyle: stop
 
-/*
- * The definitions I need, manually translated from the C header file <sched.h>.
+/**
+ * Definitions manually translated from the C header file sched.h.
  */
-
-@Platforms({DARWIN.class, LINUX.class})
 @CContext(PosixDirectives.class)
 public class Sched {
 
-    /**
-     * sched_yield() causes the calling thread to relinquish the CPU. The thread is moved to the end
-     * of the queue for its static priority and a new thread gets to run.
-     */
     @CFunction
     public static native int sched_yield();
-
 }

@@ -1,49 +1,72 @@
 #!/usr/bin/env boot
 
 ; ------------------------------------------------------------------------------
-; Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+; Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
 ; DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
-; 
-; This code is free software; you can redistribute it and/or modify it
-; under the terms of the GNU General Public License version 2 only, as
-; published by the Free Software Foundation.  Oracle designates this
-; particular file as subject to the "Classpath" exception as provided
-; by Oracle in the LICENSE file that accompanied this code.
-; 
-; This code is distributed in the hope that it will be useful, but WITHOUT
-; ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-; FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-; version 2 for more details (a copy is included in the LICENSE file that
-; accompanied this code).
-; 
-; You should have received a copy of the GNU General Public License version
-; 2 along with this work; if not, write to the Free Software Foundation,
-; Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
-; 
-; Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
-; or visit www.oracle.com if you need additional information or have any
-; questions.
+;
+; The Universal Permissive License (UPL), Version 1.0
+;
+; Subject to the condition set forth below, permission is hereby granted to any
+; person obtaining a copy of this software, associated documentation and/or
+; data (collectively the "Software"), free of charge and under any and all
+; copyright rights in the Software, and any and all patent rights owned or
+; freely licensable by each licensor hereunder covering either (i) the
+; unmodified Software as contributed to or provided by such licensor, or (ii)
+; the Larger Works (as defined below), to deal in both
+;
+; (a) the Software, and
+;
+; (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+; one is included with the Software each a "Larger Work" to which the Software
+; is contributed by such licensors),
+;
+; without restriction, including without limitation the rights to copy, create
+; derivative works of, display, perform, and distribute the Software and make,
+; use, sell, offer for sale, import, export, have made, and have sold the
+; Software and the Larger Work(s), and to sublicense the foregoing rights on
+; either these or other terms.
+;
+; This license is subject to the following condition:
+;
+; The above copyright notice and either this complete permission notice or at a
+; minimum a reference to the UPL must be included in all copies or substantial
+; portions of the Software.
+;
+; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+; SOFTWARE.
 ; ------------------------------------------------------------------------------
 
 ;; In order to run this script, install Boot as described in
 ;; https://github.com/boot-clj/boot#install or simply evaluate the code below in
 ;; any Clojure REPL and then call the `-main` function.
 
-;; This script assumes that the files NonUnicodeFoldTable.txt and
-;; UnicodeFoldTable.txt are in the current working directory.
+;; This script assumes that the current working directory contains a folder "dat"
+;; with the files NonUnicodeFoldTable.txt and UnicodeFoldTable.txt.
 
 (require '[clojure.set :as set]
          '[clojure.string :as str])
+
+(defn pairwise
+  "Given a sequence `x_1`, `x_2`, `x_3`..., returns the sequence of pairs `[x_1 x_2]`, `[x_2 x_3]`..."
+  [xs]
+  (map vector xs (rest xs)))
 
 (defn parse-relation-file
   "Parses a binary relation from the file at `path` and returns it as a sorted
   set."
   [path]
   (into (sorted-set)
-        (for [line (str/split-lines (slurp path))]
-          (let [[from-str to-str] (str/split line #"; ")
-                parse-hex         #(Long/parseLong % 16)]
-            [(parse-hex from-str) (parse-hex to-str)]))))
+        (apply concat
+          (for [line (str/split-lines (slurp path))]
+            (let [codepoints-str (str/split line #";")
+                  parse-hex      #(Long/parseLong % 16)
+                  codepoints     (map parse-hex codepoints-str)]
+              (pairwise codepoints))))))
 
 (defn maps-to
   "Given a binary relation `rel`, represented as a sorted set, finds the set of
@@ -56,36 +79,38 @@
   [[a b]]
   [b a])
 
+(defn remove-reflexive-entries
+  "Remove pairs of the form [x x] from a given set of pairs."
+  [rel]
+  (set/select #(not= (first %) (second %)) rel))
+
 (defn symmetric-closure
   "Calculates the symmetric closure of the binary relation `rel`."
   [rel]
   (let [symmetric-rel (into (sorted-set) (map swap rel))]
     (set/union rel symmetric-rel)))
 
-(defn transitive-closure
-  "Calculates the transitive closure of the binary relation `rel` via a
-  fix-point approach."
-  [rel]
-  (let [fixpoint   (fn [f x]
-                     (let [y (f x)]
-                       (if (= x y)
-                         x
-                         (recur f y))))
-        extend-rel (fn [rel]
-                     (into rel (for [[start midpoint] rel
-                                     end              (maps-to rel midpoint)
-                                     :when            (not= start end)]
-                                 [start end])))]
-    (fixpoint extend-rel rel)))
-
 (defn load-relation
-  "Loads an equivalence relation from a file and makes it symmetric and
-  transitive (we do not care for reflexivity in our application)."
+  "Loads an equivalence relation from a file and makes it symmetric.
+
+  We do not want a reflexive closure because we want the entries in the relation
+  to correspond to equivalent pairs that still need to be encoded in the case
+  fold table (and we do not want to include reflexive entries in the case fold
+  table). We do not need transitivity because we handle all equivalence classes
+  of size larger than 3 in the first step, `extract-large-classes`, and in that
+  step we traverse the relation graph recursively."
   [path]
   (-> path
       parse-relation-file
-      symmetric-closure
-      transitive-closure))
+      remove-reflexive-entries
+      symmetric-closure))
+
+(def python-ascii-relation
+  "The case-folding equivalence relation for Python ascii regular expressions."
+  (->> (map vector (range (int \a) (inc (int \z)))
+                   (range (int \A) (inc (int \Z))))
+       (into (sorted-set))
+       symmetric-closure))
 
 (defn collect-eq-classes
   "Given some equivalence relation `rel`, finds the equivalence classes.
@@ -135,7 +160,10 @@
                                 (conj ranges cur-range)
                                 ranges))))
         encode-class    (fn [class]
-                          (if (= 2 (count class))
+                          (cond
+                            (<= (count class) 1)
+                            []
+                            (= (count class) 2)
                             (let [lower  (first class)
                                   higher (second class)]
                               [{:lo    lower
@@ -146,6 +174,7 @@
                                 :hi    higher
                                 :delta (- lower higher)
                                 :kind  :delta}])
+                            :otherwise
                             (let [class-ranges (class-as-ranges class)]
                               (for [range class-ranges]
                                 {:lo    (:lo range)
@@ -260,26 +289,28 @@
   [n]
   (format "0x%04x" n))
 
+(defn show-hex6
+  "Prints a number in hexadecimal format. Hexadecimal is the conventional base
+  in which to write down values of Unicode code points. Also, it is the same
+  base as was used in the original case fold table, meaning we can keep the diff
+  after updating the table minimal."
+  [n]
+  (format "0x%06x" n))
+
 (defn show-classes
   "Renders the CHARACTER_SET_TABLE in Java code. The CHARACTER_SET_TABLE
   contains the definitions of codepoint equivalence classes that are used in
   directMapping (:kind :class) entries of the case fold table."
   [classes]
-  (let [header      "    private static final ArrayList<TreeSet<CodePointRange>> CHARACTER_SET_TABLE = new ArrayList<>(Arrays.asList(\n"
+  (let [header      "    private static final CodePointSet[] CHARACTER_SET_TABLE = new CodePointSet[]{\n"
         item-prefix "                    "
         item-sep    ",\n"
-        footer      "));\n"
+        footer      "};\n"
         show-class  (fn [class]
-                      (let [range-sep      ", "
-                            show-range     (fn [range]
-                                             (if (= (:lo range) (:hi range))
-                                               (str "new CodePointRange(" (show-hex (:lo range)) ")")
-                                               (str "new CodePointRange(" (show-hex (:lo range)) ", " (show-hex (:hi range)) ")")))
-                            show-codepoint (fn [codepoint]
-                                             (show-hex codepoint))]
-                        (if (every? #(= (:lo %) (:hi %)) class)
-                          (str "rangeSet(" (apply str (interpose ", " (map (comp show-codepoint :lo) class))) ")")
-                          (str "rangeSet(" (apply str (interpose ", " (map show-range class))) ")"))))
+                      (let [range-sep        ", "
+                            show-range       (fn [range]
+                                                 (str (show-hex6 (:lo range)) ", " (show-hex6 (:hi range)) ))]
+                        (str "rangeSet(" (apply str (interpose ", " (map show-range class))) ")")))
         body        (apply str (interpose item-sep (map #(str item-prefix (show-class %)) classes)))]
     (str header body footer)))
 
@@ -287,27 +318,30 @@
   "Renders a case fold table with name `table-name`. This is the main product of
   this script."
   [entries table-name]
-  (let [header               (str "    private static final CaseFoldTableEntry[] " table-name " = new CaseFoldTableEntry[]{\n")
+  (let [header               (str "    private static final CaseFoldTableImpl " table-name " = new CaseFoldTableImpl(new int[]{\n")
         item-prefix          "                    "
         item-sep             ",\n"
-        footer               "\n    };\n"
+        footer               "\n    });\n"
         method-name-and-args (fn [entry]
                                (case (:kind entry)
-                                 :delta       (if (> (:delta entry) 0)
-                                                {:method-name "deltaPositive"
-                                                 :args        [(:lo entry) (:hi entry) (:delta entry)]}
-                                                {:method-name "deltaNegative"
-                                                 :args        [(:lo entry) (:hi entry) (- (:delta entry))]})
-                                 :alternating {:method-name (if (:aligned entry)
-                                                              "alternatingAL"
-                                                              "alternatingUL")
-                                               :args        [(:lo entry) (:hi entry)]}
-                                 :class       {:method-name "directMapping"
-                                               :args        [(:lo entry) (:hi entry) (:class-id entry)]}))
+                                 :delta       {:lo          (:lo entry) 
+                                               :hi          (:hi entry) 
+                                               :method-name "INTEGER_OFFSET"
+                                               :arg         (:delta entry)}
+                                 :alternating {:lo          (:lo entry) 
+                                               :hi          (:hi entry)
+                                               :method-name (if (:aligned entry)
+                                                              "ALTERNATING_AL"
+                                                              "ALTERNATING_UL")
+                                               :arg         0 }
+                                 :class       {:lo          (:lo entry) 
+                                               :hi          (:hi entry)
+                                               :method-name "DIRECT_MAPPING"
+                                               :arg         (:class-id entry)}))
         show-entry           (fn [entry]
-                               (let [{:keys [method-name args]} (method-name-and-args entry)
+                               (let [{:keys [lo hi method-name arg]} (method-name-and-args entry)
                                      arg-sep                    ", "]
-                                 (str method-name "(" (apply str (interpose arg-sep (map show-hex args))) ")")))
+                                 (str (show-hex6 lo) ", " (show-hex6 hi) ", " method-name ", " arg)))
         body                 (apply str (interpose item-sep (map #(str item-prefix (show-entry %)) entries)))]
     (str header body footer)))
 
@@ -321,18 +355,25 @@
   NB: The CHARACTER_SET_TABLE is shared among the two case fold tables because
   there is significant overlap between the two."
   []
-  (let [non-unicode-relation (load-relation "NonUnicodeFoldTable.txt")
-        unicode-relation     (load-relation "UnicodeFoldTable.txt")
-        num-classes          (atom 0)
-        class-ids            (atom {})
-        non-unicode-entries  (identify-classes (generate-entries non-unicode-relation) num-classes class-ids)
-        unicode-entries      (identify-classes (generate-entries unicode-relation) num-classes class-ids)
-        classes              (map second (sort (map swap @class-ids)))]
+  (let [non-unicode-relation    (load-relation "dat/NonUnicodeFoldTable.txt")
+        unicode-relation        (load-relation "dat/UnicodeFoldTable.txt")
+        python-unicode-relation (load-relation "dat/PythonFoldTable.txt")
+        num-classes             (atom 0)
+        class-ids               (atom {})
+        non-unicode-entries     (identify-classes (generate-entries non-unicode-relation) num-classes class-ids)
+        unicode-entries         (identify-classes (generate-entries unicode-relation) num-classes class-ids)
+        python-ascii-entries    (identify-classes (generate-entries python-ascii-relation) num-classes class-ids)
+        python-unicode-entries  (identify-classes (generate-entries python-unicode-relation) num-classes class-ids)
+        classes                 (map second (sort (map swap @class-ids)))]
     (str (show-classes classes)
          "\n"
          (show-entries non-unicode-entries "NON_UNICODE_TABLE_ENTRIES")
          "\n"
-         (show-entries unicode-entries "UNICODE_TABLE_ENTRIES"))))
+         (show-entries unicode-entries "UNICODE_TABLE_ENTRIES")
+         "\n"
+         (show-entries python-ascii-entries "PYTHON_ASCII_TABLE_ENTRIES")
+         "\n"
+         (show-entries python-unicode-entries "PYTHON_UNICODE_TABLE_ENTRIES"))))
 
 (defn -main
   "This gets evaluated when we run the script."

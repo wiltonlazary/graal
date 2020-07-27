@@ -1,29 +1,46 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.test.polyglot;
 
+import com.oracle.truffle.api.test.OSUtils;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
@@ -40,21 +57,27 @@ import java.io.IOException;
 import java.io.Reader;
 import java.io.StringReader;
 import java.net.MalformedURLException;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.CharBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.jar.JarOutputStream;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Source.Builder;
+import org.graalvm.polyglot.SourceSection;
 import org.graalvm.polyglot.io.ByteSequence;
 import org.junit.Assert;
 import org.junit.Test;
 
-import com.oracle.truffle.api.TruffleLanguage.Registration;
+import com.oracle.truffle.api.test.ReflectionUtils;
+import org.junit.Assume;
 
 public class SourceAPITest {
 
@@ -107,6 +130,7 @@ public class SourceAPITest {
         assertEquals(testString, charBuffer.toString());
 
         assertFalse(materialized.get());
+        context.close();
     }
 
     private static boolean equalsCharSequence(CharSequence seq1, CharSequence seq2) {
@@ -143,7 +167,7 @@ public class SourceAPITest {
         assertSame(sequence, source.getBytes());
         assertEquals("Unnamed", source.getName());
         assertNull(source.getURL());
-        assertEquals("truffle:239e496366395062c28730b535d8286f/Unnamed", source.getURI().toString());
+        assertEquals("truffle:9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a/Unnamed", source.getURI().toString());
     }
 
     @Test
@@ -355,7 +379,7 @@ public class SourceAPITest {
 
     @Test
     public void noIOWhenContentSpecified() {
-        File file = new File("some.js");
+        File file = new File("some.tjs");
 
         String text = "// Hello";
 
@@ -363,20 +387,20 @@ public class SourceAPITest {
         assertEquals("The content has been changed", text, source.getCharacters());
         assertNotNull("Mime type specified", source.getMimeType());
         assertTrue("Recognized as JavaScript", source.getMimeType().equals("text/javascript"));
-        assertEquals("some.js", source.getName());
+        assertEquals("some.tjs", source.getName());
     }
 
     @Test
     public void fromTextWithFileURI() {
-        File file = new File("some.js");
+        File file = new File("some.tjs");
 
         String text = "// Hello";
 
-        Source source = Source.newBuilder("lang", text, "another.js").uri(file.toURI()).buildLiteral();
+        Source source = Source.newBuilder("lang", text, "another.tjs").uri(file.toURI()).buildLiteral();
         assertEquals("The content has been changed", text, source.getCharacters());
         assertNull("Mime type not specified", source.getMimeType());
         assertNull("Null MIME type", source.getMimeType());
-        assertEquals("another.js", source.getName());
+        assertEquals("another.tjs", source.getName());
         assertEquals("Using the specified URI", file.toURI(), source.getURI());
     }
 
@@ -401,6 +425,31 @@ public class SourceAPITest {
         assertNotEquals("So they are different", s1, s2);
         assertEquals("File URI", file.toURI(), s1.getURI());
         assertEquals("Source with different MIME type has the same URI", s1.getURI(), s2.getURI());
+    }
+
+    @Test
+    public void unassignedMimeTypeForURL() throws IOException {
+        File file = File.createTempFile("Hello", ".java");
+        file.deleteOnExit();
+        Path path = file.toPath();
+        byte[] content = "// Test".getBytes("UTF-8");
+        Files.write(path, content);
+        URL url = path.toUri().toURL();
+        assertEquals("text/x-java", Source.findMimeType(url));
+        Source.Builder builder = Source.newBuilder("TestJava", url);
+        Source source = builder.build();
+        assertNull("MIME type should be null if not specified", source.getMimeType());
+
+        File archive = File.createTempFile("hello", ".jar");
+        archive.deleteOnExit();
+        try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(archive))) {
+            out.putNextEntry(new ZipEntry("Hello.java"));
+            out.write(content);
+        }
+        url = new URL("jar:" + archive.toURI().toURL().toExternalForm() + "!/Hello.java");
+        builder = Source.newBuilder("TestJava", url);
+        source = builder.build();
+        assertNull("MIME type should be null if not specified", source.getMimeType());
     }
 
     @Test
@@ -458,20 +507,31 @@ public class SourceAPITest {
         File sample = File.createTempFile("sample", ".jar");
         sample.deleteOnExit();
         JarOutputStream os = new JarOutputStream(new FileOutputStream(sample));
-        os.putNextEntry(new ZipEntry("x.js"));
+        os.putNextEntry(new ZipEntry("x.tjs"));
         byte[] bytes = "Hi!".getBytes("UTF-8");
         os.write(bytes);
         os.closeEntry();
         os.close();
 
-        URL resource = new URL("jar:" + sample.toURI() + "!/x.js");
+        URL resource = new URL("jar:" + sample.toURI() + "!/x.tjs");
         assertNotNull("Resource found", resource);
         assertEquals("JAR protocol", "jar", resource.getProtocol());
         Source s = Source.newBuilder("TestJS", resource).build();
+        assertEquals(resource, s.getURL());
         Assert.assertArrayEquals(bytes, s.getBytes().toByteArray());
-        assertEquals("x.js", s.getName());
+        assertEquals("x.tjs", s.getName());
 
         sample.delete();
+    }
+
+    @Test
+    public void testHttpURL() throws IOException, URISyntaxException {
+        URL resource = new URL("http://example.org/test/File.html");
+        Source s = Source.newBuilder("TestJS", resource).content("Empty").build();
+        assertEquals(resource, s.getURL());
+        assertEquals(resource.toURI(), s.getURI());
+        assertEquals("File.html", s.getName());
+        assertEquals("/test/File.html", s.getPath());
     }
 
     @Test
@@ -595,14 +655,50 @@ public class SourceAPITest {
         }
     }
 
-    @Registration(id = "TestJava", name = "", characterMimeTypes = "text/x-java")
-    public static class TestJavaLanguage extends ProxyLanguage {
-
+    @Test
+    @SuppressWarnings("rawtypes")
+    public void testNoContentSource() {
+        com.oracle.truffle.api.source.Source truffleSource = com.oracle.truffle.api.source.Source.newBuilder(ProxyLanguage.ID, "x", "name").content(
+                        com.oracle.truffle.api.source.Source.CONTENT_NONE).build();
+        Class<?>[] sourceConstructorTypes = new Class[]{String.class, Object.class};
+        Source source = ReflectionUtils.newInstance(Source.class, sourceConstructorTypes, ProxyLanguage.ID, truffleSource);
+        assertFalse(source.hasCharacters());
+        assertFalse(source.hasBytes());
+        try {
+            source.getCharacters();
+            fail();
+        } catch (UnsupportedOperationException ex) {
+            // O.K.
+        }
+        try {
+            Context.create().eval(source);
+            fail();
+        } catch (IllegalArgumentException ex) {
+            // O.K.
+        }
+        com.oracle.truffle.api.source.SourceSection truffleSection = truffleSource.createSection(1, 2, 3, 4);
+        Class<?>[] sectionConstructorTypes = new Class[]{Source.class, Object.class};
+        SourceSection section = ReflectionUtils.newInstance(SourceSection.class, sectionConstructorTypes, source, truffleSection);
+        assertFalse(section.hasCharIndex());
+        assertTrue(section.hasLines());
+        assertTrue(section.hasColumns());
+        assertEquals("", section.getCharacters());
     }
 
-    @Registration(id = "TestJS", name = "", byteMimeTypes = "application/javascript")
-    public static class TestJSLanguage extends ProxyLanguage {
-
+    @Test
+    public void testNonResolvableURL() throws IOException {
+        Assume.assumeFalse("Query parameters are not supported by file URLConnection on Windows", OSUtils.isWindows());
+        File file = File.createTempFile("Test", ".java");
+        file.deleteOnExit();
+        String text;
+        try (FileWriter w = new FileWriter(file)) {
+            text = "// Test";
+            w.write(text);
+        }
+        URL url = new URL(file.toURI() + "?query");
+        Source src = Source.newBuilder("TestJava", url).build();
+        assertNotNull(src);
+        assertTrue(text.contentEquals(src.getCharacters()));
+        assertEquals("text/plain", Source.findMimeType(url));
     }
-
 }

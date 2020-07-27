@@ -1,38 +1,56 @@
 /*
- * Copyright (c) 2018, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.regex;
 
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.interop.ArityException;
-import com.oracle.truffle.api.interop.ForeignAccess;
-import com.oracle.truffle.api.interop.Message;
-import com.oracle.truffle.api.interop.MessageResolution;
-import com.oracle.truffle.api.interop.Resolve;
+import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnsupportedTypeException;
-import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.library.CachedLibrary;
+import com.oracle.truffle.api.library.ExportLibrary;
+import com.oracle.truffle.api.library.ExportMessage;
+import com.oracle.truffle.regex.runtime.nodes.ToStringNode;
 import com.oracle.truffle.regex.tregex.TRegexCompiler;
 
 /**
@@ -43,10 +61,24 @@ import com.oracle.truffle.regex.tregex.TRegexCompiler;
  * <li>{@link String} {@code options} (optional): a comma-separated list of options for the engine,
  * the currently supported options include:</li>
  * <ul>
+ * <li>{@code Flavor}: the flavor of regular expressions to support
+ * <ul>
+ * <li>{@code ECMAScript} (default): regular expressions as provided by RegExp objects in ECMAScript
+ * </li>
+ * <li>{@code PythonStr}: regular expressions as provided by the {@code re} module in Python when
+ * compiling {@code str}-based regular expressions</li>
+ * <li>{@code PythonBytes}: regular expressions as provided by the {@code re} module in Python when
+ * compiling {@code bytes}-based regular expressions</li>
+ * </ul>
+ * </li>
  * <li>{@code U180EWhitespace}: the U+180E Unicode character (MONGOLIAN VOWEL SEPARATOR) is to be
  * treated as whitespace (Unicode versions before 6.3.0)</li>
  * <li>{@code RegressionTestMode}: all compilation is done eagerly, so as to detect errors early
  * during testing</li>
+ * <li>{@code DumpAutomata}: ASTs and automata are dumped in JSON, DOT (GraphViz) and LaTeX formats
+ * </li>
+ * <li>{@code StepExecution}: the execution of automata is traced and logged in JSON files</li>
+ * <li>{@code AlwaysEager}: capture groups are always eagerly matched</li>
  * </ul>
  * <li>{@link RegexCompiler} {@code fallbackCompiler} (optional): an optional {@link RegexCompiler}
  * to be used when compilation by {@link TRegexCompiler}, the native compiler of
@@ -55,7 +87,8 @@ import com.oracle.truffle.regex.tregex.TRegexCompiler;
  * with the same interop semantics as {@link RegexCompiler}</li>
  * </ol>
  */
-public class RegexEngineBuilder implements RegexLanguageObject {
+@ExportLibrary(InteropLibrary.class)
+public final class RegexEngineBuilder extends AbstractRegexObject {
 
     private final RegexLanguage language;
 
@@ -64,61 +97,50 @@ public class RegexEngineBuilder implements RegexLanguageObject {
     }
 
     public static boolean isInstance(TruffleObject object) {
-        return object instanceof RegexCompiler;
+        return object instanceof RegexEngineBuilder;
     }
 
-    @Override
-    public ForeignAccess getForeignAccess() {
-        return RegexEngineBuilderMessageResolutionForeign.ACCESS;
+    @ExportMessage
+    @SuppressWarnings("static-method")
+    public boolean isExecutable() {
+        return true;
     }
 
-    @MessageResolution(receiverType = RegexEngineBuilder.class)
-    static class RegexEngineBuilderMessageResolution {
-
-        @Resolve(message = "EXECUTE")
-        abstract static class RegexEngineBuilderExecuteNode extends Node {
-
-            @Child private Node isExecutableNode = Message.IS_EXECUTABLE.createNode();
-
-            public Object access(RegexEngineBuilder receiver, Object[] args) {
-                if (args.length > 2) {
-                    throw ArityException.raise(2, args.length);
-                }
-                RegexOptions options = RegexOptions.DEFAULT;
-                if (args.length >= 1) {
-                    if (!(args[0] instanceof String)) {
-                        throw UnsupportedTypeException.raise(args);
-                    }
-                    options = RegexOptions.parse((String) args[0]);
-                }
-                TruffleObject fallbackCompiler = null;
-                if (args.length >= 2) {
-                    if (!(args[1] instanceof TruffleObject && ForeignAccess.sendIsExecutable(isExecutableNode, (TruffleObject) args[1]))) {
-                        throw UnsupportedTypeException.raise(args);
-                    }
-                    fallbackCompiler = (TruffleObject) args[1];
-                }
-                return createRegexEngine(receiver.language, options, fallbackCompiler);
-            }
-
-            @TruffleBoundary
-            private static RegexEngine createRegexEngine(RegexLanguage regexLanguage, RegexOptions options, TruffleObject fallbackCompiler) {
-                if (fallbackCompiler != null) {
-                    return new CachingRegexEngine(new RegexCompilerWithFallback(new TRegexCompiler(regexLanguage, options), fallbackCompiler),
-                                    options.isRegressionTestMode());
-                } else {
-                    return new CachingRegexEngine(new TRegexCompiler(regexLanguage, options), options.isRegressionTestMode());
-                }
-            }
+    @ExportMessage
+    Object execute(Object[] args,
+                    @Cached ToStringNode expectOptionsNode,
+                    @CachedLibrary(limit = "1") InteropLibrary fallbackCompilers) throws ArityException, UnsupportedTypeException {
+        if (args.length > 2) {
+            CompilerDirectives.transferToInterpreterAndInvalidate();
+            throw ArityException.create(2, args.length);
         }
-
-        @Resolve(message = "IS_EXECUTABLE")
-        abstract static class RegexEngineBuilderIsExecutableNode extends Node {
-
-            @SuppressWarnings("unused")
-            public boolean access(RegexEngineBuilder receiver) {
-                return true;
+        RegexOptions options = RegexOptions.DEFAULT;
+        if (args.length >= 1) {
+            options = RegexOptions.parse(expectOptionsNode.execute(args[0]));
+        }
+        TruffleObject fallbackCompiler = null;
+        if (args.length >= 2) {
+            if (!(fallbackCompilers.isExecutable(args[1]))) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                throw UnsupportedTypeException.create(args);
             }
+            fallbackCompiler = (TruffleObject) args[1];
+        }
+        return createRegexEngine(language, options, fallbackCompiler);
+    }
+
+    @TruffleBoundary
+    private static RegexEngine createRegexEngine(RegexLanguage regexLanguage, RegexOptions options, TruffleObject fallbackCompiler) {
+        RegexCompiler compiler = createRegexCompiler(regexLanguage, options, fallbackCompiler);
+        return options.isRegressionTestMode() ? new RegexEngine(compiler, options) : new CachingRegexEngine(compiler, options);
+    }
+
+    private static RegexCompiler createRegexCompiler(RegexLanguage regexLanguage, RegexOptions options, TruffleObject fallbackCompiler) {
+        if (fallbackCompiler != null) {
+            return new RegexCompilerWithFallback(new TRegexCompiler(regexLanguage, options), fallbackCompiler);
+        } else {
+            return new TRegexCompiler(regexLanguage, options);
         }
     }
+
 }

@@ -27,30 +27,31 @@ package com.oracle.svm.core.thread;
 import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.svm.core.jdk.UninterruptibleUtils.AtomicReference;
+import com.oracle.svm.core.util.VMError;
 
-/** Each VMThread will have one of these on which to wait. */
+/**
+ * Each thread has several of these on which to wait. Instances are usually expensive objects
+ * because they encapsulate native resources. Therefore, lazy initialization is supported using
+ * {@link #initializeOnce} and {@link #detach} with three states and {@link AtomicReference atomic
+ * transitions}:
+ * <ol>
+ * <li>uninitialized: the {@link AtomicReference} is null.
+ * <li>used: A concrete platform-specific subclass of {@link ParkEvent} that allows wait and unpark
+ * operations.
+ * <li>detached: The thread has exited (or was manually detached from the VM). The
+ * {@link DetachedParkEvent} singleton.
+ * </ol>
+ * The allowed transitions are uninitialized->used (wait or park is called on an active thread);
+ * used->detached; and uninitialized->detached.
+ */
 public abstract class ParkEvent {
 
     public interface ParkEventFactory {
         ParkEvent create();
     }
 
-    /**
-     * The ticket: false implies unavailable, true implies available. No need to be volatile,
-     * because it is read and written only when the mutex is held, or before a reference to this
-     * ParkEvent is handed out.
-     */
-    protected boolean event;
-
-    /**
-     * When true, calls to {@link #condWait} and {@link #condTimedWait} will always wait, even a
-     * previous call to {@link #unpark} had not been consumed by a wait yet (the semantics of
-     * {@link Thread#sleep}).
-     *
-     * When false, {@link #condWait} and {@link #condTimedWait} will return immediately when a
-     * previous call to {@link #unpark} has happend (the semantics of {@link sun.misc.Unsafe#park}).
-     */
-    protected boolean resetEventBeforeWait;
+    /** Currently required by legacy code. */
+    protected boolean isSleepEvent;
 
     /**
      * A cons-cell for putting this ParkEvent on the free list. This must be (a) allocated
@@ -63,17 +64,17 @@ public abstract class ParkEvent {
     protected ParkEvent() {
     }
 
-    public enum WaitResult {
-        UNPARKED,
-        TIMED_OUT,
-        INTERRUPTED
-    }
+    /**
+     * Resets a pending {@link #unpark()} at the time of the call. This must synchronize in a way
+     * that prevents it from being reordered with regard to setting the thread's interrupted status.
+     */
+    protected abstract void reset();
 
     /* cond_wait. */
-    protected abstract WaitResult condWait();
+    protected abstract void condWait();
 
     /** cond_timedwait, similar to {@link #condWait} but with a timeout in nanoseconds. */
-    protected abstract WaitResult condTimedWait(long delayNanos);
+    protected abstract void condTimedWait(long delayNanos);
 
     /** Notify anyone waiting on this event. */
     protected abstract void unpark();
@@ -91,7 +92,7 @@ public abstract class ParkEvent {
      * and garbage collected.
      */
 
-    static ParkEvent initializeOnce(AtomicReference<ParkEvent> ref, boolean resetEventBeforeWait) {
+    static ParkEvent initializeOnce(AtomicReference<ParkEvent> ref, boolean isSleepEvent) {
         ParkEvent result = ref.get();
         if (result == null) {
             ParkEvent newEvent = ParkEvent.acquire();
@@ -100,8 +101,8 @@ public abstract class ParkEvent {
              * free-list or allocated.
              */
             newEvent.consCell = new ParkEventConsCell(newEvent);
-            newEvent.event = false;
-            newEvent.resetEventBeforeWait = resetEventBeforeWait;
+            newEvent.isSleepEvent = isSleepEvent;
+            newEvent.reset();
 
             if (ref.compareAndSet(null, newEvent)) {
                 /* We won the race. */
@@ -113,6 +114,7 @@ public abstract class ParkEvent {
                  */
                 ParkEvent.release(newEvent);
                 result = ref.get();
+                VMError.guarantee(result != null, "ParkEvent must never be reset to null once it has been initialized.");
             }
         }
         return result;
@@ -127,8 +129,53 @@ public abstract class ParkEvent {
         return result;
     }
 
-    protected static void release(ParkEvent event) {
+    static void detach(AtomicReference<ParkEvent> ref) {
+        /*
+         * We must not reset the AtomicReference back to null, because a racing thread could
+         * interpret that as "uninitialized" and immediately re-initialize the park event, or even
+         * return the null value in some race conditions.
+         */
+        ParkEvent event = ref.getAndSet(DetachedParkEvent.SINGLETON);
+        if (event != null && event != DetachedParkEvent.SINGLETON) {
+            ParkEvent.release(event);
+        }
+    }
+
+    private static void release(ParkEvent event) {
         ParkEventList.getSingleton().push(event);
+    }
+}
+
+/**
+ * The {@link ParkEvent} used for threads that are detached, i.e., no longer executing Java code.
+ * Such threads cannot wait (because waiting can only be initiated by the thread itself), but they
+ * can be unparked (because {@link #unpark} can be called for any thread in any state).
+ */
+final class DetachedParkEvent extends ParkEvent {
+
+    static final ParkEvent SINGLETON = new DetachedParkEvent();
+
+    private DetachedParkEvent() {
+    }
+
+    @Override
+    protected void reset() {
+        throw VMError.shouldNotReachHere("Cannot reset a DetachedParkEvent");
+    }
+
+    @Override
+    protected void condWait() {
+        throw VMError.shouldNotReachHere("Cannot wait on a DetachedParkEvent");
+    }
+
+    @Override
+    protected void condTimedWait(long delayNanos) {
+        throw VMError.shouldNotReachHere("Cannot wait on a DetachedParkEvent");
+    }
+
+    @Override
+    protected void unpark() {
+        /* It is an allowed no-op to unpark an already detached thread. */
     }
 }
 

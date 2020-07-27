@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,28 +24,45 @@
  */
 package com.oracle.svm.reflect.hosted;
 
+// Checkstyle: allow synchronization
+
 /* Allow imports of java.lang.reflect and sun.misc.ProxyGenerator: Checkstyle: allow reflection. */
+
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Member;
 import java.lang.reflect.Method;
+import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.List;
 
-import org.graalvm.compiler.serviceprovider.GraalServices;
+import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 
+import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.jdk.UninterruptibleUtils.AtomicInteger;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.annotation.CustomSubstitution;
-import com.oracle.svm.reflect.hosted.ReflectionSubstitutionType.ReflectionSubstitutionMethod;
+import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
 import com.oracle.svm.reflect.helpers.ReflectionProxy;
+import com.oracle.svm.reflect.hosted.ReflectionSubstitutionType.ReflectionSubstitutionMethod;
+import com.oracle.svm.util.ReflectionUtil;
 
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 final class ReflectionSubstitution extends CustomSubstitution<ReflectionSubstitutionType> {
+
+    private static final String PROXY_NAME_SEPARATOR = "_";
+
+    private final ClassInitializationSupport classInitializationSupport;
+
+    private static final int ACC_PUBLIC = 0x00000001;
+    private static final int ACC_FINAL = 0x00000010;
+    private static final int ACC_SUPER = 0x00000020;
 
     private final Method defineClass;
     private final Method resolveClass;
@@ -56,42 +73,22 @@ final class ReflectionSubstitution extends CustomSubstitution<ReflectionSubstitu
     private final HashMap<Member, Class<?>> proxyMap = new HashMap<>();
     private final HashMap<ResolvedJavaType, Member> typeToMember = new HashMap<>();
 
+    private static final AtomicInteger proxyNr = new AtomicInteger(0);
+
     private final ImageClassLoader imageClassLoader;
 
-    private static final AtomicInteger proxyNr = new AtomicInteger();
-
-    private static Method lookupPrivateMethod(Class<?> clazz, String name, Class<?>... args) {
-        try {
-            Method m = clazz.getDeclaredMethod(name, args);
-            m.setAccessible(true);
-            return m;
-        } catch (Exception ex) {
-            throw VMError.shouldNotReachHere(ex);
-        }
-    }
-
-    ReflectionSubstitution(MetaAccessProvider metaAccess, ImageClassLoader classLoader) {
+    ReflectionSubstitution(MetaAccessProvider metaAccess, ClassInitializationSupport initializationSupport, ImageClassLoader classLoader) {
         super(metaAccess);
-        defineClass = lookupPrivateMethod(ClassLoader.class, "defineClass", String.class, byte[].class, int.class, int.class);
-        resolveClass = lookupPrivateMethod(ClassLoader.class, "resolveClass", Class.class);
+        defineClass = ReflectionUtil.lookupMethod(ClassLoader.class, "defineClass", String.class, byte[].class, int.class, int.class);
+        resolveClass = ReflectionUtil.lookupMethod(ClassLoader.class, "resolveClass", Class.class);
         reflectionProxy = metaAccess.lookupJavaType(ReflectionProxy.class);
         javaLangReflectProxy = metaAccess.lookupJavaType(java.lang.reflect.Proxy.class);
+        classInitializationSupport = initializationSupport;
         imageClassLoader = classLoader;
     }
 
-    private static <T> String getSimpleNameSafe(Class<T> clazz) {
-        return clazz.getName().substring(clazz.getName().lastIndexOf('.') + 1);
-    }
-
-    private static String getProxyClassname(Member member) {
-        String className = getSimpleNameSafe(member.getDeclaringClass());
-        String memberName;
-        if (member instanceof Constructor) {
-            memberName = className;
-        } else {
-            memberName = member.getName();
-        }
-        return "com.oracle.svm.reflect.proxies.Proxy_" + proxyNr.incrementAndGet() + "_" + className + "_" + memberName;
+    static String getStableProxyName(Member member) {
+        return "com.oracle.svm.reflect." + SubstrateUtil.uniqueShortName(member);
     }
 
     private static Class<?> getAccessorInterface(Member member) {
@@ -107,7 +104,7 @@ final class ReflectionSubstitution extends CustomSubstitution<ReflectionSubstitu
 
     /** Track classes in the `reflect` package across JDK versions. */
     private static Class<?> packageJdkInternalReflectClassForName(String className) {
-        final String packageName = (GraalServices.Java8OrEarlier ? "sun.reflect." : "jdk.internal.reflect.");
+        final String packageName = (JavaVersionUtil.JAVA_SPEC <= 8 ? "sun.reflect." : "jdk.internal.reflect.");
         try {
             /* { Allow reflection in hosted code. Checkstyle: stop. */
             return Class.forName(packageName + className);
@@ -123,28 +120,46 @@ final class ReflectionSubstitution extends CustomSubstitution<ReflectionSubstitu
         /* { Allow reflection in hosted code. Checkstyle: stop. */
         try {
             if (generateProxyMethod == null) {
-                final String packageName = (GraalServices.Java8OrEarlier ? "sun.misc." : "java.lang.reflect.");
-                generateProxyMethod = Class.forName(packageName + "ProxyGenerator").getDeclaredMethod("generateProxyClass", String.class, Class[].class);
-                generateProxyMethod.setAccessible(true);
+                final String packageName = (JavaVersionUtil.JAVA_SPEC <= 8 ? "sun.misc." : "java.lang.reflect.");
+                generateProxyMethod = ReflectionUtil.lookupMethod(Class.forName(packageName + "ProxyGenerator"), "generateProxyClass", String.class, Class[].class);
             }
             return (byte[]) generateProxyMethod.invoke(null, name, interfaces);
-        } catch (Throwable e) {
-            throw new InternalError(e);
+        } catch (ReflectiveOperationException ex) {
+            throw VMError.shouldNotReachHere(ex);
+        }
+    }
+
+    private static byte[] generateProxyClass14(final String name, Class<?>[] interfaces, ClassLoader loader) {
+        /* { Allow reflection in hosted code. Checkstyle: stop. */
+        try {
+            if (generateProxyMethod == null) {
+                final String packageName = (JavaVersionUtil.JAVA_SPEC <= 8 ? "sun.misc." : "java.lang.reflect.");
+                generateProxyMethod = ReflectionUtil.lookupMethod(Class.forName(packageName + "ProxyGenerator"), "generateProxyClass", ClassLoader.class, String.class, List.class, int.class);
+            }
+            List<Class<?>> ilist = new ArrayList<>(Arrays.asList(interfaces));
+            return (byte[]) generateProxyMethod.invoke(null, loader, name, ilist, (ACC_PUBLIC | ACC_FINAL | ACC_SUPER));
+        } catch (ReflectiveOperationException ex) {
+            throw VMError.shouldNotReachHere(ex);
         }
         /* } Allow reflection in hosted code. Checkstyle: resume. */
     }
 
-    Class<?> getProxyClass(Member member) {
+    synchronized Class<?> getProxyClass(Member member) {
         Class<?> ret = proxyMap.get(member);
         if (ret == null) {
-            String name = getProxyClassname(member);
+            /* the unique ID is added for unit tests that don't change the class loader */
+            ClassLoader loader = imageClassLoader.getClassLoader();
+            String name = getStableProxyName(member) + PROXY_NAME_SEPARATOR + proxyNr.incrementAndGet();
             Class<?> iface = getAccessorInterface(member);
-
-            byte[] proxyBC = generateProxyClass(name, new Class<?>[]{iface, ReflectionProxy.class});
-
+            byte[] proxyBC;
+            if (JavaVersionUtil.JAVA_SPEC < 14) {
+                proxyBC = generateProxyClass(name, new Class<?>[]{iface, ReflectionProxy.class});
+            } else {
+                proxyBC = generateProxyClass14(name, new Class<?>[]{iface, ReflectionProxy.class}, loader);
+            }
             try {
-                ret = (Class<?>) defineClass.invoke(imageClassLoader.getClassLoader(), name, proxyBC, 0, proxyBC.length);
-                resolveClass.invoke(imageClassLoader.getClassLoader(), ret);
+                ret = (Class<?>) defineClass.invoke(loader, name, proxyBC, 0, proxyBC.length);
+                resolveClass.invoke(loader, ret);
                 proxyMap.put(member, ret);
 
                 ResolvedJavaType type = metaAccess.lookupJavaType(ret);
@@ -153,6 +168,8 @@ final class ReflectionSubstitution extends CustomSubstitution<ReflectionSubstitu
                 throw VMError.shouldNotReachHere(ex);
             }
         }
+        /* Always initialize proxy classes. */
+        classInitializationSupport.forceInitializeHosted(ret, "all proxy classes are initialized", false);
         return ret;
     }
 
@@ -200,7 +217,7 @@ final class ReflectionSubstitution extends CustomSubstitution<ReflectionSubstitu
         }
     }
 
-    private ReflectionSubstitutionType getSubstitution(ResolvedJavaType original) {
+    private synchronized ReflectionSubstitutionType getSubstitution(ResolvedJavaType original) {
         ReflectionSubstitutionType subst = getSubstitutionType(original);
         if (subst == null) {
             Member member = typeToMember.get(original);

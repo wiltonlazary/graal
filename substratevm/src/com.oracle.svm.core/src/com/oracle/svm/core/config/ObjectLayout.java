@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,10 +24,14 @@
  */
 package com.oracle.svm.core.config;
 
+import com.oracle.svm.core.hub.DynamicHub;
+import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.nativeimage.c.constant.CEnum;
+import org.graalvm.util.GuardedAnnotationAccess;
 import org.graalvm.word.WordBase;
 
+import com.oracle.svm.core.SubstrateTargetDescription;
 import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.deopt.DeoptimizedFrame;
 
@@ -38,45 +42,45 @@ import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 /**
- * Defines the layout of objects.
- *
- * The layout of instance objects is:
- * <ul>
- * <li>hub (reference)
- * <li>instance fields (references, primitives)
- * <li>optional: hashcode (int)
- * </ul>
- * The hashcode is appended after instance fields and is only present if the identity hashcode is
- * used for that type.
- *
- * The layout of array objects is:
- * <ul>
- * <li>hub (reference)
- * <li>array length (int)
- * <li>hashcode (int)
- * <li>array elements (length * reference or primitive)
- * </ul>
- * The hashcode is always present in arrays. Note that on 64-bit targets it does not impose any size
- * overhead for arrays with 64-bit aligned elements (e.g. arrays of objects).
+ * Immutable class that holds all sizes and offsets that contribute to the object layout.
  */
-public class ObjectLayout {
+public final class ObjectLayout {
 
-    private final TargetDescription target;
-
+    private final SubstrateTargetDescription target;
     private final int referenceSize;
+    private final int objectAlignment;
     private final int alignmentMask;
-    private final int deoptScratchSpace;
+    private final int hubOffset;
+    private final int firstFieldOffset;
+    private final int arrayLengthOffset;
+    private final int arrayBaseOffset;
+    private final boolean useExplicitIdentityHashCodeField;
+    private final int instanceIdentityHashCodeOffset;
+    private final int arrayIdentityHashcodeOffset;
 
-    public ObjectLayout(TargetDescription target, int deoptScratchSpace) {
+    public ObjectLayout(SubstrateTargetDescription target, int referenceSize, int objectAlignment, int hubOffset, int firstFieldOffset, int arrayLengthOffset, int arrayBaseOffset,
+                    boolean useExplicitIdentityHashCodeField, int instanceIdentityHashCodeOffset, int arrayIdentityHashcodeOffset) {
+        assert CodeUtil.isPowerOf2(referenceSize);
+        assert CodeUtil.isPowerOf2(objectAlignment);
+        assert hubOffset < firstFieldOffset && hubOffset < arrayLengthOffset;
+        assert arrayIdentityHashcodeOffset > 0;
+
         this.target = target;
-        this.referenceSize = target.arch.getPlatformKind(JavaKind.Object).getSizeInBytes();
-        this.alignmentMask = target.wordSize - 1;
-        this.deoptScratchSpace = deoptScratchSpace;
+        this.referenceSize = referenceSize;
+        this.objectAlignment = objectAlignment;
+        this.alignmentMask = objectAlignment - 1;
+        this.hubOffset = hubOffset;
+        this.firstFieldOffset = firstFieldOffset;
+        this.arrayLengthOffset = arrayLengthOffset;
+        this.arrayBaseOffset = arrayBaseOffset;
+        this.useExplicitIdentityHashCodeField = useExplicitIdentityHashCodeField;
+        this.instanceIdentityHashCodeOffset = instanceIdentityHashCodeOffset;
+        this.arrayIdentityHashcodeOffset = arrayIdentityHashcodeOffset;
     }
 
     /** The minimum alignment of objects (instances and arrays). */
     public int getAlignment() {
-        return target.wordSize;
+        return objectAlignment;
     }
 
     /** Tests if the given offset or address is aligned according to {@link #getAlignment()}. */
@@ -94,14 +98,14 @@ public class ObjectLayout {
      * {@link DeoptimizedFrame}.
      */
     public int getDeoptScratchSpace() {
-        return deoptScratchSpace;
+        return target.getDeoptScratchSpace();
     }
 
     /**
      * The size (in bytes) of values with the given kind.
      */
     public int sizeInBytes(JavaKind kind) {
-        return target.arch.getPlatformKind(kind).getSizeInBytes();
+        return (kind == JavaKind.Object) ? referenceSize : target.arch.getPlatformKind(kind).getSizeInBytes();
     }
 
     public int getArrayIndexShift(JavaKind kind) {
@@ -128,17 +132,12 @@ public class ObjectLayout {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public int getHubOffset() {
-        return 0;
-    }
-
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public int getHubNextOffset() {
-        return getHubOffset() + getReferenceSize();
+        return hubOffset;
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public int getFirstFieldOffset() {
-        return getHubNextOffset();
+        return firstFieldOffset;
     }
 
     /*
@@ -146,29 +145,41 @@ public class ObjectLayout {
      * length, [hashcode], element ....
      */
 
-    private static final JavaKind arrayLengthKind = JavaKind.Int;
-
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public int getArrayLengthOffset() {
-        return getHubNextOffset();
+        return arrayLengthOffset;
     }
 
-    private int getArrayLengthNextOffset() {
-        return getArrayLengthOffset() + sizeInBytes(arrayLengthKind);
+    /**
+     * Whether instance objects should have an additional (optional) field for the identity hashcode
+     * appended after instance fields.
+     *
+     * @return {@code true} if an identity hashcode field should be placed after instance fields if
+     *         necessary, or {@code false} if the identity hashcode is mandatory and already has a
+     *         set location.
+     */
+    public boolean useExplicitIdentityHashCodeField() {
+        return useExplicitIdentityHashCodeField;
     }
 
-    private static final JavaKind arrayHashCodeKind = JavaKind.Int;
-
-    public int getArrayHashCodeOffset() {
-        return NumUtil.roundUp(getArrayLengthNextOffset(), sizeInBytes(arrayHashCodeKind));
+    /**
+     * The offset of the identity hashcode field for instance objects.
+     *
+     * @return The (>= 0) offset of the identity hashcode field if it is known, or < 0 if the offset
+     *         should be queried from the hub (see {@link DynamicHub#getHashCodeOffset()}).
+     */
+    public int getInstanceIdentityHashCodeOffset() {
+        return instanceIdentityHashCodeOffset;
     }
 
-    private int getArrayHashCodeNextOffset() {
-        return getArrayHashCodeOffset() + sizeInBytes(arrayHashCodeKind);
+    /** The offset of the identity hashcode field for array objects. */
+    @Fold
+    public int getArrayIdentityHashcodeOffset() {
+        return arrayIdentityHashcodeOffset;
     }
 
     public int getArrayBaseOffset(JavaKind kind) {
-        return NumUtil.roundUp(getArrayHashCodeNextOffset(), sizeInBytes(kind));
+        return NumUtil.roundUp(arrayBaseOffset, sizeInBytes(kind));
     }
 
     public long getArrayElementOffset(JavaKind kind, int index) {
@@ -176,14 +187,27 @@ public class ObjectLayout {
     }
 
     public long getArraySize(JavaKind kind, int length) {
+        assert length >= 0;
         return alignUp(getArrayBaseOffset(kind) + ((long) length << getArrayIndexShift(kind)));
+    }
+
+    public int getMinimumInstanceObjectSize() {
+        return alignUp(firstFieldOffset); // assumes there are no always-present "synthetic fields"
+    }
+
+    public int getMinimumArraySize() {
+        return NumUtil.safeToInt(getArraySize(JavaKind.Byte, 0));
+    }
+
+    public int getMinimumObjectSize() {
+        return Math.min(getMinimumArraySize(), getMinimumInstanceObjectSize());
     }
 
     public static JavaKind getCallSignatureKind(boolean isEntryPoint, ResolvedJavaType type, MetaAccessProvider metaAccess, TargetDescription target) {
         if (metaAccess.lookupJavaType(WordBase.class).isAssignableFrom(type)) {
             return target.wordJavaKind;
         }
-        if (isEntryPoint && type.getAnnotation(CEnum.class) != null) {
+        if (isEntryPoint && GuardedAnnotationAccess.isAnnotationPresent(type, CEnum.class)) {
             return JavaKind.Int;
         }
         return type.getJavaKind();

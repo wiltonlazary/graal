@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,22 +24,17 @@
  */
 package com.oracle.svm.core.handles;
 
-// Allow unsafe
-// Checkstyle: stop
-
 import java.lang.ref.WeakReference;
 
+import org.graalvm.compiler.serviceprovider.GraalUnsafeAccess;
 import org.graalvm.nativeimage.ObjectHandle;
 import org.graalvm.nativeimage.ObjectHandles;
 import org.graalvm.word.SignedWord;
 import org.graalvm.word.WordBase;
 import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.UnsafeAccess;
-import com.oracle.svm.core.heap.FeebleReference;
-
+//Checkstyle: stop
 import sun.misc.Unsafe;
-
 // Checkstyle: resume
 
 /**
@@ -60,14 +55,12 @@ import sun.misc.Unsafe;
  * significant role in how indexing is implemented.
  */
 public final class ObjectHandlesImpl implements ObjectHandles {
-    /**
-     * Internal weak reference. Other code can create its own {@link WeakReference} objects and
-     * handles to them, which we should distinguish from explicit weak references. Therefore, we
-     * implement weak references with this private class.
-     */
-    private static final class WeakHandleReference<T> extends FeebleReference<T> {
-        WeakHandleReference(T obj) {
-            super(obj, null);
+    private static final Unsafe UNSAFE = GraalUnsafeAccess.getUnsafe();
+
+    /** Private subclass to distinguish from regular handles to {@link WeakReference} objects. */
+    private static final class HandleWeakReference<T> extends WeakReference<T> {
+        HandleWeakReference(T referent) {
+            super(referent);
         }
     }
 
@@ -136,15 +129,14 @@ public final class ObjectHandlesImpl implements ObjectHandles {
     }
 
     private static long getObjectArrayByteOffset(int index) {
-        Unsafe unsafe = UnsafeAccess.UNSAFE;
-        return unsafe.arrayBaseOffset(Object[].class) + index * unsafe.arrayIndexScale(Object[].class);
+        return UNSAFE.arrayBaseOffset(Object[].class) + index * UNSAFE.arrayIndexScale(Object[].class);
     }
 
     private Object[] getBucket(int bucketIndex) {
         // buckets[i] is changed only once from null to its final value: try without volatile first
         Object[] bucket = buckets[bucketIndex];
         if (bucket == null) {
-            bucket = (Object[]) UnsafeAccess.UNSAFE.getObjectVolatile(buckets, getObjectArrayByteOffset(bucketIndex));
+            bucket = (Object[]) UNSAFE.getObjectVolatile(buckets, getObjectArrayByteOffset(bucketIndex));
         }
         return bucket;
     }
@@ -173,7 +165,7 @@ public final class ObjectHandlesImpl implements ObjectHandles {
             for (;;) {
                 while (indexInBucket < bucket.length) {
                     if (bucket[indexInBucket] == null) {
-                        if (UnsafeAccess.UNSAFE.compareAndSwapObject(bucket, getObjectArrayByteOffset(indexInBucket), null, obj)) {
+                        if (UNSAFE.compareAndSwapObject(bucket, getObjectArrayByteOffset(indexInBucket), null, obj)) {
                             int newSearchIndexInBucket = (indexInBucket + 1 < bucket.length) ? (indexInBucket + 1) : indexInBucket;
                             unusedHandleSearchIndex = toIndex(bucketIndex, newSearchIndexInBucket);
                             // (if the next index is in another bucket, we let the next create()
@@ -200,8 +192,8 @@ public final class ObjectHandlesImpl implements ObjectHandles {
                             newBucketCapacity = getIndexInBucket(maxIndex) + 1;
                         }
                         Object[] newBucket = new Object[newBucketCapacity];
-                        UnsafeAccess.UNSAFE.putObjectVolatile(newBucket, getObjectArrayByteOffset(0), obj);
-                        if (UnsafeAccess.UNSAFE.compareAndSwapObject(buckets, getObjectArrayByteOffset(newBucketIndex), null, newBucket)) {
+                        UNSAFE.putObjectVolatile(newBucket, getObjectArrayByteOffset(0), obj);
+                        if (UNSAFE.compareAndSwapObject(buckets, getObjectArrayByteOffset(newBucketIndex), null, newBucket)) {
                             unusedHandleSearchIndex = toIndex(newBucketIndex, 1);
                             return toHandle(newBucketIndex, 0);
                         }
@@ -223,15 +215,15 @@ public final class ObjectHandlesImpl implements ObjectHandles {
     }
 
     public ObjectHandle createWeak(Object obj) {
-        return create(new WeakHandleReference<>(obj));
+        return create(new HandleWeakReference<>(obj));
     }
 
     @SuppressWarnings("unchecked")
     @Override
     public <T> T get(ObjectHandle handle) {
         Object obj = doGet(handle);
-        if (obj instanceof WeakHandleReference) {
-            obj = ((WeakHandleReference<T>) obj).get();
+        if (obj instanceof HandleWeakReference) {
+            obj = ((HandleWeakReference<T>) obj).get();
         }
         return (T) obj;
     }
@@ -249,11 +241,11 @@ public final class ObjectHandlesImpl implements ObjectHandles {
             throw new IllegalArgumentException("Invalid handle");
         }
         int indexInBucket = getIndexInBucket(index);
-        return UnsafeAccess.UNSAFE.getObjectVolatile(bucket, getObjectArrayByteOffset(indexInBucket));
+        return UNSAFE.getObjectVolatile(bucket, getObjectArrayByteOffset(indexInBucket));
     }
 
     public boolean isWeak(ObjectHandle handle) {
-        return (doGet(handle) instanceof WeakHandleReference);
+        return (doGet(handle) instanceof HandleWeakReference);
     }
 
     @Override
@@ -270,14 +262,14 @@ public final class ObjectHandlesImpl implements ObjectHandles {
             throw new IllegalArgumentException("Invalid handle");
         }
         int indexInBucket = getIndexInBucket(index);
-        UnsafeAccess.UNSAFE.putOrderedObject(bucket, getObjectArrayByteOffset(indexInBucket), null);
+        UNSAFE.putOrderedObject(bucket, getObjectArrayByteOffset(indexInBucket), null);
     }
 
     public void destroyWeak(ObjectHandle handle) {
         destroy(handle);
     }
 
-    long getCurrentCount() {
+    public long computeCurrentCount() {
         long count = 0;
         int bucketIndex = 0;
         Object[] bucket = getBucket(bucketIndex);
@@ -293,7 +285,7 @@ public final class ObjectHandlesImpl implements ObjectHandles {
         return count;
     }
 
-    long getCurrentCapacity() {
+    public long computeCurrentCapacity() {
         long capacity = 0;
         int bucketIndex = 0;
         Object[] bucket = getBucket(bucketIndex);

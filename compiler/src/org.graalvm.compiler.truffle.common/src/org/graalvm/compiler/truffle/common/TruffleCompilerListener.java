@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,12 +24,6 @@
  */
 package org.graalvm.compiler.truffle.common;
 
-import jdk.vm.ci.code.site.DataPatch;
-import jdk.vm.ci.code.site.ExceptionHandler;
-import jdk.vm.ci.code.site.Infopoint;
-import jdk.vm.ci.code.site.InfopointReason;
-import jdk.vm.ci.code.site.Mark;
-
 /**
  * A listener for events related to the compilation of a {@link CompilableTruffleAST}. The events
  * are described only in terms of types that can be easily serialized or proxied across a heap
@@ -38,7 +32,7 @@ import jdk.vm.ci.code.site.Mark;
 public interface TruffleCompilerListener {
 
     /**
-     * Summary information for a Graal compiler graph.
+     * Summary information for a compiler graph.
      */
     interface GraphInfo {
         /**
@@ -71,27 +65,27 @@ public interface TruffleCompilerListener {
         int getTotalFrameSize();
 
         /**
-         * Gets the number of {@link ExceptionHandler}s in the compiled code.
+         * Gets the number of {@code ExceptionHandler}s in the compiled code.
          */
         int getExceptionHandlersCount();
 
         /**
-         * Gets the number of {@link Infopoint}s in the compiled code.
+         * Gets the number of {@code Infopoint}s in the compiled code.
          */
         int getInfopointsCount();
 
         /**
-         * Gets the infopoint {@linkplain InfopointReason reasons} in the compiled code.
+         * Gets the infopoint reasons in the compiled code.
          */
         String[] getInfopoints();
 
         /**
-         * Gets the number of {@link Mark}s in the compiled code.
+         * Gets the number of {@code Mark}s in the compiled code.
          */
         int getMarksCount();
 
         /**
-         * Gets the number of {@link DataPatch}es in the compiled code.
+         * Gets the number of {@code DataPatch}es in the compiled code.
          */
         int getDataPatchesCount();
     }
@@ -101,7 +95,10 @@ public interface TruffleCompilerListener {
      * compilation occurs between {@link #onTruffleTierFinished} and code installation.
      *
      * @param compilable the call target that was compiled
-     * @param graph the graph representing {@code compilable}
+     * @param graph the graph representing {@code compilable}. The {@code graph} object is only
+     *            valid for the lifetime of a call to this method. Invoking any {@link GraphInfo}
+     *            method on {@code graph} after this method returns will result in an
+     *            {@link IllegalStateException}.
      */
     void onGraalTierFinished(CompilableTruffleAST compilable, GraphInfo graph);
 
@@ -111,7 +108,10 @@ public interface TruffleCompilerListener {
      *
      * @param compilable the call target being compiled
      * @param inliningPlan the inlining plan used during partial evaluation
-     * @param graph the graph representing {@code compilable}
+     * @param graph the graph representing {@code compilable}. The {@code graph} object is only
+     *            valid for the lifetime of a call to this method. Invoking any {@link GraphInfo}
+     *            method on {@code graph} after this method returns will result in an
+     *            {@link IllegalStateException}.
      */
     void onTruffleTierFinished(CompilableTruffleAST compilable, TruffleInliningPlan inliningPlan, GraphInfo graph);
 
@@ -119,8 +119,17 @@ public interface TruffleCompilerListener {
      * Notifies this object when compilation of {@code compilable} succeeds.
      *
      * @param compilable the Truffle AST whose compilation succeeded
+     * @param inliningPlan the inlining plan used during partial evaluation
+     * @param graph the graph representing {@code compilable}. The {@code graph} object is only
+     *            valid for the lifetime of a call to this method. Invoking any {@link GraphInfo}
+     *            method on {@code graph} after this method returns will result in an
+     *            {@link IllegalStateException}.
+     * @param compilationResultInfo the result of a compilation. The {@code compilationResultInfo}
+     *            object is only valid for the lifetime of a call to this method. Invoking any
+     *            {@link CompilationResultInfo} method on {@code compilationResultInfo} after this
+     *            method returns will result in an {@link IllegalStateException}.
      */
-    void onSuccess(CompilableTruffleAST compilable, TruffleInliningPlan inliningPlan, GraphInfo graphInfo, CompilationResultInfo compilationResultInfo);
+    void onSuccess(CompilableTruffleAST compilable, TruffleInliningPlan inliningPlan, GraphInfo graph, CompilationResultInfo compilationResultInfo);
 
     /**
      * Notifies this object when compilation of {@code compilable} fails.

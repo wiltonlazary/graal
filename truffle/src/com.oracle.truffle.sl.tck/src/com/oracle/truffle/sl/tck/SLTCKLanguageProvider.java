@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -62,10 +62,15 @@ public class SLTCKLanguageProvider implements LanguageProvider {
     private static final String PATTERN_VALUE_FNC = "function %s() {return %s;}";
     private static final String PATTERN_BIN_OP_FNC = "function %s(a,b) {return a %s b;}";
     private static final String PATTERN_POST_OP_FNC = "function %s(a) {a %s;}";
+    private static final String PATTERN_BUILTIN0 = "function %sBuiltin0() {return %s();}";
+    private static final String PATTERN_BUILTIN1 = "function %sBuiltin1(a) {return %s(a);}";
+    private static final String PATTERN_BUILTIN2 = "function %sBuiltin2(a, b) {return %s(a, b);}";
     private static final String[] PATTERN_STATEMENTS = {
                     "function %s() {r = 0;\n%s\nreturn r;\n}",
                     "function %s(p1) {r = 0;\n%s\nreturn r;\n}",
     };
+
+    private static final TypeDescriptor NUMBER_RETURN = TypeDescriptor.union(TypeDescriptor.NUMBER, TypeDescriptor.intersection());
 
     @Override
     public String getId() {
@@ -80,9 +85,10 @@ public class SLTCKLanguageProvider implements LanguageProvider {
     @Override
     public Collection<? extends Snippet> createValueConstructors(Context context) {
         final Collection<Snippet> res = new ArrayList<>();
+
         res.add(createValueConstructor(context, "1 == 2", "boolean", "createBoolean", TypeDescriptor.BOOLEAN));
         res.add(createValueConstructor(context, "1", "number", "createNumber", TypeDescriptor.NUMBER));
-        res.add(createValueConstructor(context, "9223372036854775808", "bigNumber", "createBigNumber", TypeDescriptor.NUMBER));
+        res.add(createValueConstructor(context, "9223372036854775808", "bigNumber", "createBigNumber", TypeDescriptor.intersection()));
         res.add(createValueConstructor(context, "\"string\"", "string", "createString", TypeDescriptor.STRING));
         Snippet.Builder opb = Snippet.newBuilder(
                         "object",
@@ -107,6 +113,25 @@ public class SLTCKLanguageProvider implements LanguageProvider {
                                                         "}",
                                         "createFunction"),
                         TypeDescriptor.EXECUTABLE);
+
+        res.add(createValueConstructor(context, "wrapPrimitive(1 == 2)", "wrapped-boolean", "createWrappedBoolean", TypeDescriptor.BOOLEAN));
+        res.add(createValueConstructor(context, "wrapPrimitive(1)", "wrapped-number", "createWrappedNumber", TypeDescriptor.NUMBER));
+        res.add(createValueConstructor(context, "wrapPrimitive(\"string\")", "wrapped-string", "createWrappedString", TypeDescriptor.STRING));
+
+        res.add(createValueConstructor(context, "typeOf(1 == 2)", "boolean-metaobject",
+                        "createBooleanMetaObject", TypeDescriptor.META_OBJECT));
+        res.add(createValueConstructor(context, "typeOf(1)", "number-metaobject",
+                        "createNumberMetaObject", TypeDescriptor.META_OBJECT));
+        res.add(createValueConstructor(context, "typeOf(\"str\")", "string-metaobject",
+                        "createStringMetaObject", TypeDescriptor.META_OBJECT));
+        res.add(createValueConstructor(context, "typeOf(NULL)", "null-metaobject",
+                        "createNullMetaObject", TypeDescriptor.META_OBJECT));
+        res.add(createValueConstructor(context, "typeOf(new())", "object-metaobject",
+                        "createObjectMetaObject", TypeDescriptor.META_OBJECT));
+        res.add(createValueConstructor(context, "typeOf(createStringMetaObject)",
+                        "function-metaobject",
+                        "createFunctionMetaObject", TypeDescriptor.META_OBJECT));
+
         res.add(opb.build());
         return Collections.unmodifiableCollection(res);
     }
@@ -115,15 +140,15 @@ public class SLTCKLanguageProvider implements LanguageProvider {
     public Collection<? extends Snippet> createExpressions(Context context) {
         final Collection<Snippet> res = new ArrayList<>();
         final Value fnc = eval(context, String.format(PATTERN_BIN_OP_FNC, "add", "+"), "add");
-        Snippet.Builder opb = Snippet.newBuilder("+", fnc, TypeDescriptor.NUMBER).parameterTypes(TypeDescriptor.NUMBER, TypeDescriptor.NUMBER);
+        Snippet.Builder opb = Snippet.newBuilder("+", fnc, NUMBER_RETURN).parameterTypes(TypeDescriptor.NUMBER, TypeDescriptor.NUMBER);
         res.add(opb.build());
         opb = Snippet.newBuilder("+", fnc, TypeDescriptor.STRING).parameterTypes(TypeDescriptor.STRING, TypeDescriptor.ANY);
         res.add(opb.build());
         opb = Snippet.newBuilder("+", fnc, TypeDescriptor.STRING).parameterTypes(TypeDescriptor.ANY, TypeDescriptor.STRING);
         res.add(opb.build());
-        res.add(createBinaryOperator(context, "-", "sub", TypeDescriptor.NUMBER, TypeDescriptor.NUMBER, TypeDescriptor.NUMBER).build());
-        res.add(createBinaryOperator(context, "*", "mul", TypeDescriptor.NUMBER, TypeDescriptor.NUMBER, TypeDescriptor.NUMBER).build());
-        res.add(createBinaryOperator(context, "/", "div", TypeDescriptor.NUMBER, TypeDescriptor.NUMBER, TypeDescriptor.NUMBER).resultVerifier((snippetRun) -> {
+        res.add(createBinaryOperator(context, "-", "sub", NUMBER_RETURN, TypeDescriptor.NUMBER, TypeDescriptor.NUMBER).build());
+        res.add(createBinaryOperator(context, "*", "mul", NUMBER_RETURN, TypeDescriptor.NUMBER, TypeDescriptor.NUMBER).build());
+        res.add(createBinaryOperator(context, "/", "div", NUMBER_RETURN, TypeDescriptor.NUMBER, TypeDescriptor.NUMBER).resultVerifier((snippetRun) -> {
             final Value dividend = snippetRun.getParameters().get(0);
             final Value divider = snippetRun.getParameters().get(1);
             final PolyglotException exception = snippetRun.getException();
@@ -168,6 +193,7 @@ public class SLTCKLanguageProvider implements LanguageProvider {
         res.add(createPostfixOperator(context, "()", "callNoArg", TypeDescriptor.NULL, TypeDescriptor.executable(TypeDescriptor.ANY)).build());
         res.add(createPostfixOperator(context, "(1)", "callOneArg", TypeDescriptor.NULL, TypeDescriptor.executable(TypeDescriptor.ANY, TypeDescriptor.NUMBER)).build());
         res.add(createPostfixOperator(context, "(1, \"\")", "callTwoArgs", TypeDescriptor.NULL, TypeDescriptor.executable(TypeDescriptor.ANY, TypeDescriptor.NUMBER, TypeDescriptor.STRING)).build());
+
         return Collections.unmodifiableCollection(res);
     }
 
@@ -177,6 +203,19 @@ public class SLTCKLanguageProvider implements LanguageProvider {
         res.add(createStatement(context, "if", "iffnc", "if ({1}) '{'\n{0}=1;\n'}' else '{'\n{0}=0;\n'}'", TypeDescriptor.NUMBER, TypeDescriptor.BOOLEAN));
         res.add(createStatement(context, "while", "whilefnc", "while ({1}) '{'break;\n'}'", TypeDescriptor.NUMBER, TypeDescriptor.BOOLEAN));
         res.add(createStatement(context, "assign", "assignfnc", "{1} = {0};", TypeDescriptor.ANY, TypeDescriptor.ANY));
+
+        // relevant builtins
+        res.add(createBuiltin(context, "getSize", TypeDescriptor.NUMBER, TypeDescriptor.ARRAY));
+        res.add(createBuiltin(context, "hasSize", TypeDescriptor.BOOLEAN, TypeDescriptor.ANY));
+        res.add(createBuiltin(context, "isExecutable", TypeDescriptor.BOOLEAN, TypeDescriptor.ANY));
+        res.add(createBuiltin(context, "isNull", TypeDescriptor.BOOLEAN, TypeDescriptor.ANY));
+
+        res.add(createBuiltin(context, "isInstance", TypeDescriptor.BOOLEAN,
+                        TypeDescriptor.META_OBJECT,
+                        TypeDescriptor.ANY));
+        res.add(createBuiltin(context, "typeOf", TypeDescriptor.union(TypeDescriptor.META_OBJECT,
+                        TypeDescriptor.NULL), TypeDescriptor.ANY));
+
         return res;
     }
 
@@ -253,6 +292,32 @@ public class SLTCKLanguageProvider implements LanguageProvider {
         return Snippet.newBuilder(id, fnc, returnType).parameterTypes(paramTypes).build();
     }
 
+    private static Snippet createBuiltin(
+                    final Context context,
+                    final String builtinName,
+                    final TypeDescriptor returnType,
+                    TypeDescriptor... paramTypes) {
+
+        String pattern;
+        switch (paramTypes.length) {
+            case 0:
+                pattern = PATTERN_BUILTIN0;
+                break;
+            case 1:
+                pattern = PATTERN_BUILTIN1;
+                break;
+            case 2:
+                pattern = PATTERN_BUILTIN2;
+                break;
+            default:
+                throw new AssertionError();
+        }
+
+        final String formattedExpression = String.format(pattern, builtinName, builtinName);
+        final Value fnc = eval(context, formattedExpression, builtinName);
+        return Snippet.newBuilder(builtinName, fnc, returnType).parameterTypes(paramTypes).build();
+    }
+
     private static Snippet loadScript(
                     final Context context,
                     final String resourceName,
@@ -269,8 +334,9 @@ public class SLTCKLanguageProvider implements LanguageProvider {
     private static Source createSource(final String resourceName) throws IOException {
         int slashIndex = resourceName.lastIndexOf('/');
         String scriptName = slashIndex >= 0 ? resourceName.substring(slashIndex + 1) : resourceName;
-        final Reader in = new InputStreamReader(SLTCKLanguageProvider.class.getResourceAsStream(resourceName), "UTF-8");
-        return Source.newBuilder(ID, in, scriptName).build();
+        try (Reader in = new InputStreamReader(SLTCKLanguageProvider.class.getResourceAsStream(resourceName), "UTF-8")) {
+            return Source.newBuilder(ID, in, scriptName).build();
+        }
     }
 
     private static Value eval(final Context context, final String fncDecl, final String functionName) {

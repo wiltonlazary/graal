@@ -48,8 +48,6 @@ import org.graalvm.compiler.phases.Phase;
 import com.oracle.svm.hosted.meta.HostedField;
 import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedType;
-import com.oracle.svm.hosted.nodes.AssertStampNode;
-import com.oracle.svm.hosted.nodes.AssertTypeStateNode;
 
 import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.DeoptimizationReason;
@@ -67,12 +65,6 @@ import jdk.vm.ci.meta.TriState;
  * new stamp states that a value is non-null.
  */
 public class StrengthenStampsPhase extends Phase {
-
-    private final boolean insertTypeChecks;
-
-    public StrengthenStampsPhase(boolean insertTypeChecks) {
-        this.insertTypeChecks = insertTypeChecks;
-    }
 
     @Override
     protected void run(StructuredGraph graph) {
@@ -104,7 +96,7 @@ public class StrengthenStampsPhase extends Phase {
                 InstanceOfNode node = (InstanceOfNode) n;
                 ObjectStamp newStamp = (ObjectStamp) strengthen(node.getCheckedStamp());
                 if (newStamp != null) {
-                    node.strengthenCheckedStamp(newStamp);
+                    node.replaceAndDelete(graph.addOrUniqueWithInputs(InstanceOfNode.createHelper(newStamp, node.getValue(), node.profile(), node.getAnchor())));
                 }
 
             } else if (n instanceof PiNode) {
@@ -149,7 +141,11 @@ public class StrengthenStampsPhase extends Phase {
                 /* We must be in dead code. */
                 newStamp = StampFactory.empty(JavaKind.Object);
             } else {
-                TypeReference typeRef = TypeReference.createTrustedWithoutAssumptions(toTarget(strengthenType));
+                ResolvedJavaType targetType = toTarget(strengthenType);
+                if (targetType == null) {
+                    return null;
+                }
+                TypeReference typeRef = TypeReference.createTrustedWithoutAssumptions(targetType);
                 newStamp = StampFactory.object(typeRef, stamp.nonNull());
             }
         }
@@ -166,19 +162,6 @@ public class StrengthenStampsPhase extends Phase {
             if (!newStamp.equals(node.stamp(NodeView.DEFAULT))) {
                 node.getDebug().log("STAMP UPDATE  method %s  node %s  old %s  new %s\n", node.graph().method().format("%H.%n(%p)"), node, node.stamp(NodeView.DEFAULT), newStamp);
                 node.setStamp(newStamp);
-            }
-
-        }
-        if (insertTypeChecks) {
-            /*
-             * Checking all exact types of the type state is only feasible for type states with few
-             * exact types, because every type requires an explicit comparison. For big type states
-             * we fall back to instanceof-checking based on the stamp.
-             */
-            if (typeProfile != null && typeProfile.getTypes().length < 10) {
-                AssertTypeStateNode.create(node, typeProfile);
-            } else {
-                AssertStampNode.create(node);
             }
         }
     }
@@ -200,7 +183,11 @@ public class StrengthenStampsPhase extends Phase {
 
             assert oldType == null || oldType.isAssignableFrom(exactType);
             if (!oldStamp.isExactType() || !exactType.equals(oldType) || nonNull != oldStamp.nonNull()) {
-                TypeReference typeRef = TypeReference.createExactTrusted(toTarget(exactType));
+                ResolvedJavaType targetType = toTarget(exactType);
+                if (targetType == null) {
+                    return oldStamp;
+                }
+                TypeReference typeRef = TypeReference.createExactTrusted(targetType);
                 return nonNull ? StampFactory.objectNonNull(typeRef) : StampFactory.object(typeRef);
             } else {
                 return oldStamp;
@@ -256,7 +243,11 @@ public class StrengthenStampsPhase extends Phase {
         }
 
         if (!baseType.equals(oldType) || nonNull != oldStamp.nonNull()) {
-            TypeReference typeRef = TypeReference.createTrustedWithoutAssumptions(toTarget(baseType));
+            ResolvedJavaType targetType = toTarget(baseType);
+            if (targetType == null) {
+                return oldStamp;
+            }
+            TypeReference typeRef = TypeReference.createTrustedWithoutAssumptions(targetType);
             return nonNull ? StampFactory.objectNonNull(typeRef) : StampFactory.object(typeRef);
         }
         return oldStamp;

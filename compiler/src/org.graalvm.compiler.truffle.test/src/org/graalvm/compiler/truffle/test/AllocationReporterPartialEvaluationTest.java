@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,10 +28,11 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
-import org.junit.Test;
-import org.graalvm.polyglot.Context;
 import org.graalvm.compiler.truffle.runtime.GraalTruffleRuntime;
 import org.graalvm.compiler.truffle.runtime.OptimizedCallTarget;
+import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.PolyglotAccess;
+import org.junit.Test;
 
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleLanguage;
@@ -57,7 +58,7 @@ public class AllocationReporterPartialEvaluationTest extends TestWithSynchronous
     public void testConsistentAssertions() {
         // Test that onEnter()/onReturnValue() are not broken
         // when only one of them is compiled with PE.
-        Context context = Context.newBuilder(AllocationReporterLanguage.ID).build();
+        Context context = Context.newBuilder(AllocationReporterLanguage.ID).allowPolyglotAccess(PolyglotAccess.ALL).build();
         context.initialize(AllocationReporterLanguage.ID);
         final TestAllocationReporter tester = context.getEngine().getInstruments().get(TestAllocationReporter.ID).lookup(TestAllocationReporter.class);
         assertNotNull(tester);
@@ -84,8 +85,8 @@ public class AllocationReporterPartialEvaluationTest extends TestWithSynchronous
         assertNotCompiled(returnTarget);
         returnTarget.call();
         value[0]++;
-        enterTarget.compile();
-        returnTarget.compile();
+        enterTarget.compile(true);
+        returnTarget.compile(true);
         assertCompiled(enterTarget);
         assertCompiled(returnTarget);
         long expectedCounters = allocCounter(value[0]);
@@ -112,8 +113,8 @@ public class AllocationReporterPartialEvaluationTest extends TestWithSynchronous
             assertCompiled(returnTarget);
             returnTarget.call();
             value[0]++;
-            enterTarget.compile();
-            returnTarget.compile();
+            enterTarget.compile(true);
+            returnTarget.compile(true);
             assertCompiled(enterTarget);
             assertCompiled(returnTarget);
 
@@ -124,8 +125,8 @@ public class AllocationReporterPartialEvaluationTest extends TestWithSynchronous
             assertNotCompiled(returnTarget);
             returnTarget.call();
             value[0]++;
-            enterTarget.compile();
-            returnTarget.compile();
+            enterTarget.compile(true);
+            returnTarget.compile(true);
             assertCompiled(enterTarget);
             assertCompiled(returnTarget);
 
@@ -137,8 +138,8 @@ public class AllocationReporterPartialEvaluationTest extends TestWithSynchronous
             assertNotCompiled(returnTarget);
             returnTarget.call();
             value[0]++;
-            enterTarget.compile();
-            returnTarget.compile();
+            enterTarget.compile(true);
+            returnTarget.compile(true);
             assertCompiled(enterTarget);
             assertCompiled(returnTarget);
         }
@@ -190,11 +191,6 @@ public class AllocationReporterPartialEvaluationTest extends TestWithSynchronous
             AllocationReporter reporter = env.lookup(AllocationReporter.class);
             env.exportSymbol(AllocationReporter.class.getSimpleName(), env.asGuestValue(reporter));
             return reporter;
-        }
-
-        @Override
-        protected boolean isObjectOfLanguage(Object object) {
-            return false;
         }
 
     }

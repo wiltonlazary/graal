@@ -29,18 +29,18 @@ import java.util.Optional;
 import org.graalvm.compiler.core.common.spi.ForeignCallDescriptor;
 import org.graalvm.compiler.core.common.spi.ForeignCallsProvider;
 import org.graalvm.compiler.java.GraphBuilderPhase;
+import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
 import org.graalvm.compiler.nodes.graphbuilderconf.IntrinsicContext;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.OptimisticOptimizations;
 
-import com.oracle.graal.pointsto.AnalysisPolicy;
+import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.graal.pointsto.meta.HostedProviders;
 
-import jdk.vm.ci.meta.ResolvedJavaField;
-import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 /**
@@ -50,11 +50,7 @@ public interface HostVM {
 
     OptionValues options();
 
-    AnalysisPolicy analysisPolicy();
-
     boolean isRelocatedPointer(Object originalObject);
-
-    boolean isCFunction(AnalysisMethod result);
 
     void clearInThread();
 
@@ -62,13 +58,11 @@ public interface HostVM {
 
     Object getConfiguration();
 
-    boolean platformSupported(ResolvedJavaField field);
+    void checkForbidden(AnalysisType type, AnalysisType.UsageKind kind);
 
-    boolean platformSupported(ResolvedJavaMethod method);
+    void registerType(AnalysisType newValue);
 
-    boolean platformSupported(ResolvedJavaType type);
-
-    void registerType(AnalysisType newValue, ResolvedJavaType hostType);
+    boolean isInitialized(AnalysisType type);
 
     Optional<AnalysisMethod> handleForeignCall(ForeignCallDescriptor foreignCallDescriptor, ForeignCallsProvider foreignCallsProvider);
 
@@ -78,4 +72,17 @@ public interface HostVM {
     String inspectServerContentPath();
 
     void warn(String message);
+
+    /**
+     * Gets the name of the native image being built.
+     *
+     * @return {@code null} if this VM is not being used in the context of building a native image
+     */
+    default String getImageName() {
+        return null;
+    }
+
+    void checkType(ResolvedJavaType type, AnalysisUniverse universe);
+
+    void checkMethod(BigBang bb, AnalysisMethod method, StructuredGraph graph);
 }

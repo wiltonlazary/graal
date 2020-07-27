@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -49,8 +49,11 @@ public interface Commands {
     /**
      * Interpret command line parameters as files.
      */
-    String OPTION_FILES = "F"; // NOI18N
-    String LONG_OPTION_FILES = "file"; // NOI18N
+    String OPTION_FILES = "L"; // NOI18N
+    String LONG_OPTION_FILES = "local-file"; // NOI18N
+
+    @Deprecated String OPTION_FILES_OLD = "F"; // NOI18N
+    @Deprecated String LONG_OPTION_FILES_OLD = "file"; // NOI18N
 
     /**
      * Replace different files.
@@ -91,8 +94,8 @@ public interface Commands {
     /**
      * Verifies JAR integrity.
      */
-    String OPTION_VERIFY_JARS = "s";
-    String LONG_OPTION_VERIFY_JARS = "verify-jars";
+    String OPTION_NO_VERIFY_JARS = "s";
+    String LONG_OPTION_NO_VERIFY_JARS = "no-verify-jars";
 
     /**
      * Do not use tabular list.
@@ -140,7 +143,7 @@ public interface Commands {
      * Interpret parameters as remote component IDs, uses user-defined catalog URL.
      */
     String OPTION_FOREIGN_CATALOG = "C";
-    String LONG_OPTION_FOREIGN_CATALOG = "user-catalog";
+    String LONG_OPTION_FOREIGN_CATALOG = "custom-catalog";
 
     /**
      * Interpret parameters as URLs.
@@ -153,4 +156,73 @@ public interface Commands {
      * on as positionals.
      */
     String DO_NOT_PROCESS_OPTIONS = "*";
+
+    /**
+     * Fails if a component which already exists is to be installed.
+     */
+    String OPTION_FAIL_EXISTING = "i"; // NOI18N
+    String LONG_OPTION_FAIL_EXISTING = "fail-existing"; // NOI18N
+
+    /**
+     * Automatic YES to all questions.
+     */
+    String OPTION_AUTO_YES = "A";
+    String LONG_OPTION_AUTO_YES = "auto-yes";
+
+    /**
+     * Abort on all prompts except YES/NO.
+     */
+    String OPTION_NON_INTERACTIVE = "N";
+    String LONG_OPTION_NON_INTERACTIVE = "non-interactive";
+
+    /**
+     * Operate on all components, irrespective of version.
+     */
+    String OPTION_ALL = "a";
+    String LONG_OPTION_ALL = "all-versions";
+
+    /**
+     * Ignores missing components on upgrade.
+     */
+    String OPTION_IGNORE_MISSING_COMPONENTS = "x"; // NOI18N
+    String LONG_OPTION_IGNORE_MISSING_COMPONENTS = "ignore-missing"; // NOI18N
+
+    String OPTION_VERSION = "V";
+    String LONG_OPTION_VERSION = "use-version";
+
+    /**
+     * Uninstall other components depending on the uninstalled ones.
+     */
+    String OPTION_UNINSTALL_DEPENDENT = "D";
+    String LONG_OPTION_UNINSTALL_DEPENDENT = "remove-deps";
+
+    /**
+     * Attempt to resolve dependencies against local directories.
+     */
+    String OPTION_LOCAL_DEPENDENCIES = "D";
+    String LONG_OPTION_LOCAL_DEPENDENCIES = "local-deps";
+
+    /**
+     * Ignore component dependencies.
+     */
+    String OPTION_NO_DEPENDENCIES = "M";
+    String LONG_OPTION_NO_DEPENDENCIES = "no-deps";
+
+    /**
+     * Print version and exit. Non-alnum option to indicate the short form is not defined.
+     */
+    String OPTION_PRINT_VERSION = "@";
+    String LONG_OPTION_PRINT_VERSION = "version";
+
+    /**
+     * Show version and continue. Non-alnum option to indicate the short form is not defined.
+     */
+    String OPTION_SHOW_VERSION = "#";
+    String LONG_OPTION_SHOW_VERSION = "show-version";
+
+    /**
+     * Will not fail, if at least one of the catalogs can be read.
+     */
+    String OPTION_IGNORE_CATALOG_ERRORS = "E";
+    String LONG_OPTION_IGNORE_CATALOG_ERRORS = "no-catalog-errors";
 }

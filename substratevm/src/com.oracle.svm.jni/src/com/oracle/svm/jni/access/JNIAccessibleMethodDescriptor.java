@@ -33,7 +33,9 @@ import java.lang.reflect.Method;
 import com.oracle.svm.core.util.VMError;
 
 import jdk.vm.ci.meta.JavaMethod;
+import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.MetaUtil;
+import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 /**
  * Method descriptor that is used for lookups of JNI-accessible methods.
@@ -41,10 +43,7 @@ import jdk.vm.ci.meta.MetaUtil;
 public final class JNIAccessibleMethodDescriptor {
 
     private static final String CONSTRUCTOR_NAME = "<init>";
-
-    public static boolean isConstructorName(String name) {
-        return CONSTRUCTOR_NAME.equals(name);
-    }
+    private static final String INITIALIZER_NAME = "<clinit>";
 
     public static JNIAccessibleMethodDescriptor of(JavaMethod method) {
         return new JNIAccessibleMethodDescriptor(method.getName(), method.getSignature().toMethodDescriptor());
@@ -82,6 +81,10 @@ public final class JNIAccessibleMethodDescriptor {
         return name.equals(CONSTRUCTOR_NAME);
     }
 
+    public boolean isClassInitializer() {
+        return name.equals(INITIALIZER_NAME);
+    }
+
     public String getName() {
         return name;
     }
@@ -101,6 +104,21 @@ public final class JNIAccessibleMethodDescriptor {
             return (other == this) || (name.equals(other.name) && signature.equals(other.signature));
         }
         return false;
+    }
+
+    boolean matchesIgnoreReturnType(ResolvedJavaMethod method) {
+        if (!name.equals(method.getName())) {
+            return false;
+        }
+        int position = 1; // skip '('
+        for (JavaType parameterType : method.getSignature().toParameterTypes(null)) {
+            String paramInternal = parameterType.getName();
+            if (!signature.startsWith(paramInternal, position)) {
+                return false;
+            }
+            position += paramInternal.length();
+        }
+        return signature.startsWith(")", position);
     }
 
     @Override

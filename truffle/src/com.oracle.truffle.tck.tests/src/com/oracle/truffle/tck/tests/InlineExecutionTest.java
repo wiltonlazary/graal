@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.tck.tests;
 
@@ -28,17 +44,15 @@ import com.oracle.truffle.tck.common.inline.InlineVerifier;
 import java.io.IOException;
 import java.util.AbstractMap;
 import java.util.Collection;
-import java.util.LinkedHashSet;
 import java.util.Objects;
+import java.util.TreeSet;
 
 import org.junit.AfterClass;
 import org.junit.Assume;
-import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
-import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.tck.InlineSnippet;
@@ -52,7 +66,7 @@ public class InlineExecutionTest {
     @Parameterized.Parameters(name = "{0}")
     public static Collection<InlineTestRun> createScriptTests() {
         context = new TestContext(InlineExecutionTest.class);
-        final Collection<InlineTestRun> res = new LinkedHashSet<>();
+        final Collection<InlineTestRun> res = new TreeSet<>((a, b) -> a.toString().compareTo(b.toString()));
         for (String lang : TestUtil.getRequiredLanguages(context)) {
             for (InlineSnippet snippet : context.getInlineScripts(lang)) {
                 res.add(new InlineTestRun(new AbstractMap.SimpleImmutableEntry<>(lang, snippet.getScript()), snippet));
@@ -65,14 +79,6 @@ public class InlineExecutionTest {
     public static void afterClass() throws IOException {
         context.close();
         context = null;
-    }
-
-    @Before
-    public void setUp() {
-        // JUnit mixes test executions from different classes. There are still tests using the
-        // deprecated PolyglotEngine. For tests executed by Parametrized runner
-        // creating Context as a test parameter we need to ensure that correct SPI is used.
-        Engine.create().close();
     }
 
     public InlineExecutionTest(final InlineTestRun testRun) {
@@ -96,10 +102,10 @@ public class InlineExecutionTest {
         try {
             try {
                 final Value result = testRun.getSnippet().getExecutableValue().execute(testRun.getActualParameters().toArray());
-                TestUtil.validateResult(testRun, result, null);
+                TestUtil.validateResult(testRun, result, null, true);
                 success = true;
             } catch (PolyglotException pe) {
-                TestUtil.validateResult(testRun, null, pe);
+                TestUtil.validateResult(testRun, null, pe, true);
                 success = true;
             }
             if (verifier != null && verifier.exception != null) {
@@ -127,14 +133,14 @@ public class InlineExecutionTest {
         public void verify(Object ret) {
             Value result = context.getValue(ret);
             InlineSnippet inlineSnippet = testRun.getInlineSnippet();
-            TestUtil.validateResult(inlineSnippet.getResultVerifier(), testRun, result, null);
+            TestUtil.validateResult(inlineSnippet.getResultVerifier(), testRun, result, null, true);
         }
 
         @Override
         public void verify(PolyglotException pe) {
             InlineSnippet inlineSnippet = testRun.getInlineSnippet();
             try {
-                TestUtil.validateResult(inlineSnippet.getResultVerifier(), testRun, null, pe);
+                TestUtil.validateResult(inlineSnippet.getResultVerifier(), testRun, null, pe, true);
             } catch (Exception exc) {
                 exception = exc;
             }

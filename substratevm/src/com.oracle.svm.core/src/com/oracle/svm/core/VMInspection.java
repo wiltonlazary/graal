@@ -24,32 +24,39 @@
  */
 package com.oracle.svm.core;
 
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+//Checkstyle: stop
 
+import java.io.IOException;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.TimeZone;
+
+import com.oracle.svm.core.thread.JavaThreads;
+import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.compiler.options.Option;
 import org.graalvm.compiler.options.OptionType;
-import org.graalvm.nativeimage.Feature;
+import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.IsolateThread;
-import org.graalvm.nativeimage.c.function.CEntryPointContext;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platform.WINDOWS;
+import org.graalvm.nativeimage.ProcessProperties;
+import org.graalvm.nativeimage.VMRuntime;
+import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.svm.core.annotate.AutomaticFeature;
-import com.oracle.svm.core.annotate.NeverInline;
+import com.oracle.svm.core.deopt.DeoptimizationSupport;
 import com.oracle.svm.core.jdk.RuntimeSupport;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.option.HostedOptionKey;
 import com.oracle.svm.core.stack.JavaStackWalker;
-import com.oracle.svm.core.stack.ThreadStackPrinter;
-import com.oracle.svm.core.thread.VMOperation;
+import com.oracle.svm.core.stack.ThreadStackPrinter.StackFramePrintVisitor;
+import com.oracle.svm.core.thread.JavaVMOperation;
 import com.oracle.svm.core.thread.VMThreads;
-import org.graalvm.compiler.api.replacements.Fold;
 
-//Checkstyle: stop
 import sun.misc.Signal;
 import sun.misc.SignalHandler;
+
 //Checkstyle: resume
 
 @AutomaticFeature
@@ -57,15 +64,20 @@ public class VMInspection implements Feature {
 
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
-        return isEnabled();
+        return isEnabled() || VMInspectionOptions.DumpThreadStacksOnSignal.getValue();
     }
 
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess access) {
         RuntimeSupport.getRuntimeSupport().addStartupHook(() -> {
             DumpAllStacks.install();
-            DumpHeapReport.install();
-            DumpRuntimeCompilation.install();
+            if (VMInspectionOptions.AllowVMInspection.getValue() && !Platform.includedIn(WINDOWS.class)) {
+                /* We have enough signals to enable the rest. */
+                DumpHeapReport.install();
+                if (DeoptimizationSupport.enabled()) {
+                    DumpRuntimeCompilation.install();
+                }
+            }
         });
     }
 
@@ -78,19 +90,23 @@ public class VMInspection implements Feature {
 class VMInspectionOptions {
     @Option(help = "Enables features that allow the VM to be inspected during runtime.", type = OptionType.User) //
     public static final HostedOptionKey<Boolean> AllowVMInspection = new HostedOptionKey<>(false);
+
+    @Option(help = "Dumps all thread stacktraces on SIGQUIT/SIGBREAK.", type = OptionType.User) //
+    public static final HostedOptionKey<Boolean> DumpThreadStacksOnSignal = new HostedOptionKey<>(false);
 }
 
 class DumpAllStacks implements SignalHandler {
     static void install() {
-        Signal.handle(new Signal("QUIT"), new DumpAllStacks());
+        Signal.handle(Platform.includedIn(WINDOWS.class) ? new Signal("BREAK") : new Signal("QUIT"), new DumpAllStacks());
     }
 
     @Override
     public void handle(Signal arg0) {
-        VMOperation.enqueueBlockingSafepoint("DumpAllStacks", () -> {
+        JavaVMOperation.enqueueBlockingSafepoint("DumpAllStacks", () -> {
             Log log = Log.log();
-            for (IsolateThread vmThread = VMThreads.firstThread(); VMThreads.isNonNullThread(vmThread); vmThread = VMThreads.nextThread(vmThread)) {
-                if (vmThread == CEntryPointContext.getCurrentIsolateThread()) {
+            log.string("Full thread dump:").newline().newline();
+            for (IsolateThread vmThread = VMThreads.firstThread(); vmThread.isNonNull(); vmThread = VMThreads.nextThread(vmThread)) {
+                if (vmThread == CurrentIsolate.getCurrentThread()) {
                     /* Skip the signal handler stack */
                     continue;
                 }
@@ -105,48 +121,45 @@ class DumpAllStacks implements SignalHandler {
         });
     }
 
-    @NeverInline("catch implicit exceptions")
     private static void dumpStack(Log log, IsolateThread vmThread) {
-        log.string("VMThread ").zhex(vmThread.rawValue()).spaces(2).string(VMThreads.StatusSupport.getStatusString(vmThread)).newline();
+        Thread javaThread = JavaThreads.fromVMThread(vmThread);
+        if (javaThread != null) {
+            log.character('"').string(javaThread.getName()).character('"');
+            log.string(" #").signed(javaThread.getId());
+            if (javaThread.isDaemon()) {
+                log.string(" daemon");
+            }
+        } else {
+            log.string("(no Java thread)");
+        }
+        log.string(" tid=0x").zhex(vmThread.rawValue());
+        if (javaThread != null) {
+            log.string(" state=").string(javaThread.getState().name());
+        }
+        log.newline();
+
         log.indent(true);
-        JavaStackWalker.walkThread(vmThread, ThreadStackPrinter.AllocationFreeStackFrameVisitor);
+        JavaStackWalker.walkThread(vmThread, StackFramePrintVisitor.SINGLETON, log);
         log.indent(false);
     }
 }
 
 class DumpHeapReport implements SignalHandler {
+    private static final TimeZone UTC_TIMEZONE = TimeZone.getTimeZone("UTC");
+
     static void install() {
         Signal.handle(new Signal("USR1"), new DumpHeapReport());
     }
 
-    @SuppressWarnings("deprecation")
-    @NeverInline("Ensure ClassCastException gets caught")
-    private static void performHeapDump(FileOutputStream fileOutputStream) throws Exception {
-        Object[] args = new Object[]{"HeapDump.dumpHeap(FileOutputStream, Boolean)Boolean", fileOutputStream, Boolean.TRUE};
-        if (!((Boolean) Compiler.command(args))) {
-            throw new RuntimeException();
-        }
-    }
-
     @Override
     public void handle(Signal arg0) {
-        Path heapDumpFilePath = null;
-        FileOutputStream fileOutputStream = null;
+        DateFormat dateFormat = new SimpleDateFormat("yyyyMMdd'T'HHmmss'Z'");
+        dateFormat.setTimeZone(UTC_TIMEZONE);
+        String heapDumpFileName = "svm-heapdump-" + ProcessProperties.getProcessID() + "-" + dateFormat.format(new Date()) + ".hprof";
         try {
-            heapDumpFilePath = Files.createTempFile(Paths.get("."), "svm-heapdump-", ".hprof");
-            fileOutputStream = new FileOutputStream(heapDumpFilePath.toFile());
-            performHeapDump(fileOutputStream);
-        } catch (Exception e) {
-            Log.log().string("svm-heapdump failed").newline().flush();
-            try {
-                if (fileOutputStream != null) {
-                    fileOutputStream.close();
-                }
-                if (heapDumpFilePath != null) {
-                    Files.deleteIfExists(heapDumpFilePath);
-                }
-            } catch (IOException e1) {
-            }
+            VMRuntime.dumpHeap(heapDumpFileName, true);
+        } catch (IOException e) {
+            Log.log().string("IOException during dumpHeap: ").string(e.getMessage()).newline();
         }
     }
 }
@@ -158,7 +171,7 @@ class DumpRuntimeCompilation implements SignalHandler {
 
     @Override
     public void handle(Signal arg0) {
-        VMOperation.enqueueBlockingSafepoint("DumpRuntimeCompilation", () -> {
+        JavaVMOperation.enqueueBlockingSafepoint("DumpRuntimeCompilation", () -> {
             Log log = Log.log();
             SubstrateUtil.dumpRuntimeCompilation(log);
             log.flush();

@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.polyglot;
 
@@ -46,30 +62,34 @@ import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.ImportStatic;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.interop.ArityException;
-import com.oracle.truffle.api.interop.ForeignAccess;
-import com.oracle.truffle.api.interop.KeyInfo;
-import com.oracle.truffle.api.interop.Message;
+import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.interop.UnsupportedTypeException;
+import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.profiles.BranchProfile;
 import com.oracle.truffle.api.profiles.ConditionProfile;
 import com.oracle.truffle.polyglot.PolyglotLanguageContext.ToGuestValuesNode;
 
 final class HostInteropReflect {
     static final Object[] EMPTY = {};
+    static final String STATIC_TO_CLASS = "class";
+    static final String CLASS_TO_STATIC = "static";
 
     private HostInteropReflect() {
     }
 
     @CompilerDirectives.TruffleBoundary
     static Class<?> findInnerClass(Class<?> clazz, String name) {
-        if (Modifier.isPublic(clazz.getModifiers())) {
-            for (Class<?> t : clazz.getClasses()) {
-                // no support for non-static type members now
-                if (isStaticTypeOrInterface(t) && t.getSimpleName().equals(name)) {
-                    return t;
+        if (!TruffleOptions.AOT) { // GR-13208: SVM does not support Class.getClasses() yet
+            if (Modifier.isPublic(clazz.getModifiers())) {
+                for (Class<?> t : clazz.getClasses()) {
+                    // no support for non-static type members now
+                    if (isStaticTypeOrInterface(t) && t.getSimpleName().equals(name)) {
+                        return t;
+                    }
                 }
             }
         }
@@ -81,12 +101,8 @@ final class HostInteropReflect {
     }
 
     @CompilerDirectives.TruffleBoundary
-    static HostMethodDesc findMethod(Class<?> clazz, String name, boolean onlyStatic) {
-        if (TruffleOptions.AOT) {
-            return null;
-        }
-
-        HostClassDesc classDesc = HostClassDesc.forClass(clazz);
+    static HostMethodDesc findMethod(PolyglotEngineImpl impl, Class<?> clazz, String name, boolean onlyStatic) {
+        HostClassDesc classDesc = HostClassDesc.forClass(impl, clazz);
         HostMethodDesc foundMethod = classDesc.lookupMethod(name, onlyStatic);
         if (foundMethod == null && isJNIName(name)) {
             foundMethod = classDesc.lookupMethodByJNIName(name, onlyStatic);
@@ -95,66 +111,86 @@ final class HostInteropReflect {
     }
 
     @CompilerDirectives.TruffleBoundary
-    static HostFieldDesc findField(Class<?> clazz, String name, boolean onlyStatic) {
-        HostClassDesc classDesc = HostClassDesc.forClass(clazz);
+    static HostFieldDesc findField(PolyglotEngineImpl impl, Class<?> clazz, String name, boolean onlyStatic) {
+        HostClassDesc classDesc = HostClassDesc.forClass(impl, clazz);
         return classDesc.lookupField(name, onlyStatic);
     }
 
-    @CompilerDirectives.TruffleBoundary
-    static int findKeyInfo(Class<?> clazz, String name, boolean onlyStatic) {
-        if (TruffleOptions.AOT) {
-            return 0;
-        }
-
-        boolean readable = false;
-        boolean writable = false;
-        boolean invocable = false;
-        boolean internal = false;
-
-        HostClassDesc classDesc = HostClassDesc.forClass(clazz);
+    @TruffleBoundary
+    static boolean isReadable(HostObject object, Class<?> clazz, String name, boolean onlyStatic, boolean isClass) {
+        HostClassDesc classDesc = HostClassDesc.forClass(object.getEngine(), clazz);
         HostMethodDesc foundMethod = classDesc.lookupMethod(name, onlyStatic);
         if (foundMethod != null) {
-            readable = true;
-            invocable = true;
+            return true;
         } else if (isJNIName(name)) {
             foundMethod = classDesc.lookupMethodByJNIName(name, onlyStatic);
             if (foundMethod != null) {
-                readable = true;
-                invocable = true;
-                internal = true;
+                return true;
             }
         }
 
-        if (!readable) {
-            HostFieldDesc foundField = classDesc.lookupField(name, onlyStatic);
-            if (foundField != null) {
-                readable = true;
-                writable = true;
-            }
+        HostFieldDesc foundField = classDesc.lookupField(name, onlyStatic);
+        if (foundField != null) {
+            return true;
         }
 
         if (onlyStatic) {
-            if (!readable) {
-                if ("class".equals(name)) {
-                    readable = true;
-                }
+            if (STATIC_TO_CLASS.equals(name)) {
+                return true;
             }
-            if (!readable) {
-                Class<?> innerClass = findInnerClass(clazz, name);
-                if (innerClass != null) {
-                    readable = true;
-                }
+            Class<?> innerClass = findInnerClass(clazz, name);
+            if (innerClass != null) {
+                return true;
             }
         }
+        if (isClass) {
+            if (CLASS_TO_STATIC.equals(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
-        if (readable) {
-            return KeyInfo.READABLE | (writable ? KeyInfo.MODIFIABLE : 0) | (invocable ? KeyInfo.INVOCABLE : 0) | (internal ? KeyInfo.INTERNAL : 0);
+    @TruffleBoundary
+    static boolean isModifiable(HostObject object, Class<?> clazz, String name, boolean onlyStatic) {
+        HostClassDesc classDesc = HostClassDesc.forClass(object.getEngine(), clazz);
+        HostFieldDesc foundField = classDesc.lookupField(name, onlyStatic);
+        if (foundField != null && !foundField.isFinal()) {
+            return true;
         }
-        return 0;
+        return false;
+    }
+
+    @TruffleBoundary
+    static boolean isInvokable(HostObject object, Class<?> clazz, String name, boolean onlyStatic) {
+        HostClassDesc classDesc = HostClassDesc.forClass(object.getEngine(), clazz);
+        HostMethodDesc foundMethod = classDesc.lookupMethod(name, onlyStatic);
+        if (foundMethod != null) {
+            return true;
+        } else if (isJNIName(name)) {
+            foundMethod = classDesc.lookupMethodByJNIName(name, onlyStatic);
+            if (foundMethod != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @TruffleBoundary
+    static boolean isInternal(HostObject object, Class<?> clazz, String name, boolean onlyStatic) {
+        HostClassDesc classDesc = HostClassDesc.forClass(object.getEngine(), clazz);
+        HostMethodDesc foundMethod = classDesc.lookupMethod(name, onlyStatic);
+        if (foundMethod == null && isJNIName(name)) {
+            foundMethod = classDesc.lookupMethodByJNIName(name, onlyStatic);
+            if (foundMethod != null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @CompilerDirectives.TruffleBoundary
-    static <T> T asJavaFunction(Class<T> functionalType, TruffleObject function, PolyglotLanguageContext languageContext) {
+    static <T> T asJavaFunction(Class<T> functionalType, Object function, PolyglotLanguageContext languageContext) {
         assert isFunctionalInterface(functionalType);
         Method functionalInterfaceMethod = functionalInterfaceMethod(functionalType);
         final FunctionProxyHandler handler = new FunctionProxyHandler(function, functionalInterfaceMethod, languageContext);
@@ -191,7 +227,7 @@ final class HostInteropReflect {
         return found;
     }
 
-    static TruffleObject asTruffleViaReflection(Object obj, PolyglotLanguageContext languageContext) {
+    static Object asTruffleViaReflection(Object obj, PolyglotLanguageContext languageContext) {
         if (obj instanceof Proxy) {
             return asTruffleObjectProxy(obj, languageContext);
         }
@@ -199,7 +235,7 @@ final class HostInteropReflect {
     }
 
     @CompilerDirectives.TruffleBoundary
-    private static TruffleObject asTruffleObjectProxy(Object obj, PolyglotLanguageContext languageContext) {
+    private static Object asTruffleObjectProxy(Object obj, PolyglotLanguageContext languageContext) {
         if (Proxy.isProxyClass(obj.getClass())) {
             InvocationHandler h = Proxy.getInvocationHandler(obj);
             if (h instanceof FunctionProxyHandler) {
@@ -211,7 +247,7 @@ final class HostInteropReflect {
         return HostObject.forObject(obj, languageContext);
     }
 
-    static Object newProxyInstance(Class<?> clazz, TruffleObject obj, PolyglotLanguageContext languageContext) throws IllegalArgumentException {
+    static Object newProxyInstance(Class<?> clazz, Object obj, PolyglotLanguageContext languageContext) throws IllegalArgumentException {
         return Proxy.newProxyInstance(clazz.getClassLoader(), new Class<?>[]{clazz}, new ObjectProxyHandler(obj, languageContext, clazz));
     }
 
@@ -221,22 +257,26 @@ final class HostInteropReflect {
     }
 
     @CompilerDirectives.TruffleBoundary
-    static String[] findUniquePublicMemberNames(Class<?> clazz, boolean onlyStatic, boolean includeInternal) throws SecurityException {
-        HostClassDesc classDesc = HostClassDesc.forClass(clazz);
+    static String[] findUniquePublicMemberNames(PolyglotEngineImpl engine, Class<?> clazz, boolean isStatic, boolean isClass, boolean includeInternal) throws SecurityException {
+        HostClassDesc classDesc = HostClassDesc.forClass(engine, clazz);
         EconomicSet<String> names = EconomicSet.create();
-        names.addAll(classDesc.getFieldNames(onlyStatic));
-        names.addAll(classDesc.getMethodNames(onlyStatic, includeInternal));
-        if (onlyStatic) {
-            names.add("class");
-            if (Modifier.isPublic(clazz.getModifiers())) {
-                // no support for non-static member types now
-                for (Class<?> t : clazz.getClasses()) {
-                    if (!isStaticTypeOrInterface(t)) {
-                        continue;
+        names.addAll(classDesc.getFieldNames(isStatic));
+        names.addAll(classDesc.getMethodNames(isStatic, includeInternal));
+        if (isStatic) {
+            names.add(STATIC_TO_CLASS);
+            if (!TruffleOptions.AOT) { // GR-13208: SVM does not support Class.getClasses() yet
+                if (Modifier.isPublic(clazz.getModifiers())) {
+                    // no support for non-static member types now
+                    for (Class<?> t : clazz.getClasses()) {
+                        if (!isStaticTypeOrInterface(t)) {
+                            continue;
+                        }
+                        names.add(t.getSimpleName());
                     }
-                    names.add(t.getSimpleName());
                 }
             }
+        } else if (isClass) {
+            names.add(CLASS_TO_STATIC);
         }
         return names.toArray(new String[names.size()]);
     }
@@ -322,13 +362,11 @@ final class HostInteropReflect {
     }
 }
 
-class FunctionProxyNode extends HostEntryRootNode<TruffleObject> {
+@ImportStatic(HostInteropReflect.class)
+abstract class FunctionProxyNode extends HostToGuestRootNode {
 
     final Class<?> receiverClass;
     final Method method;
-    @Child private PolyglotExecuteNode executeNode;
-    @CompilationFinal private Class<?> returnClass;
-    @CompilationFinal private Type returnType;
 
     FunctionProxyNode(Class<?> receiverType, Method method) {
         this.receiverClass = receiverType;
@@ -346,15 +384,12 @@ class FunctionProxyNode extends HostEntryRootNode<TruffleObject> {
         return "FunctionalInterfaceProxy<" + receiverClass + ", " + method + ">";
     }
 
-    @Override
-    protected Object executeImpl(PolyglotLanguageContext languageContext, TruffleObject function, Object[] args, int offset) {
-        if (executeNode == null) {
-            CompilerDirectives.transferToInterpreterAndInvalidate();
-            this.returnClass = HostInteropReflect.getMethodReturnType(method);
-            this.returnType = HostInteropReflect.getMethodGenericReturnType(method);
-            this.executeNode = insert(new PolyglotExecuteNode());
-        }
-        return executeNode.execute(languageContext, function, args[offset], returnClass, returnType);
+    @Specialization
+    protected Object doCached(PolyglotLanguageContext languageContext, TruffleObject function, Object[] args,
+                    @Cached("getMethodReturnType(method)") Class<?> returnClass,
+                    @Cached("getMethodGenericReturnType(method)") Type returnType,
+                    @Cached PolyglotExecuteNode executeNode) {
+        return executeNode.execute(languageContext, function, args[ARGUMENT_OFFSET], returnClass, returnType);
     }
 
     @Override
@@ -375,7 +410,7 @@ class FunctionProxyNode extends HostEntryRootNode<TruffleObject> {
     }
 
     static CallTarget lookup(PolyglotLanguageContext languageContext, Class<?> receiverClass, Method method) {
-        FunctionProxyNode node = new FunctionProxyNode(receiverClass, method);
+        FunctionProxyNode node = FunctionProxyNodeGen.create(receiverClass, method);
         CallTarget target = lookupHostCodeCache(languageContext, node, CallTarget.class);
         if (target == null) {
             target = installHostCodeCache(languageContext, node, createTarget(node), CallTarget.class);
@@ -384,13 +419,13 @@ class FunctionProxyNode extends HostEntryRootNode<TruffleObject> {
     }
 }
 
-final class FunctionProxyHandler implements InvocationHandler {
-    final TruffleObject functionObj;
+final class FunctionProxyHandler implements InvocationHandler, HostWrapper {
+    final Object functionObj;
     final PolyglotLanguageContext languageContext;
     private final Method functionMethod;
     private final CallTarget target;
 
-    FunctionProxyHandler(TruffleObject obj, Method functionMethod, PolyglotLanguageContext languageContext) {
+    FunctionProxyHandler(Object obj, Method functionMethod, PolyglotLanguageContext languageContext) {
         this.functionObj = obj;
         this.languageContext = languageContext;
         this.functionMethod = functionMethod;
@@ -398,12 +433,42 @@ final class FunctionProxyHandler implements InvocationHandler {
     }
 
     @Override
+    public Object getGuestObject() {
+        return functionObj;
+    }
+
+    @Override
+    public PolyglotContextImpl getContext() {
+        return languageContext.context;
+    }
+
+    @Override
+    public PolyglotLanguageContext getLanguageContext() {
+        return languageContext;
+    }
+
+    @Override
+    public int hashCode() {
+        return HostWrapper.hashCode(languageContext, functionObj);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (o instanceof FunctionProxyHandler) {
+            return HostWrapper.equals(languageContext, functionObj, ((FunctionProxyHandler) o).functionObj);
+        } else {
+            return false;
+        }
+    }
+
+    @Override
     public Object invoke(Object proxy, Method method, Object[] arguments) throws Throwable {
         CompilerAsserts.neverPartOfCompilation();
+        Object[] resolvedArguments = arguments == null ? HostInteropReflect.EMPTY : arguments;
         if (method.equals(functionMethod)) {
-            return target.call(languageContext, functionObj, spreadVarArgsArray(arguments));
+            return target.call(languageContext, functionObj, spreadVarArgsArray(resolvedArguments));
         } else {
-            return invokeDefault(proxy, method, arguments);
+            return invokeDefault(this, proxy, method, resolvedArguments);
         }
     }
 
@@ -423,19 +488,24 @@ final class FunctionProxyHandler implements InvocationHandler {
         }
     }
 
-    private static Object invokeDefault(Object proxy, Method method, Object[] arguments) throws Throwable {
+    static Object invokeDefault(HostWrapper host, Object proxy, Method method, Object[] arguments) throws Throwable {
         if (method.getDeclaringClass() == Object.class) {
             switch (method.getName()) {
                 case "equals":
-                    return proxy == arguments[0];
+                    return HostWrapper.equalsProxy(host, arguments[0]);
                 case "hashCode":
-                    return System.identityHashCode(proxy);
+                    return HostWrapper.hashCode(host.getLanguageContext(), host.getGuestObject());
                 case "toString":
-                    return proxy.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(proxy));
+                    return HostWrapper.toString(host);
                 default:
                     throw new UnsupportedOperationException(method.getName());
             }
         }
+
+        if (TruffleOptions.AOT) {
+            throw new UnsupportedOperationException("calling default method " + method.getName() + " is not yet supported on SubstrateVM");
+        }
+
         // default method; requires Java 9 (JEP 274)
         Class<?> declaringClass = method.getDeclaringClass();
         assert declaringClass.isInterface() : declaringClass;
@@ -449,13 +519,13 @@ final class FunctionProxyHandler implements InvocationHandler {
     }
 }
 
-class ObjectProxyNode extends HostEntryRootNode<TruffleObject> {
+class ObjectProxyNode extends HostToGuestRootNode {
 
     final Class<?> receiverClass;
     final Class<?> interfaceType;
 
     @Child private ProxyInvokeNode proxyInvoke = ProxyInvokeNodeGen.create();
-    @CompilationFinal private ToGuestValuesNode toGuests;
+    @CompilationFinal private ToGuestValuesNode toGuests = ToGuestValuesNode.create();
 
     ObjectProxyNode(Class<?> receiverType, Class<?> interfaceType) {
         this.receiverClass = receiverType;
@@ -474,14 +544,9 @@ class ObjectProxyNode extends HostEntryRootNode<TruffleObject> {
     }
 
     @Override
-    protected Object executeImpl(PolyglotLanguageContext languageContext, TruffleObject receiver, Object[] args, int offset) {
-        if (proxyInvoke == null || toGuests == null) {
-            CompilerDirectives.transferToInterpreterAndInvalidate();
-            toGuests = ToGuestValuesNode.create();
-            proxyInvoke = ProxyInvokeNodeGen.create();
-        }
-        Method method = (Method) args[offset];
-        Object[] arguments = toGuests.apply(languageContext, (Object[]) args[offset + 1]);
+    protected Object executeImpl(PolyglotLanguageContext languageContext, Object receiver, Object[] args) {
+        Method method = (Method) args[ARGUMENT_OFFSET];
+        Object[] arguments = toGuests.apply(languageContext, (Object[]) args[ARGUMENT_OFFSET + 1]);
         return proxyInvoke.execute(languageContext, receiver, method, arguments);
     }
 
@@ -512,10 +577,10 @@ class ObjectProxyNode extends HostEntryRootNode<TruffleObject> {
     }
 }
 
-@ImportStatic({Message.class, HostInteropReflect.class})
+@ImportStatic({HostInteropReflect.class})
 abstract class ProxyInvokeNode extends Node {
 
-    public abstract Object execute(PolyglotLanguageContext languageContext, TruffleObject receiver, Method method, Object[] arguments);
+    public abstract Object execute(PolyglotLanguageContext languageContext, Object receiver, Method method, Object[] arguments);
 
     /*
      * The limit of the proxy node is unbounded. There are only so many methods a Java interface can
@@ -528,22 +593,20 @@ abstract class ProxyInvokeNode extends Node {
     /*
      * It is supposed to be safe to compare method names with == only as they are always interned.
      */
-    @Specialization(guards = {"cachedMethod.equals(method)"}, limit = "LIMIT")
+    @Specialization(guards = {"cachedMethod == method"}, limit = "LIMIT")
     @SuppressWarnings("unused")
-    protected Object doCachedMethod(PolyglotLanguageContext languageContext, TruffleObject receiver, Method method, Object[] arguments,
+    protected Object doCachedMethod(PolyglotLanguageContext languageContext, Object receiver, Method method, Object[] arguments,
                     @Cached("method") Method cachedMethod,
                     @Cached("method.getName()") String name,
                     @Cached("getMethodReturnType(method)") Class<?> returnClass,
                     @Cached("getMethodGenericReturnType(method)") Type returnType,
-                    @Cached("INVOKE.createNode()") Node invokeNode,
-                    @Cached("KEY_INFO.createNode()") Node keyInfoNode,
-                    @Cached("READ.createNode()") Node readNode,
-                    @Cached("IS_EXECUTABLE.createNode()") Node isExecutableNode,
-                    @Cached("EXECUTE.createNode()") Node executeNode,
-                    @Cached("createBinaryProfile()") ConditionProfile branchProfile,
-                    @Cached("create()") ToHostNode toJava) {
-        Object result = invokeOrExecute(languageContext, receiver, arguments, name, invokeNode, keyInfoNode, readNode, isExecutableNode, executeNode, branchProfile);
-        return toJava.execute(result, returnClass, returnType, languageContext);
+                    @CachedLibrary("receiver") InteropLibrary receivers,
+                    @CachedLibrary(limit = "LIMIT") InteropLibrary members,
+                    @Cached ConditionProfile branchProfile,
+                    @Cached("create()") ToHostNode toHost,
+                    @Cached BranchProfile error) {
+        Object result = invokeOrExecute(languageContext, receiver, arguments, name, receivers, members, branchProfile, error);
+        return toHost.execute(result, returnClass, returnType, languageContext, true);
     }
 
     @TruffleBoundary
@@ -551,77 +614,92 @@ abstract class ProxyInvokeNode extends Node {
         return method.getGenericReturnType().equals(returnType);
     }
 
-    private Object invokeOrExecute(PolyglotLanguageContext polyglotContext, TruffleObject receiver, Object[] arguments, String name, Node invokeNode, Node keyInfoNode, Node readNode,
-                    Node isExecutableNode,
-                    Node executeNode,
-                    ConditionProfile invokeOrReadAndExecuteProfile) {
+    private Object invokeOrExecute(PolyglotLanguageContext polyglotContext, Object receiver, Object[] arguments, String member, InteropLibrary receivers,
+                    InteropLibrary members,
+                    ConditionProfile invokeProfile, BranchProfile error) {
         try {
-            if (!invokeFailed) {
+            boolean localInvokeFailed = this.invokeFailed;
+            if (!localInvokeFailed) {
                 try {
-                    return ForeignAccess.sendInvoke(invokeNode, receiver, name, arguments);
+                    return receivers.invokeMember(receiver, member, arguments);
                 } catch (UnsupportedMessageException | UnknownIdentifierException e) {
                     CompilerDirectives.transferToInterpreterAndInvalidate();
                     // fallthrough to unsupported
-                    invokeFailed = true;
+                    invokeFailed = localInvokeFailed = true;
                 }
             }
-            if (invokeFailed) {
-                int keyInfo = ForeignAccess.sendKeyInfo(keyInfoNode, receiver, name);
-                if (invokeOrReadAndExecuteProfile.profile(KeyInfo.isInvocable(keyInfo))) {
-                    try {
-                        return ForeignAccess.sendInvoke(invokeNode, receiver, name, arguments);
-                    } catch (UnsupportedMessageException e) {
-                        CompilerDirectives.transferToInterpreter();
-                        // fallthrough to unsupported
-                    }
-                } else if (KeyInfo.isReadable(keyInfo)) {
-                    Object readValue = ForeignAccess.sendRead(readNode, receiver, name);
-                    if (readValue instanceof TruffleObject) {
-                        TruffleObject truffleReadValue = (TruffleObject) readValue;
-                        if (ForeignAccess.sendIsExecutable(isExecutableNode, truffleReadValue)) {
-                            return ForeignAccess.sendExecute(executeNode, truffleReadValue, arguments);
-                        }
-                    }
-                    if (arguments.length == 0) {
-                        return readValue;
+            if (localInvokeFailed) {
+                if (invokeProfile.profile(receivers.isMemberInvocable(receiver, member))) {
+                    return receivers.invokeMember(receiver, member, arguments);
+                } else if (receivers.isMemberReadable(receiver, member)) {
+                    Object readMember = receivers.readMember(receiver, member);
+                    if (members.isExecutable(readMember)) {
+                        return members.execute(readMember, arguments);
+                    } else if (arguments.length == 0) {
+                        return readMember;
                     }
                 }
             }
-            CompilerDirectives.transferToInterpreter();
-            throw HostInteropErrors.invokeUnsupported(polyglotContext, receiver, name);
+            error.enter();
+            throw HostInteropErrors.invokeUnsupported(polyglotContext, receiver, member);
         } catch (UnknownIdentifierException e) {
-            CompilerDirectives.transferToInterpreter();
-            throw HostInteropErrors.invokeUnsupported(polyglotContext, receiver, name);
+            error.enter();
+            throw HostInteropErrors.invokeUnsupported(polyglotContext, receiver, member);
         } catch (UnsupportedTypeException e) {
-            CompilerDirectives.transferToInterpreter();
+            error.enter();
             throw HostInteropErrors.invalidExecuteArgumentType(polyglotContext, receiver, e.getSuppliedValues());
         } catch (ArityException e) {
-            CompilerDirectives.transferToInterpreter();
+            error.enter();
             throw HostInteropErrors.invalidExecuteArity(polyglotContext, receiver, arguments, e.getExpectedArity(), e.getActualArity());
         } catch (UnsupportedMessageException e) {
-            CompilerDirectives.transferToInterpreter();
-            throw HostInteropErrors.invokeUnsupported(polyglotContext, receiver, name);
+            error.enter();
+            throw HostInteropErrors.invokeUnsupported(polyglotContext, receiver, member);
         }
     }
 
 }
 
-final class ObjectProxyHandler implements InvocationHandler {
+final class ObjectProxyHandler implements InvocationHandler, HostWrapper {
 
-    final TruffleObject obj;
+    final Object obj;
     final PolyglotLanguageContext languageContext;
     final CallTarget invoke;
 
-    ObjectProxyHandler(TruffleObject obj, PolyglotLanguageContext languageContext, Class<?> interfaceClass) {
+    ObjectProxyHandler(Object obj, PolyglotLanguageContext languageContext, Class<?> interfaceClass) {
         this.obj = obj;
         this.languageContext = languageContext;
         this.invoke = ObjectProxyNode.lookup(languageContext, obj.getClass(), interfaceClass);
     }
 
     @Override
+    public Object getGuestObject() {
+        return obj;
+    }
+
+    @Override
+    public PolyglotLanguageContext getLanguageContext() {
+        return languageContext;
+    }
+
+    @Override
+    public PolyglotContextImpl getContext() {
+        return languageContext.context;
+    }
+
+    @Override
     public Object invoke(Object proxy, Method method, Object[] arguments) throws Throwable {
         CompilerAsserts.neverPartOfCompilation();
-        return invoke.call(languageContext, obj, method, arguments == null ? HostInteropReflect.EMPTY : arguments);
+        Object[] resolvedArguments = arguments == null ? HostInteropReflect.EMPTY : arguments;
+        try {
+            return invoke.call(languageContext, obj, method, resolvedArguments);
+        } catch (UnsupportedOperationException e) {
+            try {
+                return FunctionProxyHandler.invokeDefault(this, proxy, method, resolvedArguments);
+            } catch (Exception innerE) {
+                e.addSuppressed(innerE);
+                throw e;
+            }
+        }
     }
 
 }

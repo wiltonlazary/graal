@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,19 +24,25 @@
  */
 package org.graalvm.compiler.truffle.test;
 
-import jdk.vm.ci.code.BailoutException;
-
-import org.junit.Assert;
-import org.junit.Test;
-
 import org.graalvm.compiler.api.directives.GraalDirectives;
 import org.graalvm.compiler.truffle.test.nodes.AbstractTestNode;
 import org.graalvm.compiler.truffle.test.nodes.RootTestNode;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
 
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.VirtualFrame;
 
+import jdk.vm.ci.code.BailoutException;
+import org.graalvm.polyglot.Context;
+
 public class TruffleEnsureVirtualizedTest extends PartialEvaluationTest {
+
+    @Before
+    public void setup() {
+        setupContext(Context.newBuilder().allowExperimentalOptions(true).option("engine.CompileImmediately", "false").build());
+    }
 
     private abstract class TestNode extends AbstractTestNode {
         @Override

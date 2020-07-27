@@ -25,24 +25,36 @@
 
 package com.oracle.svm.hosted.analysis.flow;
 
+import org.graalvm.compiler.core.common.type.ObjectStamp;
+import org.graalvm.compiler.core.common.type.Stamp;
+import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.graph.Node;
+import org.graalvm.compiler.graph.NodeSourcePosition;
+import org.graalvm.compiler.nodes.ConstantNode;
+import org.graalvm.compiler.nodes.FixedNode;
+import org.graalvm.compiler.nodes.NodeView;
+import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
-import org.graalvm.compiler.nodes.java.NewArrayNode;
-import org.graalvm.compiler.nodes.java.NewInstanceNode;
 
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.flow.MethodTypeFlow;
 import com.oracle.graal.pointsto.flow.MethodTypeFlowBuilder;
-import com.oracle.graal.pointsto.flow.NewInstanceTypeFlow;
-import com.oracle.graal.pointsto.flow.context.BytecodeLocation;
+import com.oracle.graal.pointsto.flow.ProxyTypeFlow;
+import com.oracle.graal.pointsto.flow.SourceTypeFlow;
+import com.oracle.graal.pointsto.flow.builder.TypeFlowBuilder;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisType;
-import com.oracle.svm.core.graal.nodes.NewPinnedArrayNode;
-import com.oracle.svm.core.graal.nodes.NewPinnedInstanceNode;
+import com.oracle.graal.pointsto.typestate.TypeState;
+import com.oracle.svm.core.graal.thread.LoadVMThreadLocalNode;
+import com.oracle.svm.core.meta.SubstrateObjectConstant;
 import com.oracle.svm.core.util.UserError.UserException;
+import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.NativeImageOptions;
-import com.oracle.svm.hosted.analysis.Inflation;
+import com.oracle.svm.hosted.SVMHost;
 import com.oracle.svm.hosted.substitute.ComputedValueField;
+
+import jdk.vm.ci.meta.JavaKind;
 
 public class SVMMethodTypeFlowBuilder extends MethodTypeFlowBuilder {
 
@@ -50,20 +62,42 @@ public class SVMMethodTypeFlowBuilder extends MethodTypeFlowBuilder {
         super(bb, methodFlow);
     }
 
-    @Override
-    protected NewInstanceTypeFlow createNewInstanceTypeFlow(NewInstanceNode node, AnalysisType type, BytecodeLocation allocationLabel) {
-        if (node instanceof NewPinnedInstanceNode) {
-            return new PinnedNewInstanceTypeFlow((Inflation) bb, node, type, allocationLabel);
-        }
-        return super.createNewInstanceTypeFlow(node, type, allocationLabel);
+    public SVMMethodTypeFlowBuilder(BigBang bb, StructuredGraph graph) {
+        super(bb, graph);
+    }
+
+    protected SVMHost getHostVM() {
+        return (SVMHost) bb.getHostVM();
     }
 
     @Override
-    protected NewInstanceTypeFlow createNewArrayTypeFlow(NewArrayNode node, AnalysisType type, BytecodeLocation allocationLabel) {
-        if (node instanceof NewPinnedArrayNode) {
-            return new PinnedNewInstanceTypeFlow((Inflation) bb, node, type, allocationLabel);
+    public void registerUsedElements(boolean registerEmbeddedRoots) {
+        super.registerUsedElements(registerEmbeddedRoots);
+
+        for (Node n : graph.getNodes()) {
+            if (n instanceof ConstantNode) {
+                ConstantNode cn = (ConstantNode) n;
+                if (cn.hasUsages() && cn.isJavaConstant() && cn.asJavaConstant().getJavaKind() == JavaKind.Object && cn.asJavaConstant().isNonNull()) {
+                    /*
+                     * Constants that are embedded into graphs via constant folding of static fields
+                     * have already been replaced. But constants embedded manually by graph builder
+                     * plugins, or class constants that come directly from constant bytecodes, are
+                     * not replaced. We verify here that the object replacer would not replace such
+                     * objects.
+                     *
+                     * But more importantly, some object replacers also perform actions like forcing
+                     * eager initialization of fields. We need to make sure that these object
+                     * replacers really see all objects that are embedded into compiled code.
+                     */
+                    Object value = SubstrateObjectConstant.asObject(cn.asJavaConstant());
+                    Object replaced = bb.getUniverse().replaceObject(value);
+                    if (value != replaced) {
+                        throw GraalError.shouldNotReachHere("Missed object replacement during graph building: " +
+                                        value + " (" + value.getClass() + ") != " + replaced + " (" + replaced.getClass() + ")");
+                    }
+                }
+            }
         }
-        return super.createNewArrayTypeFlow(node, type, allocationLabel);
     }
 
     @SuppressWarnings("serial")
@@ -79,7 +113,7 @@ public class SVMMethodTypeFlowBuilder extends MethodTypeFlowBuilder {
     }
 
     @Override
-    protected void checkUnsafeOffset(ValueNode offsetNode) {
+    protected void checkUnsafeOffset(ValueNode base, ValueNode offsetNode) {
         if (!NativeImageOptions.ThrowUnsafeOffsetErrors.getValue()) {
             /* Skip the checks bellow. */
             return;
@@ -105,17 +139,26 @@ public class SVMMethodTypeFlowBuilder extends MethodTypeFlowBuilder {
          * if it was properly intercepted or not is LoadFieldNode.
          */
 
+        NodeSourcePosition pos = offsetNode.getNodeSourcePosition();
         if (offsetNode instanceof LoadFieldNode) {
             LoadFieldNode offsetLoadNode = (LoadFieldNode) offsetNode;
             AnalysisField field = (AnalysisField) offsetLoadNode.field();
-            if (!(field.wrapped instanceof ComputedValueField)) {
-                UnsafeOffsetError.report("Field " + field + " is used as an offset in an unsafe operation, but no value recomputation found. \n Wrapped field: " + field.wrapped);
+            if (!field.getDeclaringClass().unsafeFieldsRecomputed() &&
+                            !getHostVM().getClassInitializationSupport().shouldInitializeAtRuntime(field.getDeclaringClass()) &&
+                            !(field.wrapped instanceof ComputedValueField) &&
+                            !(base.isConstant() && base.asConstant().isDefaultForKind())) {
+                String message = String.format("Field %s is used as an offset in an unsafe operation, but no value recomputation found.%n Wrapped field: %s", field, field.wrapped);
+                if (pos != null) {
+                    message += String.format("%n Location: %s", pos);
+                }
+                UnsafeOffsetError.report(message);
             }
         } else if (NativeImageOptions.ReportUnsafeOffsetWarnings.getValue()) {
-
             String message = "Offset used in an unsafe operation. Cannot determine if the offset value is recomputed.";
-            message += "Location: " + offsetNode.getNodeSourcePosition() + "\n";
-            message += "Node class: " + offsetNode.getClass().getName() + "\n";
+            message += String.format("%nNode class: %s", offsetNode.getClass().getName());
+            if (pos != null) {
+                message += String.format("%n Location: %s", pos);
+            }
             if (NativeImageOptions.UnsafeOffsetWarningsAreFatal.getValue()) {
                 UnsafeOffsetError.report(message);
             } else {
@@ -123,5 +166,36 @@ public class SVMMethodTypeFlowBuilder extends MethodTypeFlowBuilder {
             }
         }
 
+    }
+
+    @Override
+    protected void delegateNodeProcessing(FixedNode n, MethodTypeFlowBuilder.TypeFlowsOfNodes state) {
+        if (n instanceof LoadVMThreadLocalNode) {
+            LoadVMThreadLocalNode node = (LoadVMThreadLocalNode) n;
+            Stamp stamp = node.stamp(NodeView.DEFAULT);
+            if (stamp instanceof ObjectStamp) {
+                ObjectStamp objStamp = (ObjectStamp) stamp;
+                VMError.guarantee(!objStamp.isEmpty());
+
+                TypeFlowBuilder<?> result;
+                if (objStamp.isExactType()) {
+                    /* The node has an exact type. Create a source type flow. */
+                    result = TypeFlowBuilder.create(bb, node, SourceTypeFlow.class, () -> {
+                        SourceTypeFlow src = new SourceTypeFlow(node, TypeState.forExactType(bb, (AnalysisType) objStamp.type(), !objStamp.nonNull()));
+                        methodFlow.addSource(src);
+                        return src;
+                    });
+                } else {
+                    /* Use a type state which consists of the entire node's type hierarchy. */
+                    AnalysisType type = (AnalysisType) (objStamp.type() == null ? bb.getObjectType() : objStamp.type());
+                    result = TypeFlowBuilder.create(bb, node, ProxyTypeFlow.class, () -> {
+                        ProxyTypeFlow proxy = new ProxyTypeFlow(node, type.getTypeFlow(bb, false));
+                        methodFlow.addMiscEntry(proxy);
+                        return proxy;
+                    });
+                }
+                state.add(node, result);
+            }
+        }
     }
 }

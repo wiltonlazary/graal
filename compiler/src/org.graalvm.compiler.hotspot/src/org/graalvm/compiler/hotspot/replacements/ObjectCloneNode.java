@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,15 +24,13 @@
  */
 package org.graalvm.compiler.hotspot.replacements;
 
-import java.lang.reflect.Method;
-
 import org.graalvm.compiler.core.common.type.AbstractPointerStamp;
 import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.core.common.type.StampPair;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.graph.NodeClass;
+import org.graalvm.compiler.hotspot.meta.HotSpotLoweringProvider;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
-import org.graalvm.compiler.nodes.CallTargetNode.InvokeKind;
 import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.ParameterNode;
 import org.graalvm.compiler.nodes.ReturnNode;
@@ -45,6 +43,7 @@ import org.graalvm.compiler.nodes.java.StoreFieldNode;
 import org.graalvm.compiler.nodes.spi.LoweringTool;
 import org.graalvm.compiler.nodes.spi.Replacements;
 import org.graalvm.compiler.nodes.type.StampTool;
+import org.graalvm.compiler.replacements.SnippetTemplate.SnippetInfo;
 import org.graalvm.compiler.replacements.nodes.BasicObjectCloneNode;
 
 import jdk.vm.ci.meta.Assumptions;
@@ -57,12 +56,12 @@ public final class ObjectCloneNode extends BasicObjectCloneNode {
 
     public static final NodeClass<ObjectCloneNode> TYPE = NodeClass.create(ObjectCloneNode.class);
 
-    public ObjectCloneNode(InvokeKind invokeKind, ResolvedJavaMethod targetMethod, int bci, StampPair returnStamp, ValueNode receiver) {
-        super(TYPE, invokeKind, targetMethod, bci, returnStamp, receiver);
+    public ObjectCloneNode(MacroParams p) {
+        super(TYPE, p);
     }
 
     @Override
-    protected Stamp computeStamp(ValueNode object) {
+    public Stamp computeStamp(ValueNode object) {
         if (getConcreteType(object.stamp(NodeView.DEFAULT)) != null) {
             return AbstractPointerStamp.pointerNonNull(object.stamp(NodeView.DEFAULT));
         }
@@ -77,16 +76,19 @@ public final class ObjectCloneNode extends BasicObjectCloneNode {
     @SuppressWarnings("try")
     protected StructuredGraph getLoweredSnippetGraph(LoweringTool tool) {
         ResolvedJavaType type = StampTool.typeOrNull(getObject());
+
         if (type != null) {
             if (type.isArray()) {
-                Method method = ObjectCloneSnippets.arrayCloneMethods.get(type.getComponentType().getJavaKind());
-                if (method != null) {
-                    final ResolvedJavaMethod snippetMethod = tool.getMetaAccess().lookupJavaMethod(method);
+                HotSpotLoweringProvider lowerer = (HotSpotLoweringProvider) tool.getLowerer();
+                ObjectCloneSnippets.Templates objectCloneSnippets = lowerer.getObjectCloneSnippets();
+                SnippetInfo info = objectCloneSnippets.arrayCloneMethods.get(type.getComponentType().getJavaKind());
+                if (info != null) {
+                    final ResolvedJavaMethod snippetMethod = info.getMethod();
                     final Replacements replacements = tool.getReplacements();
                     StructuredGraph snippetGraph = null;
                     DebugContext debug = getDebug();
                     try (DebugContext.Scope s = debug.scope("ArrayCloneSnippet", snippetMethod)) {
-                        snippetGraph = replacements.getSnippet(snippetMethod, null, graph().trackNodeSourcePosition(), this.getNodeSourcePosition());
+                        snippetGraph = replacements.getSnippet(snippetMethod, null, null, graph().trackNodeSourcePosition(), this.getNodeSourcePosition(), debug.getOptions());
                     } catch (Throwable e) {
                         throw debug.handle(e);
                     }
@@ -120,4 +122,5 @@ public final class ObjectCloneNode extends BasicObjectCloneNode {
         assert getConcreteType(stamp(NodeView.DEFAULT)) == null;
         return null;
     }
+
 }

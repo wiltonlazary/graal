@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,13 +28,13 @@ package com.oracle.svm.jni;
 
 import java.lang.reflect.Array;
 
-import org.graalvm.nativeimage.c.type.CIntPointer;
+import org.graalvm.compiler.serviceprovider.GraalUnsafeAccess;
+import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.WordBase;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.StaticFieldsSupport;
-import com.oracle.svm.core.UnsafeAccess;
 import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.jni.access.JNIAccessibleField;
 import com.oracle.svm.jni.access.JNINativeLinkage;
@@ -43,6 +43,7 @@ import com.oracle.svm.jni.nativeapi.JNIFieldId;
 import com.oracle.svm.jni.nativeapi.JNIObjectHandle;
 
 import jdk.vm.ci.meta.JavaKind;
+import sun.misc.Unsafe;
 
 /**
  * Helper code that is used in generated JNI code via {@code JNIGraphKit}.
@@ -50,27 +51,26 @@ import jdk.vm.ci.meta.JavaKind;
 public final class JNIGeneratedMethodSupport {
     // Careful around here -- these methods are invoked by generated methods.
 
+    private static final Unsafe UNSAFE = GraalUnsafeAccess.getUnsafe();
+
     static PointerBase nativeCallAddress(JNINativeLinkage linkage) {
         return linkage.getOrFindEntryPoint();
     }
 
     static int nativeCallPrologue() {
-        return JNIThreadLocalHandles.get().pushFrame(JNIThreadLocalHandles.NATIVE_CALL_MINIMUM_HANDLE_CAPACITY);
+        return JNIObjectHandles.pushLocalFrame(JNIObjectHandles.NATIVE_CALL_MIN_LOCAL_HANDLE_CAPACITY);
     }
 
     static void nativeCallEpilogue(int handleFrame) {
-        JNIThreadLocalHandles.get().popFramesIncluding(handleFrame);
+        JNIObjectHandles.popLocalFramesIncluding(handleFrame);
     }
 
     static JNIEnvironment environment() {
-        if (!JNIThreadLocalEnvironment.isInitialized()) {
-            JNIThreadLocalEnvironment.initialize();
-        }
         return JNIThreadLocalEnvironment.getAddress();
     }
 
     static JNIObjectHandle boxObjectInLocalHandle(Object obj) {
-        return JNIThreadLocalHandles.get().create(obj);
+        return JNIObjectHandles.createLocal(obj);
     }
 
     static Object unboxHandle(JNIObjectHandle handle) {
@@ -106,10 +106,10 @@ public final class JNIGeneratedMethodSupport {
         }
     }
 
-    static PointerBase pinArrayAndGetAddress(Object array, CIntPointer isCopy) throws Throwable {
+    static PointerBase pinArrayAndGetAddress(Object array, CCharPointer isCopy) throws Throwable {
         if (array.getClass().isArray()) {
             if (isCopy.isNonNull()) {
-                isCopy.write(0);
+                isCopy.write((byte) 0);
             }
             return JNIThreadLocalPinnedObjects.pinArrayAndGetAddress(array);
         }
@@ -127,7 +127,7 @@ public final class JNIGeneratedMethodSupport {
         if (count > 0) {
             long offset = ConfigurationValues.getObjectLayout().getArrayElementOffset(elementKind, start);
             int elementSize = ConfigurationValues.getObjectLayout().sizeInBytes(elementKind);
-            UnsafeAccess.UNSAFE.copyMemory(array, offset, null, buffer.rawValue(), count * elementSize);
+            UNSAFE.copyMemory(array, offset, null, buffer.rawValue(), count * elementSize);
         }
     }
 
@@ -138,7 +138,7 @@ public final class JNIGeneratedMethodSupport {
         if (count > 0) {
             long offset = ConfigurationValues.getObjectLayout().getArrayElementOffset(elementKind, start);
             int elementSize = ConfigurationValues.getObjectLayout().sizeInBytes(elementKind);
-            UnsafeAccess.UNSAFE.copyMemory(null, buffer.rawValue(), array, offset, count * elementSize);
+            UNSAFE.copyMemory(null, buffer.rawValue(), array, offset, count * elementSize);
         }
     }
 }

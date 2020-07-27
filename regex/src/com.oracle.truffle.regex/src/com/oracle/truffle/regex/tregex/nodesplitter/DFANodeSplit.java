@@ -1,44 +1,60 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.regex.tregex.nodesplitter;
-
-import com.oracle.truffle.regex.tregex.TRegexOptions;
-import com.oracle.truffle.regex.tregex.automaton.StateIndex;
-import com.oracle.truffle.regex.tregex.automaton.StateSet;
-import com.oracle.truffle.regex.tregex.automaton.StateSetBackingSortedArray;
-import com.oracle.truffle.regex.tregex.buffer.ShortArrayBuffer;
-import com.oracle.truffle.regex.tregex.dfa.DFAGenerator;
-import com.oracle.truffle.regex.tregex.nodes.DFAAbstractStateNode;
-import com.oracle.truffle.regex.tregex.nodes.DFAInitialStateNode;
-import com.oracle.truffle.regex.util.CompilationFinalBitSet;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.Set;
+
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.regex.tregex.TRegexOptions;
+import com.oracle.truffle.regex.tregex.automaton.StateIndex;
+import com.oracle.truffle.regex.tregex.automaton.StateSet;
+import com.oracle.truffle.regex.tregex.buffer.ShortArrayBuffer;
+import com.oracle.truffle.regex.tregex.dfa.DFAGenerator;
+import com.oracle.truffle.regex.tregex.nodes.dfa.DFAAbstractStateNode;
+import com.oracle.truffle.regex.tregex.nodes.dfa.DFAInitialStateNode;
+import com.oracle.truffle.regex.util.CompilationFinalBitSet;
 
 /**
  * Implementation of a node splitting algorithm presented by Sebastian Unger and Frank Mueller in
@@ -81,12 +97,9 @@ public final class DFANodeSplit implements StateIndex<GraphNode> {
         flagDone = new CompilationFinalBitSet(graph.size() + EXTRA_INITIAL_CAPACITY);
         flagActive = new CompilationFinalBitSet(graph.size() + EXTRA_INITIAL_CAPACITY);
         for (GraphNode graphNode : graph.getNodes()) {
-            for (GraphNode successor : graphNode.successors(this)) {
-                successor.addPredecessorUnsorted(graphNode);
+            for (GraphNode successor : graphNode.getSuccessors(this)) {
+                successor.addPredecessor(graphNode);
             }
-        }
-        for (GraphNode n : graph.getNodes()) {
-            n.sortPredecessors();
         }
         graph.setStart(graph.getNodes().get(0));
         domTree = new DominatorTree(graph);
@@ -134,6 +147,11 @@ public final class DFANodeSplit implements StateIndex<GraphNode> {
     }
 
     @Override
+    public int getId(GraphNode state) {
+        return state.getId();
+    }
+
+    @Override
     public GraphNode getState(int id) {
         return graph.getState(id);
     }
@@ -169,7 +187,7 @@ public final class DFANodeSplit implements StateIndex<GraphNode> {
 
     private boolean splitLoops(GraphNode topNode, Set<GraphNode> set) throws DFANodeSplitBailoutException {
         boolean crossEdge = false;
-        for (GraphNode child : topNode.domChildren(this)) {
+        for (GraphNode child : topNode.getDomChildren(this)) {
             if (set.isEmpty() || set.contains(child)) {
                 if (splitLoops(child, set)) {
                     crossEdge = true;
@@ -179,7 +197,7 @@ public final class DFANodeSplit implements StateIndex<GraphNode> {
         if (crossEdge) {
             handleIrChildren(topNode, set);
         }
-        for (GraphNode pred : topNode.predecessors()) {
+        for (GraphNode pred : topNode.getPredecessors()) {
             if (pred.isBackEdge(topNode) && !domTree.dom(topNode, pred)) {
                 return true;
             }
@@ -190,14 +208,14 @@ public final class DFANodeSplit implements StateIndex<GraphNode> {
     private void handleIrChildren(GraphNode topNode, Set<GraphNode> set) throws DFANodeSplitBailoutException {
         ArrayDeque<GraphNode> dfsList = new ArrayDeque<>();
         ArrayList<Set<GraphNode>> sccList = new ArrayList<>();
-        for (GraphNode child : topNode.domChildren(this)) {
+        for (GraphNode child : topNode.getDomChildren(this)) {
             if (!isDone(child) && (set.isEmpty() || set.contains(child))) {
                 scc1(dfsList, child, set, topNode.getDomTreeDepth());
             }
         }
         for (GraphNode n : dfsList) {
             if (isDone(n)) {
-                Set<GraphNode> scc = new StateSet<>(this);
+                Set<GraphNode> scc = StateSet.create(this);
                 scc2(scc, n, topNode.getDomTreeDepth());
                 sccList.add(scc);
             }
@@ -211,7 +229,7 @@ public final class DFANodeSplit implements StateIndex<GraphNode> {
 
     private void scc1(ArrayDeque<GraphNode> dfsList, GraphNode curNode, Set<GraphNode> set, int level) {
         setDone(curNode);
-        for (GraphNode child : curNode.successors(this)) {
+        for (GraphNode child : curNode.getSuccessors(this)) {
             if (!isDone(child) && child.getDomTreeDepth() > level && (set.isEmpty() || set.contains(child))) {
                 scc1(dfsList, child, set, level);
             }
@@ -221,7 +239,7 @@ public final class DFANodeSplit implements StateIndex<GraphNode> {
 
     private void scc2(Set<GraphNode> scc, GraphNode curNode, int level) {
         clearDone(curNode);
-        for (GraphNode pred : curNode.predecessors()) {
+        for (GraphNode pred : curNode.getPredecessors()) {
             if (isDone(pred) && pred.getDomTreeDepth() > level) {
                 scc2(scc, pred, level);
             }
@@ -230,14 +248,13 @@ public final class DFANodeSplit implements StateIndex<GraphNode> {
     }
 
     private void handleScc(GraphNode topNode, Set<GraphNode> scc) throws DFANodeSplitBailoutException {
-        StateSet<GraphNode> msed = new StateSet<>(this, new StateSetBackingSortedArray());
+        StateSet<DFANodeSplit, GraphNode> msed = StateSet.create(this);
         for (GraphNode n : scc) {
             if (n.getDomTreeDepth() == topNode.getDomTreeDepth() + 1) {
                 n.setWeightAndHeaders(this, n, scc);
-                msed.addBatch(n);
+                msed.add(n);
             }
         }
-        msed.addBatchFinish();
         if (msed.size() <= 1) {
             return;
         }
@@ -256,6 +273,7 @@ public final class DFANodeSplit implements StateIndex<GraphNode> {
         for (GraphNode n : scc) {
             if (n.getHeader() != headerNode) {
                 if (nextId == TRegexOptions.TRegexMaxDFASizeAfterNodeSplitting) {
+                    CompilerDirectives.transferToInterpreter();
                     throw new DFANodeSplitBailoutException();
                 }
                 n.createCopy(this, nextId++);
@@ -263,7 +281,7 @@ public final class DFANodeSplit implements StateIndex<GraphNode> {
         }
         for (GraphNode cur : scc) {
             if (cur.getHeader() != headerNode) {
-                for (GraphNode suc : cur.successors(this)) {
+                for (GraphNode suc : cur.getSuccessors(this)) {
                     if (suc.getCopy() == null) {
                         suc.addPredecessor(cur.getCopy());
                     } else {
@@ -271,7 +289,7 @@ public final class DFANodeSplit implements StateIndex<GraphNode> {
                         suc.getCopy().replacePredecessor(cur);
                     }
                 }
-                Iterator<GraphNode> curPredecessors = cur.predecessors().iterator();
+                Iterator<GraphNode> curPredecessors = cur.getPredecessors().iterator();
                 while (curPredecessors.hasNext()) {
                     GraphNode pred = curPredecessors.next();
                     if (pred.getCopy() == null) {
@@ -294,7 +312,7 @@ public final class DFANodeSplit implements StateIndex<GraphNode> {
     }
 
     private Set<GraphNode> findTopNodes(Set<GraphNode> scc) {
-        Set<GraphNode> tops = new StateSet<>(this);
+        Set<GraphNode> tops = StateSet.create(this);
         for (GraphNode tmp : scc) {
             GraphNode top = domTree.idom(tmp);
             while (scc.contains(top)) {
@@ -321,7 +339,7 @@ public final class DFANodeSplit implements StateIndex<GraphNode> {
         setDone(cnode);
         setActive(cnode);
         cnode.clearBackEdges();
-        for (GraphNode child : cnode.successors(this)) {
+        for (GraphNode child : cnode.getSuccessors(this)) {
             if (isActive(child)) {
                 cnode.markBackEdge(child);
             } else if (!isDone(child)) {

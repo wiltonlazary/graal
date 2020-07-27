@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api;
 
@@ -31,8 +47,6 @@ import java.lang.annotation.Target;
 import java.util.Objects;
 import java.util.concurrent.Callable;
 
-import com.oracle.truffle.api.nodes.ControlFlowException;
-
 /**
  * Directives that influence the optimizations of the Truffle compiler. All of the operations have
  * no effect when executed in the Truffle interpreter.
@@ -40,12 +54,8 @@ import com.oracle.truffle.api.nodes.ControlFlowException;
  * @since 0.8 or earlier
  */
 public final class CompilerDirectives {
-    /**
-     * @deprecated accidentally public - don't use
-     * @since 0.8 or earlier
-     */
-    @Deprecated
-    public CompilerDirectives() {
+
+    private CompilerDirectives() {
     }
 
     /** @since 0.8 or earlier */
@@ -253,18 +263,11 @@ public final class CompilerDirectives {
     @Retention(RetentionPolicy.RUNTIME)
     @Target({ElementType.METHOD, ElementType.CONSTRUCTOR})
     public @interface TruffleBoundary {
-        /**
-         * Determines whether this method throws a {@link ControlFlowException}.
-         *
-         * @since 0.8 or earlier
-         * @deprecated use {@link #transferToInterpreterOnException()}
-         */
-        @Deprecated
-        boolean throwsControlFlowException() default false;
 
         /**
-         * Determines whether execution should be transferred to the interpreter in the case that an
-         * exception is thrown across this boundary.
+         * Determines whether execution should be transferred to the interpreter if an exception is
+         * thrown across this boundary, in which case the caller's compiled code is invalidated and
+         * will not transfer to the interpreter on exceptions for this method again.
          *
          * @since 0.28
          */
@@ -339,4 +342,119 @@ public final class CompilerDirectives {
             throw new ClassCastException();
         }
     }
+
+    /**
+     * Indicates a code path that is not supposed to be reached during compilation or
+     * interpretation. Reaching this method is considered a fatal internal error and execution
+     * should not continue. Transfers to interpreter and
+     * {@link CompilerDirectives#transferToInterpreterAndInvalidate() invalidates} the compiled code
+     * and always throws an {@link AssertionError} when invoked.
+     * <p>
+     * This method returns a runtime exception to be conveniently used in combination with Java
+     * throw statements, for example:
+     *
+     * <pre>
+     * if (expectedCondition) {
+     *     return 42;
+     * } else {
+     *     throw shouldNotReachHere();
+     * }
+     * </pre>
+     *
+     * @since 20.2
+     */
+    public static RuntimeException shouldNotReachHere() {
+        transferToInterpreterAndInvalidate();
+        throw shouldNotReachHere(null, null);
+    }
+
+    /**
+     * Indicates a code path that is not supposed to be reached during compilation or
+     * interpretation. Reaching this method is considered a fatal internal error and execution
+     * should not continue. Transfers to interpreter and
+     * {@link CompilerDirectives#transferToInterpreterAndInvalidate() invalidates} the compiled code
+     * and always throws an {@link AssertionError} when invoked.
+     * <p>
+     * This method returns a runtime exception to be conveniently used in combination with Java
+     * throw statements, for example:
+     *
+     * <pre>
+     * if (expectedCondition) {
+     *     return 42;
+     * } else {
+     *     throw shouldNotReachHere("Additional message");
+     * }
+     * </pre>
+     *
+     * @param message an additional message for the exception thrown.
+     * @since 20.2
+     */
+    public static RuntimeException shouldNotReachHere(String message) {
+        transferToInterpreterAndInvalidate();
+        throw shouldNotReachHere(message, null);
+    }
+
+    /**
+     * Indicates a code path that is not supposed to be reached during compilation or
+     * interpretation. Reaching this method is considered a fatal internal error and execution
+     * should not continue. Transfers to interpreter and
+     * {@link CompilerDirectives#transferToInterpreterAndInvalidate() invalidates} the compiled code
+     * and always throws an {@link AssertionError} when invoked.
+     * <p>
+     * This method returns a runtime exception to be conveniently used in combination with Java
+     * throw statements, for example:
+     *
+     * <pre>
+     * if (expectedCondition) {
+     *     return 42;
+     * } else {
+     *     throw shouldNotReachHere("Additional message");
+     * }
+     * </pre>
+     *
+     * @param cause the cause if an exception was responsible for the unexpected case.
+     * @since 20.2
+     */
+    public static RuntimeException shouldNotReachHere(Throwable cause) {
+        transferToInterpreterAndInvalidate();
+        throw shouldNotReachHere(null, cause);
+    }
+
+    /**
+     * Indicates a code path that is not supposed to be reached during compilation or
+     * interpretation. Reaching this method is considered a fatal internal error and execution
+     * should not continue. Transfers to interpreter and
+     * {@link CompilerDirectives#transferToInterpreterAndInvalidate() invalidates} the compiled code
+     * and always throws an {@link AssertionError} when invoked.
+     * <p>
+     * This method returns a runtime exception to be conveniently used in combination with Java
+     * throw statements, for example:
+     *
+     * <pre>
+     * if (expectedCondition) {
+     *     return 42;
+     * } else {
+     *     throw shouldNotReachHere("Additional message");
+     * }
+     * </pre>
+     *
+     * @param message an additional message for the exception thrown.
+     * @param cause the cause if an exception was responsible for the unexpected case.
+     *
+     * @since 20.2
+     */
+    public static RuntimeException shouldNotReachHere(String message, Throwable cause) {
+        transferToInterpreterAndInvalidate();
+        throw new ShouldNotReachHere(message, cause);
+    }
+
+    @SuppressWarnings("serial")
+    static final class ShouldNotReachHere extends AssertionError {
+
+        ShouldNotReachHere(String message, Throwable cause) {
+            super(message, cause);
+        }
+
+    }
+
 }

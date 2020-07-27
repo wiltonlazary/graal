@@ -31,7 +31,7 @@ import java.util.Set;
 
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
-import org.graalvm.nativeimage.Feature;
+import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
@@ -87,7 +87,7 @@ public class CompilationInfoSupport {
         deoptEntries.computeIfAbsent(toAnalysisMethod(method), m -> new HashSet<>()).add(encodedBci);
     }
 
-    protected boolean isDeoptTarget(ResolvedJavaMethod method) {
+    public boolean isDeoptTarget(ResolvedJavaMethod method) {
         assert seal();
         return deoptEntries.containsKey(toAnalysisMethod(method));
     }

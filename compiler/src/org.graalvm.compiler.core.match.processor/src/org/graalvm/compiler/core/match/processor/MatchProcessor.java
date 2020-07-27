@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -343,14 +343,26 @@ public class MatchProcessor extends AbstractProcessor {
         final boolean commutative;
 
         /**
-         * Can multiple users of this node subsume it. Constants can be swallowed into a match even
-         * if there are multiple users.
+         * Can multiple users of this node subsume it.
          */
         final boolean shareable;
 
+        /**
+         * Can this node be swallowed into a match. Constants can be consumed by a match even if it
+         * has multiple users.
+         */
+        final boolean consumable;
+
+        /**
+         * Can this node be subsumed into a match even if there are side effecting nodes between
+         * this node and the match.
+         */
+        final boolean ignoresSideEffects;
+
         final Set<Element> originatingElements = new HashSet<>();
 
-        TypeDescriptor(TypeMirror mirror, String shortName, String nodeClass, String nodePackage, List<String> inputs, boolean commutative, boolean shareable) {
+        TypeDescriptor(TypeMirror mirror, String shortName, String nodeClass, String nodePackage, List<String> inputs,
+                        boolean commutative, boolean shareable, boolean consumable, boolean ignoresSideEffects) {
             this.mirror = mirror;
             this.shortName = shortName;
             this.nodeClass = nodeClass;
@@ -358,6 +370,8 @@ public class MatchProcessor extends AbstractProcessor {
             this.inputs = inputs;
             this.commutative = commutative;
             this.shareable = shareable;
+            this.consumable = consumable;
+            this.ignoresSideEffects = ignoresSideEffects;
             assert !commutative || inputs.size() == 2;
         }
     }
@@ -369,8 +383,9 @@ public class MatchProcessor extends AbstractProcessor {
 
     private TypeDescriptor valueType;
 
-    private void declareType(TypeMirror mirror, String shortName, String nodeClass, String nodePackage, List<String> inputs, boolean commutative, boolean shareable, Element element) {
-        TypeDescriptor descriptor = new TypeDescriptor(mirror, shortName, nodeClass, nodePackage, inputs, commutative, shareable);
+    private void declareType(TypeMirror mirror, String shortName, String nodeClass, String nodePackage, List<String> inputs,
+                    boolean commutative, boolean shareable, boolean consumable, boolean ignoresSideEffects, Element element) {
+        TypeDescriptor descriptor = new TypeDescriptor(mirror, shortName, nodeClass, nodePackage, inputs, commutative, shareable, consumable, ignoresSideEffects);
         descriptor.originatingElements.add(element);
         knownTypes.put(shortName, descriptor);
     }
@@ -453,7 +468,7 @@ public class MatchProcessor extends AbstractProcessor {
 
         private String formatPrefix() {
             if (nodeType == valueType) {
-                return String.format("new MatchPattern(%s, false", name != null ? ("\"" + name + "\"") : "null");
+                return String.format("new MatchPattern(%s, false, false, false", name != null ? ("\"" + name + "\"") : "null");
             } else {
                 return String.format("new MatchPattern(%s.class, %s", nodeType.nodeClass, name != null ? ("\"" + name + "\"") : "null");
             }
@@ -462,13 +477,13 @@ public class MatchProcessor extends AbstractProcessor {
         private String formatSuffix() {
             if (nodeType != null) {
                 if (inputs.length != nodeType.inputs.size()) {
-                    return ", true)";
+                    return ", true, " + nodeType.consumable + ", " + nodeType.ignoresSideEffects + ")";
                 } else {
                     if (nodeType.inputs.size() > 0) {
-                        return ", " + nodeType.nodeClass + "_positions, " + !nodeType.shareable + ")";
+                        return ", " + nodeType.nodeClass + "_positions, " + !nodeType.shareable + ", " + nodeType.consumable + ", " + nodeType.ignoresSideEffects + ")";
                     }
                     if (nodeType.shareable) {
-                        return ", false)";
+                        return ", false, " + nodeType.consumable + ", " + nodeType.ignoresSideEffects + ")";
                     }
                 }
             }
@@ -485,7 +500,6 @@ public class MatchProcessor extends AbstractProcessor {
      * Strip the package off a class name leaving the full class name including any outer classes.
      */
     private String fullClassName(Element element) {
-        assert element.getKind() == ElementKind.CLASS || element.getKind() == ElementKind.INTERFACE : element;
         String pkg = findPackage(element);
         return ((TypeElement) element).getQualifiedName().toString().substring(pkg.length() + 1);
     }
@@ -512,6 +526,9 @@ public class MatchProcessor extends AbstractProcessor {
             out.println("import org.graalvm.compiler.core.gen.NodeMatchRules;");
             out.println("import org.graalvm.compiler.graph.Position;");
             for (String p : info.requiredPackages) {
+                if (p.equals(pkg)) {
+                    continue;
+                }
                 out.println("import " + p + ".*;");
             }
             out.println("");
@@ -538,7 +555,7 @@ public class MatchProcessor extends AbstractProcessor {
                 }
                 out.printf("    private static final String[] %s = new String[] {%s};\n", invoker.argumentsListName(), args);
                 out.printf("    private static final class %s implements MatchGenerator {\n", invoker.wrapperClass());
-                out.printf("        static MatchGenerator instance = new %s();\n", invoker.wrapperClass());
+                out.printf("        static final MatchGenerator instance = new %s();\n", invoker.wrapperClass());
                 out.printf("        @Override\n");
                 out.printf("        public ComplexMatchResult match(NodeMatchRules nodeMatchRules, Object...args) {\n");
                 out.printf("            return ((%s) nodeMatchRules).%s(%s);\n", invoker.nodeLIRBuilderClass, invoker.methodName, types);
@@ -675,7 +692,6 @@ public class MatchProcessor extends AbstractProcessor {
     private static TypeElement topDeclaringType(Element element) {
         Element enclosing = element.getEnclosingElement();
         if (enclosing == null || enclosing.getKind() == ElementKind.PACKAGE) {
-            assert element.getKind() == ElementKind.CLASS || element.getKind() == ElementKind.INTERFACE;
             return (TypeElement) element;
         }
         return topDeclaringType(enclosing);
@@ -692,7 +708,7 @@ public class MatchProcessor extends AbstractProcessor {
     private RoundEnvironment currentRound;
 
     @Override
-    public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
+    public boolean doProcess(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
         if (roundEnv.processingOver()) {
             return true;
         }
@@ -723,7 +739,7 @@ public class MatchProcessor extends AbstractProcessor {
             // Define a TypeDescriptor for the generic node but don't enter it into the nodeTypes
             // table since it shouldn't be mentioned in match rules.
             TypeMirror valueTypeMirror = getTypeElement(VALUE_NODE_CLASS_NAME).asType();
-            valueType = new TypeDescriptor(valueTypeMirror, "Value", "ValueNode", "org.graalvm.compiler.nodes", Collections.emptyList(), false, false);
+            valueType = new TypeDescriptor(valueTypeMirror, "Value", "ValueNode", "org.graalvm.compiler.nodes", Collections.emptyList(), false, false, false, false);
 
             Map<TypeElement, MatchRuleDescriptor> map = new HashMap<>();
 
@@ -768,7 +784,7 @@ public class MatchProcessor extends AbstractProcessor {
                 if (mirror != null) {
                     matchableNodeAnnotations = getAnnotationValueList(mirror, "value", AnnotationMirror.class);
                 } else {
-                    mirror = getAnnotation(element, getType(MATCHABLE_NODES_CLASS_NAME));
+                    mirror = getAnnotation(element, getType(MATCHABLE_NODE_CLASS_NAME));
                     if (mirror != null) {
                         matchableNodeAnnotations = Collections.singletonList(mirror);
                     } else {
@@ -833,7 +849,9 @@ public class MatchProcessor extends AbstractProcessor {
 
         boolean commutative = getAnnotationValue(matchable, "commutative", Boolean.class);
         boolean shareable = getAnnotationValue(matchable, "shareable", Boolean.class);
-        declareType(nodeClassMirror, shortName, nodeClass, nodePackage, inputs, commutative, shareable, element);
+        boolean consumable = getAnnotationValue(matchable, "consumable", Boolean.class);
+        boolean ignoresSideEffects = getAnnotationValue(matchable, "ignoresSideEffects", Boolean.class);
+        declareType(nodeClassMirror, shortName, nodeClass, nodePackage, inputs, commutative, shareable, consumable, ignoresSideEffects, element);
     }
 
     private void processMatchRules(Map<TypeElement, MatchRuleDescriptor> map, Element element, List<AnnotationMirror> matchRules) {
@@ -960,7 +978,7 @@ public class MatchProcessor extends AbstractProcessor {
             Set<Element> originatingElementsList = info.originatingElements;
             originatingElementsList.add(method);
             while (enclosing != null) {
-                if (enclosing.getKind() == ElementKind.CLASS || enclosing.getKind() == ElementKind.INTERFACE) {
+                if (enclosing.getKind() == ElementKind.CLASS || enclosing.getKind() == ElementKind.INTERFACE || enclosing.getKind() == ElementKind.ENUM) {
                     if (enclosing.getModifiers().contains(Modifier.PRIVATE)) {
                         printError(method, "MatchRule cannot be declared in a private %s %s", enclosing.getKind().name().toLowerCase(), enclosing);
                         return;
@@ -968,8 +986,11 @@ public class MatchProcessor extends AbstractProcessor {
                     originatingElementsList.add(enclosing);
                     declaringClass = enclosing.getSimpleName() + separator + declaringClass;
                     separator = ".";
+                } else if (enclosing.getKind() == ElementKind.PACKAGE) {
+                    break;
                 } else {
-                    assert enclosing.getKind() == ElementKind.PACKAGE;
+                    printError(method, "MatchRule cannot be declared in a %s", enclosing.getKind().name().toLowerCase());
+                    return;
                 }
                 enclosing = enclosing.getEnclosingElement();
             }

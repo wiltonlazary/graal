@@ -1,45 +1,70 @@
 /*
- * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.debug;
 
+import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Set;
 
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.Truffle;
+import com.oracle.truffle.api.TruffleStackTrace;
+import com.oracle.truffle.api.TruffleStackTraceElement;
 import com.oracle.truffle.api.debug.DebuggerNode.InputValuesProvider;
+import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.FrameInstance;
 import com.oracle.truffle.api.frame.FrameInstanceVisitor;
 import com.oracle.truffle.api.frame.MaterializedFrame;
+import com.oracle.truffle.api.instrumentation.InstrumentableNode;
 import com.oracle.truffle.api.instrumentation.Instrumenter;
+import com.oracle.truffle.api.instrumentation.StandardTags.RootTag;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.SourceSection;
 
@@ -114,7 +139,7 @@ public final class SuspendedEvent {
     private InsertableNode insertableNode;
     private List<Breakpoint> breakpoints;
     private InputValuesProvider inputValuesProvider;
-    private Object returnValue;
+    private volatile Object returnValue;
     private DebugException exception;
 
     private volatile boolean disposed;
@@ -122,6 +147,7 @@ public final class SuspendedEvent {
 
     private final Map<Breakpoint, Throwable> conditionFailures;
     private DebugStackFrameIterable cachedFrames;
+    private List<List<DebugStackTraceElement>> cachedAsyncFrames;
 
     SuspendedEvent(DebuggerSession session, Thread thread, SuspendedContext context, MaterializedFrame frame, SuspendAnchor suspendAnchor,
                     InsertableNode insertableNode, InputValuesProvider inputValuesProvider, Object returnValue, DebugException exception,
@@ -225,7 +251,7 @@ public final class SuspendedEvent {
      */
     public SourceSection getSourceSection() {
         verifyValidState(true);
-        return sourceSection;
+        return session.resolveSection(sourceSection);
     }
 
     /**
@@ -307,12 +333,32 @@ public final class SuspendedEvent {
         return getTopStackFrame().wrapHeapValue(ret);
     }
 
+    Object getReturnObject() {
+        return returnValue;
+    }
+
+    /**
+     * Change the return value. When there is a {@link #getReturnValue() return value} at the
+     * current location, this method modifies the return value to a new one.
+     *
+     * @param newValue the new return value, can not be <code>null</code>
+     * @throws IllegalStateException when {@link #getReturnValue()} returns <code>null</code>
+     * @since 19.0
+     */
+    public void setReturnValue(DebugValue newValue) {
+        verifyValidState(false);
+        if (returnValue == null) {
+            throw new IllegalStateException("Can not set return value when there is no current return value.");
+        }
+        this.returnValue = newValue.get();
+    }
+
     /**
      * Returns the debugger representation of a guest language exception that caused this suspended
      * event (via an exception breakpoint, for instance). Returns <code>null</code> when no
      * exception occurred.
      *
-     * @since 1.0
+     * @since 19.0
      */
     public DebugException getException() {
         return exception;
@@ -391,6 +437,28 @@ public final class SuspendedEvent {
             cachedFrames = new DebugStackFrameIterable();
         }
         return cachedFrames;
+    }
+
+    /**
+     * Get a list of asynchronous stack traces that led to scheduling of the current execution.
+     * Returns an empty list if no asynchronous stack is known. The first asynchronous stack is at
+     * the first index in the list. A possible next asynchronous stack (that scheduled execution of
+     * the previous one) is at the next index in the list.
+     * <p>
+     * Languages might not provide asynchronous stack traces by default for performance reasons.
+     * Call {@link DebuggerSession#setAsynchronousStackDepth(int)} to request asynchronous stacks.
+     * Languages may provide asynchronous stacks if it's of no performance penalty, or if requested
+     * by other options.
+     *
+     * @see DebuggerSession#setAsynchronousStackDepth(int)
+     * @since 20.1.0
+     */
+    public List<List<DebugStackTraceElement>> getAsynchronousStacks() {
+        verifyValidState(false);
+        if (cachedAsyncFrames == null) {
+            cachedAsyncFrames = new DebugAsyncStackFrameLists(session, getStackFrames());
+        }
+        return cachedAsyncFrames;
     }
 
     static boolean isEvalRootStackFrame(DebuggerSession session, FrameInstance instance) {
@@ -641,13 +709,17 @@ public final class SuspendedEvent {
             if (otherFrames == null) {
                 final List<DebugStackFrame> frameInstances = new ArrayList<>();
                 Truffle.getRuntime().iterateFrames(new FrameInstanceVisitor<FrameInstance>() {
-                    private int depth = -context.getStackDepth() - 1;
+                    private int depth = -context.getStackDepth() - 1 + getTopFrameIndex();
 
                     @Override
                     public FrameInstance visitFrame(FrameInstance frameInstance) {
                         if (isEvalRootStackFrame(session, frameInstance)) {
                             // we stop at eval root stack frames
                             return frameInstance;
+                        }
+                        Node callNode = frameInstance.getCallNode();
+                        if (callNode != null && !hasRootTag(callNode)) {
+                            return null;
                         }
                         if (++depth <= 0) {
                             return null;
@@ -661,10 +733,32 @@ public final class SuspendedEvent {
             return otherFrames;
         }
 
+        private boolean hasRootTag(Node callNode) {
+            Node node = callNode;
+            do {
+                if (node instanceof InstrumentableNode && ((InstrumentableNode) node).hasTag(RootTag.class)) {
+                    return true;
+                }
+                node = node.getParent();
+            } while (node != null);
+            return false;
+        }
+
+        private int getTopFrameIndex() {
+            if (context.getStackDepth() == 0) {
+                return 0;
+            }
+            if (hasRootTag(context.getInstrumentedNode())) {
+                return 0;
+            } else {
+                return 1; // Skip synthetic frame
+            }
+        }
+
         public Iterator<DebugStackFrame> iterator() {
             return new Iterator<DebugStackFrame>() {
 
-                private int index;
+                private int index = getTopFrameIndex();
                 private Iterator<DebugStackFrame> otherIterator;
 
                 public boolean hasNext() {
@@ -702,4 +796,144 @@ public final class SuspendedEvent {
 
     }
 
+    static final class DebugAsyncStackFrameLists extends AbstractList<List<DebugStackTraceElement>> {
+
+        private final DebuggerSession session;
+        private final List<List<DebugStackTraceElement>> stacks = new LinkedList<>();
+        private int size = -1;
+
+        DebugAsyncStackFrameLists(DebuggerSession session, Iterable<DebugStackFrame> callStack) {
+            this.session = session;
+            for (DebugStackFrame dFrame : callStack) {
+                RootCallTarget target = dFrame.getCallTarget();
+                Frame frame = dFrame.findTruffleFrame(FrameInstance.FrameAccess.READ_ONLY);
+                List<DebugStackTraceElement> asyncStack = getAsynchronousStackFrames(session, target, frame);
+                if (asyncStack != null && !asyncStack.isEmpty()) {
+                    stacks.add(asyncStack);
+                    break;
+                }
+            }
+            if (stacks.isEmpty()) {
+                size = 0;
+            }
+        }
+
+        DebugAsyncStackFrameLists(DebuggerSession session, List<DebugStackTraceElement> stackTrace) {
+            this.session = session;
+            for (DebugStackTraceElement tElement : stackTrace) {
+                RootCallTarget target = tElement.traceElement.getTarget();
+                Frame frame = tElement.traceElement.getFrame();
+                List<DebugStackTraceElement> asyncStack = getAsynchronousStackFrames(session, target, frame);
+                if (asyncStack != null && !asyncStack.isEmpty()) {
+                    stacks.add(asyncStack);
+                    break;
+                }
+            }
+            if (stacks.isEmpty()) {
+                size = 0;
+            }
+        }
+
+        @Override
+        public List<DebugStackTraceElement> get(int index) {
+            int filledLevel = fillStacks(index);
+            if (filledLevel >= index) {
+                return stacks.get(index);
+            } else {
+                throw new IndexOutOfBoundsException("Index: " + index + ", Size: " + size);
+            }
+        }
+
+        @Override
+        public int size() {
+            if (size < 0) {
+                fillStacks(Integer.MAX_VALUE);
+            }
+            return size;
+        }
+
+        @Override
+        public Iterator<List<DebugStackTraceElement>> iterator() {
+            return new Itr();
+        }
+
+        private int fillStacks(int level) {
+            int lastLevel = stacks.size() - 1;
+            if (size > 0 && level >= size) {
+                return size - 1;
+            }
+            if (lastLevel >= level) {
+                return level;
+            } else {
+                while (lastLevel < level) {
+                    boolean added = false;
+                    for (DebugStackTraceElement tElement : stacks.get(lastLevel)) {
+                        RootCallTarget target = tElement.traceElement.getTarget();
+                        Frame frame = tElement.traceElement.getFrame();
+                        List<DebugStackTraceElement> asyncStack = getAsynchronousStackFrames(session, target, frame);
+                        if (asyncStack != null && !asyncStack.isEmpty()) {
+                            stacks.add(asyncStack);
+                            added = true;
+                            break;
+                        }
+                    }
+                    if (added) {
+                        lastLevel++;
+                    } else {
+                        size = lastLevel + 1;
+                        break;
+                    }
+                }
+                return lastLevel;
+            }
+        }
+
+        private static List<DebugStackTraceElement> getAsynchronousStackFrames(DebuggerSession session, RootCallTarget target, Frame frame) {
+            if (frame == null) {
+                return null;
+            }
+            List<TruffleStackTraceElement> stack = TruffleStackTrace.getAsynchronousStackTrace(target, frame);
+            if (stack == null) {
+                return null;
+            }
+            Iterator<TruffleStackTraceElement> stackIterator = stack.iterator();
+            if (!stackIterator.hasNext()) {
+                return Collections.emptyList();
+            }
+            List<DebugStackTraceElement> debugStack = new ArrayList<>();
+            while (stackIterator.hasNext()) {
+                TruffleStackTraceElement tframe = stackIterator.next();
+                debugStack.add(new DebugStackTraceElement(session, tframe));
+            }
+            return Collections.unmodifiableList(debugStack);
+        }
+
+        // This implementation prevents from calling size()
+        private class Itr implements Iterator<List<DebugStackTraceElement>> {
+            int cursor = 0;
+
+            @Override
+            public boolean hasNext() {
+                return fillStacks(cursor) == cursor;
+            }
+
+            @Override
+            public List<DebugStackTraceElement> next() {
+                try {
+                    int i = cursor;
+                    List<DebugStackTraceElement> next = get(i);
+                    cursor = i + 1;
+                    return next;
+                } catch (IndexOutOfBoundsException e) {
+                    throw new NoSuchElementException();
+                }
+            }
+
+            @Override
+            public void remove() {
+                throw new UnsupportedOperationException();
+            }
+        }
+
+    }
 }

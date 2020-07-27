@@ -27,7 +27,7 @@ package com.oracle.graal.pointsto.flow;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.extended.JavaReadNode;
 import org.graalvm.compiler.nodes.extended.RawLoadNode;
-import org.graalvm.compiler.nodes.java.AtomicReadAndWriteNode;
+
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.api.UnsafePartitionKind;
 import com.oracle.graal.pointsto.flow.context.object.AnalysisObject;
@@ -36,23 +36,33 @@ import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.nodes.AnalysisUnsafePartitionLoadNode;
 import com.oracle.graal.pointsto.typestate.TypeState;
 
+import jdk.vm.ci.code.BytecodePosition;
+
 /**
  * The abstract class for offset load flows (i.e. indexed loads, unsafe loads at offset, java read
  * loads).
  */
-public abstract class OffsetLoadTypeFlow extends TypeFlow<ValueNode> {
+public abstract class OffsetLoadTypeFlow extends TypeFlow<BytecodePosition> {
+
+    /*
+     * The type of the receiver object of the offset load operation. Can be approximated by Object
+     * or Object[] when it cannot be infered from stamps.
+     */
+    private final AnalysisType objectType;
 
     /** The type flow of the receiver object of the load operation. */
-    protected final TypeFlow<?> objectFlow;
+    protected TypeFlow<?> objectFlow;
 
     @SuppressWarnings("unused")
-    public OffsetLoadTypeFlow(ValueNode node, AnalysisType componentType, TypeFlow<?> objectFlow, MethodTypeFlow methodFlow) {
-        super(node, componentType);
+    public OffsetLoadTypeFlow(ValueNode node, AnalysisType objectType, AnalysisType componentType, TypeFlow<?> objectFlow, MethodTypeFlow methodFlow) {
+        super(node.getNodeSourcePosition(), componentType);
+        this.objectType = objectType;
         this.objectFlow = objectFlow;
     }
 
     public OffsetLoadTypeFlow(BigBang bb, MethodFlowsGraph methodFlows, OffsetLoadTypeFlow original) {
         super(original, methodFlows);
+        this.objectType = original.objectType;
         this.objectFlow = methodFlows.lookupCloneOf(bb, original.objectFlow);
     }
 
@@ -64,7 +74,19 @@ public abstract class OffsetLoadTypeFlow extends TypeFlow<ValueNode> {
     }
 
     @Override
+    public void setObserved(TypeFlow<?> newObjectFlow) {
+        this.objectFlow = newObjectFlow;
+    }
+
+    @Override
     public abstract void onObservedUpdate(BigBang bb);
+
+    @Override
+    public void onObservedSaturated(BigBang bb, TypeFlow<?> observed) {
+        assert this.isClone();
+        /* When receiver object flow saturates start observing the flow of the the object type. */
+        replaceObservedWith(bb, objectType);
+    }
 
     @Override
     public TypeFlow<?> receiver() {
@@ -76,14 +98,15 @@ public abstract class OffsetLoadTypeFlow extends TypeFlow<ValueNode> {
     }
 
     /**
-     * Implements an indexed load operation type flow. The type state of this load indexed flow
-     * reflects the type state of the elements on the receiver array objects that triggered this
-     * load operation.
+     * Implements the type flow of an indexed load operation. The type state of an indexed load flow
+     * reflects the elements type state of the receiver array objects that triggered the load
+     * operation, i.e., the loaded values. The declared type of a load operation is the component
+     * type of the receiver array, if known statically, null otherwise.
      */
     public static class LoadIndexedTypeFlow extends OffsetLoadTypeFlow {
 
-        public LoadIndexedTypeFlow(ValueNode node, AnalysisType elementType, TypeFlow<?> arrayFlow, MethodTypeFlow methodFlow) {
-            super(node, elementType, arrayFlow, methodFlow);
+        public LoadIndexedTypeFlow(ValueNode node, AnalysisType arrayType, TypeFlow<?> arrayFlow, MethodTypeFlow methodFlow) {
+            super(node, arrayType, arrayType.getComponentType(), arrayFlow, methodFlow);
         }
 
         public LoadIndexedTypeFlow(BigBang bb, MethodFlowsGraph methodFlows, LoadIndexedTypeFlow original) {
@@ -107,6 +130,10 @@ public abstract class OffsetLoadTypeFlow extends TypeFlow<ValueNode> {
             }
 
             for (AnalysisObject object : arrayState.objects()) {
+                if (bb.analysisPolicy().relaxTypeFlowConstraints() && !object.type().isArray()) {
+                    /* Ignore non-array types when type flow constraints are relaxed. */
+                    continue;
+                }
                 if (object.isPrimitiveArray() || object.isEmptyObjectArrayConstant(bb)) {
                     /* Nothing to read from a primitive array or an empty array constant. */
                     continue;
@@ -133,11 +160,11 @@ public abstract class OffsetLoadTypeFlow extends TypeFlow<ValueNode> {
 
     public abstract static class AbstractUnsafeLoadTypeFlow extends OffsetLoadTypeFlow {
 
-        AbstractUnsafeLoadTypeFlow(ValueNode node, AnalysisType componentType, TypeFlow<?> objectFlow, MethodTypeFlow methodFlow) {
-            super(node, componentType, objectFlow, methodFlow);
+        AbstractUnsafeLoadTypeFlow(ValueNode node, AnalysisType objectType, AnalysisType componentType, TypeFlow<?> objectFlow, MethodTypeFlow methodFlow) {
+            super(node, objectType, componentType, objectFlow, methodFlow);
         }
 
-        AbstractUnsafeLoadTypeFlow(BigBang bb, MethodFlowsGraph methodFlows, OffsetLoadTypeFlow original) {
+        AbstractUnsafeLoadTypeFlow(BigBang bb, MethodFlowsGraph methodFlows, AbstractUnsafeLoadTypeFlow original) {
             super(bb, methodFlows, original);
         }
 
@@ -151,6 +178,18 @@ public abstract class OffsetLoadTypeFlow extends TypeFlow<ValueNode> {
         }
 
         protected abstract AbstractUnsafeLoadTypeFlow makeCopy(BigBang bb, MethodFlowsGraph methodFlows);
+
+        @Override
+        public void initClone(BigBang bb) {
+            /*
+             * Unsafe load type flow models unsafe reads from both instance and static fields. From
+             * an analysis stand point for static fields the base doesn't matter. An unsafe load can
+             * read from any of the static fields marked for unsafe access.
+             */
+            for (AnalysisField field : bb.getUniverse().getUnsafeAccessedStaticFields()) {
+                field.getStaticFieldFlow().addUse(bb, this);
+            }
+        }
 
         @Override
         public void onObservedUpdate(BigBang bb) {
@@ -187,7 +226,7 @@ public abstract class OffsetLoadTypeFlow extends TypeFlow<ValueNode> {
                 } else {
                     for (AnalysisField field : objectType.unsafeAccessedFields()) {
                         assert field != null;
-                        TypeFlow<?> fieldFlow = object.getInstanceFieldFlow(bb, field, false);
+                        TypeFlow<?> fieldFlow = object.getInstanceFieldFlow(bb, this.method(), field, false);
                         if (fieldFlow.getState().isUnknown()) {
                             bb.getUnsupportedFeatures().addMessage(graphRef.getMethod().format("%H.%n(%p)"), graphRef.getMethod(),
                                             "Illegal: Unsafe loading UnknownTypeState from object. Load: " + this.getSource());
@@ -202,8 +241,8 @@ public abstract class OffsetLoadTypeFlow extends TypeFlow<ValueNode> {
 
     public static class UnsafeLoadTypeFlow extends AbstractUnsafeLoadTypeFlow {
 
-        public UnsafeLoadTypeFlow(RawLoadNode node, AnalysisType arrayType, TypeFlow<?> arrayFlow, MethodTypeFlow methodFlow) {
-            super(node, arrayType, arrayFlow, methodFlow);
+        public UnsafeLoadTypeFlow(RawLoadNode node, AnalysisType objectType, AnalysisType componentType, TypeFlow<?> arrayFlow, MethodTypeFlow methodFlow) {
+            super(node, objectType, componentType, arrayFlow, methodFlow);
         }
 
         private UnsafeLoadTypeFlow(BigBang bb, MethodFlowsGraph methodFlows, UnsafeLoadTypeFlow original) {
@@ -226,9 +265,9 @@ public abstract class OffsetLoadTypeFlow extends TypeFlow<ValueNode> {
         protected final UnsafePartitionKind partitionKind;
         protected final AnalysisType partitionType;
 
-        public UnsafePartitionLoadTypeFlow(AnalysisUnsafePartitionLoadNode node, AnalysisType arrayType, TypeFlow<?> arrayFlow, MethodTypeFlow methodFlow,
+        public UnsafePartitionLoadTypeFlow(AnalysisUnsafePartitionLoadNode node, AnalysisType objectType, AnalysisType componentType, TypeFlow<?> arrayFlow, MethodTypeFlow methodFlow,
                         UnsafePartitionKind partitionKind, AnalysisType partitionType) {
-            super(node, arrayType, arrayFlow, methodFlow);
+            super(node, objectType, componentType, arrayFlow, methodFlow);
             this.partitionKind = partitionKind;
             this.partitionType = partitionType;
         }
@@ -271,7 +310,7 @@ public abstract class OffsetLoadTypeFlow extends TypeFlow<ValueNode> {
                 assert !objectType.isArray();
 
                 for (AnalysisField field : objectType.unsafeAccessedFields(partitionKind)) {
-                    TypeFlow<?> fieldFlow = object.getInstanceFieldFlow(bb, field, false);
+                    TypeFlow<?> fieldFlow = object.getInstanceFieldFlow(bb, this.method(), field, false);
 
                     if (fieldFlow.getState().isUnknown()) {
                         bb.getUnsupportedFeatures().addMessage(graphRef.getMethod().format("%H.%n(%p)"), graphRef.getMethod(),
@@ -292,8 +331,8 @@ public abstract class OffsetLoadTypeFlow extends TypeFlow<ValueNode> {
 
     public static class AtomicReadTypeFlow extends AbstractUnsafeLoadTypeFlow {
 
-        public AtomicReadTypeFlow(AtomicReadAndWriteNode node, AnalysisType componentType, TypeFlow<?> objectFlow, MethodTypeFlow methodFlow) {
-            super(node, componentType, objectFlow, methodFlow);
+        public AtomicReadTypeFlow(ValueNode node, AnalysisType objectType, AnalysisType componentType, TypeFlow<?> objectFlow, MethodTypeFlow methodFlow) {
+            super(node, objectType, componentType, objectFlow, methodFlow);
         }
 
         public AtomicReadTypeFlow(BigBang bb, MethodFlowsGraph methodFlows, AtomicReadTypeFlow original) {
@@ -313,8 +352,8 @@ public abstract class OffsetLoadTypeFlow extends TypeFlow<ValueNode> {
 
     public static class JavaReadTypeFlow extends AbstractUnsafeLoadTypeFlow {
 
-        public JavaReadTypeFlow(JavaReadNode node, AnalysisType arrayType, TypeFlow<?> arrayFlow, MethodTypeFlow methodFlow) {
-            super(node, arrayType, arrayFlow, methodFlow);
+        public JavaReadTypeFlow(JavaReadNode node, AnalysisType objectType, AnalysisType componentType, TypeFlow<?> arrayFlow, MethodTypeFlow methodFlow) {
+            super(node, objectType, componentType, arrayFlow, methodFlow);
         }
 
         public JavaReadTypeFlow(BigBang bb, MethodFlowsGraph methodFlows, JavaReadTypeFlow original) {

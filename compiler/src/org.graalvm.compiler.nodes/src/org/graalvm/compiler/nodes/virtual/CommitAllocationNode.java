@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -50,7 +50,7 @@ import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.java.AbstractNewObjectNode;
 import org.graalvm.compiler.nodes.java.MonitorIdNode;
-import org.graalvm.compiler.nodes.memory.MemoryCheckpoint;
+import org.graalvm.compiler.nodes.memory.SingleMemoryKill;
 import org.graalvm.compiler.nodes.memory.WriteNode;
 import org.graalvm.compiler.nodes.spi.Lowerable;
 import org.graalvm.compiler.nodes.spi.LoweringTool;
@@ -67,7 +67,7 @@ import org.graalvm.word.LocationIdentity;
           sizeRationale = "We don't know statically how much code for which allocations has to be generated."
 )
 // @formatter:on
-public final class CommitAllocationNode extends FixedWithNextNode implements VirtualizableAllocation, Lowerable, Simplifiable, MemoryCheckpoint.Single {
+public final class CommitAllocationNode extends FixedWithNextNode implements VirtualizableAllocation, Lowerable, Simplifiable, SingleMemoryKill {
 
     public static final NodeClass<CommitAllocationNode> TYPE = NodeClass.create(CommitAllocationNode.class);
 
@@ -121,7 +121,7 @@ public final class CommitAllocationNode extends FixedWithNextNode implements Vir
     }
 
     @Override
-    public LocationIdentity getLocationIdentity() {
+    public LocationIdentity getKilledLocationIdentity() {
         return locks.isEmpty() ? LocationIdentity.init() : LocationIdentity.any();
     }
 
@@ -247,7 +247,11 @@ public final class CommitAllocationNode extends FixedWithNextNode implements Vir
         List<VirtualObjectNode> v = getVirtualObjects();
         int fieldWriteCount = 0;
         for (int i = 0; i < v.size(); i++) {
-            fieldWriteCount += v.get(i).entryCount();
+            VirtualObjectNode node = v.get(i);
+            if (node == null) {
+                return CYCLES_UNKNOWN;
+            }
+            fieldWriteCount += node.entryCount();
         }
         int rawValueWrites = NodeCycles.compute(WriteNode.TYPE.cycles(), fieldWriteCount).value;
         int rawValuesTlabBumps = AbstractNewObjectNode.TYPE.cycles().value;
@@ -259,7 +263,11 @@ public final class CommitAllocationNode extends FixedWithNextNode implements Vir
         List<VirtualObjectNode> v = getVirtualObjects();
         int fieldWriteCount = 0;
         for (int i = 0; i < v.size(); i++) {
-            fieldWriteCount += v.get(i).entryCount();
+            VirtualObjectNode node = v.get(i);
+            if (node == null) {
+                return SIZE_UNKNOWN;
+            }
+            fieldWriteCount += node.entryCount();
         }
         int rawValueWrites = NodeSize.compute(WriteNode.TYPE.size(), fieldWriteCount).value;
         int rawValuesTlabBumps = AbstractNewObjectNode.TYPE.size().value;

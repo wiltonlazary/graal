@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.source;
 
@@ -45,27 +61,33 @@ import java.util.ArrayList;
  * A newline character designates the end of a line and occupies a column position.
  * <p>
  * If the text ends with a character other than a newline, then the characters following the final
- * newline character count as a line, even though not newline-terminated.
+ * newline character count as a line, even though not newline-terminated. Following line delimiters
+ * are used: "\n", "\r", "\r\n"
  * <p>
  * <strong>Limitations:</strong>
  * <ul>
  * <li>Does not handle multiple character encodings correctly.</li>
  * <li>Treats tabs as occupying 1 column.</li>
- * <li>Does not handle multiple-character line termination sequences correctly.</li>
  * </ul>
  */
 final class TextMap {
 
     // 0-based offsets of newline characters in the text, with sentinel
     private final int[] nlOffsets;
-    // The number of characters in the text, including newlines (which count as 1).
+    // The number of characters in the text, including newlines.
     private final int textLength;
+    // Length of newline characters (1 for '\n', or 2 for "\r\n") valid unless newlineLengths is set
+    private final int newlineLength;
+    // Lengths of newlines, if newlines with different lengths are present.
+    private final int[] newlineLengths;
     // Is the final text character a newline?
     final boolean finalNL;
 
-    TextMap(int[] nlOffsets, int textLength, boolean finalNL) {
+    TextMap(int[] nlOffsets, int textLength, int newlineLength, int[] newlineLengths, boolean finalNL) {
         this.nlOffsets = nlOffsets;
         this.textLength = textLength;
+        this.newlineLength = newlineLength;
+        this.newlineLengths = newlineLengths;
         this.finalNL = finalNL;
     }
 
@@ -75,53 +97,87 @@ final class TextMap {
      */
     public static TextMap fromCharSequence(CharSequence text) {
         final int textLength = text.length();
-        final ArrayList<Integer> lines = new ArrayList<>();
-        lines.add(0);
-        int offset = 0;
-        while (offset < textLength) {
-            final int nlIndex = indexOf(text, '\n', offset);
-            if (nlIndex >= 0) {
-                offset = nlIndex + 1;
-                lines.add(offset);
-            } else {
-                break;
+        ArrayList<Integer> lines;
+        int newlineLength = 0; // 0 - unset, > 0 equal length, < 0 variable length
+        ArrayList<Integer> nlLengths = null;
+        // Suppose that all newlines have the same length.
+        // If not, we'll set nlLengths in the second pass.
+        do {
+            lines = new ArrayList<>();
+            lines.add(0);
+            int offset = 0;
+            if (newlineLength == -1) {
+                // There are newlines of different lengths
+                nlLengths = new ArrayList<>();
+                newlineLength = -2;
             }
-        }
+            while (offset < textLength) {
+                int nlIndex = offset;
+                char c = 0;
+                while (nlIndex < textLength) {
+                    c = text.charAt(nlIndex);
+                    if (c == '\n' || c == '\r') {
+                        break;
+                    }
+                    nlIndex++;
+                }
+                if (nlIndex < textLength) {
+                    int nlLength = getNewlineLength(c, text, textLength, nlIndex);
+                    // Store the length of newline
+                    newlineLength = adjustNewlineLength(nlLength, newlineLength, nlLengths);
+                    if (newlineLength == -1) {
+                        // variable length of newlines.
+                        break;
+                    }
+                    offset = nlIndex + nlLength;
+                    lines.add(offset);
+                } else {
+                    break;
+                }
+            }
+        } while (newlineLength == -1);
         lines.add(Integer.MAX_VALUE);
-        final int[] nlOffsets = new int[lines.size()];
-        for (int line = 0; line < lines.size(); line++) {
-            nlOffsets[line] = lines.get(line);
+        final int[] nlOffsets = list2ints(lines);
+        final int[] newlineLengths;
+        if (nlLengths != null) {
+            assert nlLengths.size() == lines.size() - 2;
+            newlineLengths = list2ints(nlLengths);
+        } else {
+            newlineLengths = null;
         }
         final boolean finalNL = textLength > 0 && (textLength == nlOffsets[nlOffsets.length - 2]);
-        return new TextMap(nlOffsets, textLength, finalNL);
+        return new TextMap(nlOffsets, textLength, newlineLength, newlineLengths, finalNL);
     }
 
-    private static int indexOf(CharSequence seq, int ch, int fromIndex) {
-        if (seq instanceof String) {
-            return ((String) seq).indexOf(ch, fromIndex);
+    private static int getNewlineLength(char c, CharSequence text, int textLength, int nlIndex) {
+        if (c == '\r' && (nlIndex + 1) < textLength && text.charAt(nlIndex + 1) == '\n') {
+            return 2;
+        } else {
+            return 1;
         }
-        final int max = seq.length();
-        int localFromIndex = fromIndex;
-        if (localFromIndex < 0) {
-            localFromIndex = 0;
-        } else if (fromIndex >= max) {
-            // Note: fromIndex might be near -1>>>1.
-            return -1;
-        }
+    }
 
-        if (ch >= Character.MIN_SUPPLEMENTARY_CODE_POINT) {
-            // not needed here
-            throw new UnsupportedOperationException();
-        }
-
-        // handle most cases here (ch is a BMP code point or a
-        // negative value (invalid code point))
-        for (int i = localFromIndex; i < max; i++) {
-            if (seq.charAt(i) == ch) {
-                return i;
+    private static int adjustNewlineLength(int nlLength, int oldNewlineLength, ArrayList<Integer> nlLengths) {
+        int newlineLength = oldNewlineLength;
+        if (newlineLength >= 0) {
+            if (newlineLength == 0) {
+                newlineLength = nlLength;
+            } else if (newlineLength != nlLength) {
+                newlineLength = -1;
             }
+        } else {
+            nlLengths.add(nlLength);
         }
-        return -1;
+        return newlineLength;
+    }
+
+    private static int[] list2ints(ArrayList<Integer> list) {
+        int size = list.size();
+        int[] array = new int[size];
+        for (int i = 0; i < size; i++) {
+            array[i] = list.get(i);
+        }
+        return array;
     }
 
     /**
@@ -213,7 +269,28 @@ final class TextMap {
         if (line == nlOffsets.length - 1) {
             return textLength - nlOffsets[line - 1];
         }
-        return (nlOffsets[line] - nlOffsets[line - 1]) - 1;
+        int nlLength;
+        if (newlineLengths != null) {
+            nlLength = newlineLengths[line - 1];
+        } else {
+            nlLength = newlineLength;
+        }
+        return (nlOffsets[line] - nlOffsets[line - 1]) - nlLength;
+    }
+
+    /**
+     * Converts 1-based line number and 1-based column number to the 0-based offset of the character
+     * position at the line:column.
+     *
+     * @throws IllegalArgumentException if the column is out of range.
+     */
+    public int lineColumnToOffset(int line, int column) {
+        final int lineStartOffset = lineStartOffset(line);
+        if (column > (lineLength(line) + 1)) {
+            throw new IllegalArgumentException("column out of range");
+        }
+        final int charIndex = lineStartOffset + column - 1;
+        return charIndex;
     }
 
     /**

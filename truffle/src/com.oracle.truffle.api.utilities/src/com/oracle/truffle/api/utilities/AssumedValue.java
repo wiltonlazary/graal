@@ -1,36 +1,53 @@
 /*
- * Copyright (c) 2013, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.utilities;
 
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 import com.oracle.truffle.api.Assumption;
+import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.Truffle;
-import com.oracle.truffle.api.nodes.InvalidAssumptionException;
 
 /**
  * A value that the compiler can assume is constant, but can be changed by invalidation.
@@ -59,6 +76,7 @@ public class AssumedValue<T> {
     }
 
     /** @since 0.8 or earlier */
+    @TruffleBoundary
     public AssumedValue(String name, T initialValue) {
         this.name = name;
         value = initialValue;
@@ -72,10 +90,21 @@ public class AssumedValue<T> {
      * @since 0.8 or earlier
      */
     public T get() {
-        try {
-            assumption.check();
-        } catch (InvalidAssumptionException e) {
-            // No need to rewrite anything - just pick up the new values
+        if (CompilerDirectives.isPartialEvaluationConstant(assumption)) {
+            /*
+             * Only check the assumption if we actually constant-fold the value. Otherwise, we might
+             * deoptimize for no reason.
+             *
+             * Note that it's important that the first if condition in this method does a volatile
+             * read on the assumption variable. That acts as a memory barrier, preventing the value
+             * read from floating above in the case where the value is not constant folded and in
+             * the interpreter code. That makes the value field effectively volatile, making this
+             * class thread-safe.
+             */
+            CompilerAsserts.partialEvaluationConstant(value);
+            if (!assumption.isValid()) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+            }
         }
 
         return value;
@@ -86,8 +115,8 @@ public class AssumedValue<T> {
      *
      * @since 0.8 or earlier
      */
+    @TruffleBoundary
     public void set(T newValue) {
-        CompilerDirectives.transferToInterpreter();
         value = newValue;
 
         Assumption newAssumption = Truffle.getRuntime().createAssumption(name);

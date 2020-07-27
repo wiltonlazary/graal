@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -46,12 +46,12 @@ import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugins;
 import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugins.Registration;
 import org.graalvm.compiler.nodes.memory.FloatingReadNode;
 import org.graalvm.compiler.nodes.memory.ReadNode;
+import org.graalvm.compiler.nodes.spi.CoreProviders;
 import org.graalvm.compiler.nodes.spi.LoweringTool.StandardLoweringStage;
 import org.graalvm.compiler.phases.common.CanonicalizerPhase;
+import org.graalvm.compiler.phases.common.ConditionalEliminationPhase;
 import org.graalvm.compiler.phases.common.FloatingReadPhase;
 import org.graalvm.compiler.phases.common.LoweringPhase;
-import org.graalvm.compiler.phases.common.ConditionalEliminationPhase;
-import org.graalvm.compiler.phases.tiers.PhaseContext;
 import org.graalvm.compiler.truffle.compiler.nodes.ObjectLocationIdentity;
 import org.graalvm.compiler.truffle.compiler.substitutions.TruffleGraphBuilderPlugins;
 import org.junit.Test;
@@ -112,8 +112,8 @@ public class ConditionAnchoringTest extends GraalCompilerTest {
         assertThat(unsafeNodes, hasCount(1));
 
         // lower unsafe load
-        PhaseContext context = new PhaseContext(getProviders());
-        LoweringPhase lowering = new LoweringPhase(new CanonicalizerPhase(), StandardLoweringStage.HIGH_TIER);
+        CoreProviders context = getProviders();
+        LoweringPhase lowering = new LoweringPhase(createCanonicalizerPhase(), StandardLoweringStage.HIGH_TIER);
         lowering.apply(graph, context);
 
         unsafeNodes = graph.getNodes().filter(RawLoadNode.class);
@@ -126,7 +126,7 @@ public class ConditionAnchoringTest extends GraalCompilerTest {
         // float reads and canonicalize to give a chance to conditions to GVN
         FloatingReadPhase floatingReadPhase = new FloatingReadPhase();
         floatingReadPhase.apply(graph);
-        CanonicalizerPhase canonicalizerPhase = new CanonicalizerPhase();
+        CanonicalizerPhase canonicalizerPhase = createCanonicalizerPhase();
         canonicalizerPhase.apply(graph, context);
 
         NodeIterable<FloatingReadNode> floatingReads = graph.getNodes().filter(FloatingReadNode.class);

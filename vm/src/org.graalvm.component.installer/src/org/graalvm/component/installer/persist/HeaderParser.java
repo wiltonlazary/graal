@@ -24,13 +24,18 @@
  */
 package org.graalvm.component.installer.persist;
 
+import java.util.Collections;
 import org.graalvm.component.installer.MetadataException;
 import org.graalvm.component.installer.DependencyException;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Predicate;
 import org.graalvm.component.installer.BundleConstants;
 import org.graalvm.component.installer.Feedback;
+import org.graalvm.component.installer.Version;
 
 /**
  * Parses OSGI-like metadata in JAR component bundles.
@@ -42,6 +47,8 @@ public class HeaderParser {
     private final Map<String, String> parameters = new HashMap<>();
     private final Map<String, String> directives = new HashMap<>();
     private final Map<String, String> filterValue = new HashMap<>();
+    private final Map<String, Object> capabilities = new HashMap<>();
+    private final Set<String> dependencies = new HashSet<>();
     private final Feedback feedback;
 
     private String header;
@@ -55,7 +62,7 @@ public class HeaderParser {
 
     public HeaderParser(String headerName, String header, Feedback feedback) {
         this.headerName = headerName;
-        this.feedback = feedback;
+        this.feedback = feedback.withBundle(HeaderParser.class);
 
         if (header != null) {
             // trim whitespaces;
@@ -93,18 +100,18 @@ public class HeaderParser {
     public boolean getBoolean(Boolean defValue) {
         if (pos >= header.length()) {
             if (defValue == null) {
-                throw metaEx("ERROR_HeaderMissing", headerName);
+                throw metaEx("ERROR_HeaderMissing", headerName); // NOI18N
             }
             return defValue;
         } else {
-            String s = header.substring(pos).trim().toLowerCase();
+            String s = header.substring(pos).trim().toLowerCase(Locale.ENGLISH);
             switch (s) {
-                case "true":
+                case "true": // NOI18N
                     return true;
-                case "false":
+                case "false": // NOI18N
                     return false;
             }
-            throw metaEx("ERROR_HeaderInvalid", headerName, s);
+            throw metaEx("ERROR_HeaderInvalid", headerName, s); // NOI18N
         }
     }
 
@@ -187,6 +194,10 @@ public class HeaderParser {
             if (Character.isWhitespace(c)) {
                 break;
             }
+            if (c == ';') {
+                pos--;
+                break;
+            }
             if (!isExtended(c)) {
                 throw metaEx("ERROR_InvalidParameterSyntax", directiveOrParameterName);
             }
@@ -202,13 +213,15 @@ public class HeaderParser {
             char c = next();
             switch (c) {
                 case '"':
-                    return cut(1);
+                    String s = cut(1);
+                    skipWithSemicolon();
+                    return s;
                 case '\n':
                 case '\r':
                 case 0:
                     throw metaEx("ERROR_InvalidQuotedString");
                 case '\\':
-                    c = next();
+                    next();
                     break;
             }
         }
@@ -238,7 +251,7 @@ public class HeaderParser {
         boolean componentEmpty = true;
         while (!isEmpty()) {
             char c = ch();
-            if (c == ';') {
+            if (c == ';' || c == ',') {
                 String s = cut();
                 return s;
             }
@@ -292,7 +305,8 @@ public class HeaderParser {
             }
             advance();
             if (c == '.') {
-                if (++partCount > 3 || !partContents) {
+                ++partCount;
+                if (!partContents) {
                     throw metaErr("ERROR_InvalidVersion");
                 }
                 partContents = false;
@@ -338,7 +352,7 @@ public class HeaderParser {
             char c = ch();
             if (isExtended(c)) {
                 advance();
-            } else if (Character.isWhitespace(c) || c == ':' || c == '=') {
+            } else if (Character.isWhitespace(c) || c == ':' || c == '=' || c == ';') {
                 break;
             } else {
                 throw metaEx("ERROR_InvalidParameterName");
@@ -503,7 +517,7 @@ public class HeaderParser {
 
         if (!BundleConstants.GRAALVM_CAPABILITY.equals(namespace)) {
             // unsupported capability
-            throw new DependencyException(namespace, null, null, feedback.l10n("ERROR_UnknownCapability"));
+            throw new MetadataException(BundleConstants.BUNDLE_REQUIRED, feedback.l10n("ERROR_UnknownCapability"));
         }
         parseParameters();
 
@@ -523,5 +537,112 @@ public class HeaderParser {
         parseFilterSpecification();
 
         return filterValue;
+    }
+
+    public Map<String, Object> parseProvidedCapabilities() {
+        if (isEmpty()) {
+            return Collections.emptyMap();
+        }
+        String namespace = parseNamespace();
+
+        char c = next();
+        if (c != ';' && c != 0) {
+            throw metaErr("ERROR_InvalidCapabilitySyntax");
+        }
+
+        if (!BundleConstants.GRAALVM_CAPABILITY.equals(namespace)) {
+            // unsupported capability
+            throw new DependencyException(namespace, null, null, feedback.l10n("ERROR_UnknownCapability"));
+        }
+        while (!isEmpty()) {
+            parseCapability();
+        }
+        return capabilities;
+    }
+
+    public Set<String> parseDependencies() {
+        if (isEmpty()) {
+            return Collections.emptySet();
+        }
+        while (!isEmpty()) {
+            String sn = parseSymbolicName();
+            dependencies.add(sn);
+            skipWhitespaces();
+            if (isEmpty()) {
+                break;
+            }
+            char c = next();
+            switch (c) {
+                case ',':
+                    // OK
+                    break;
+                case ';':
+                    throw metaEx("ERROR_DependencyParametersNotSupported");
+            }
+        }
+        return dependencies;
+    }
+
+    private void parseCapability() {
+        String capName = readExtendedName();
+        if (capName.isEmpty()) {
+            throw metaEx("ERROR_InvalidCapabilityName");
+        }
+        directiveOrParameterName = capName;
+
+        char c = next();
+        boolean dcolon = c == ':'; // NOI18N
+        boolean makeVersion = false;
+        if (dcolon) {
+            if (ch() == '=') {
+                throw metaEx("ERROR_InvalidCapabilitySyntax", capName);
+            }
+            skipWhitespaces();
+            while (true) {
+                if (isEmpty()) {
+                    throw metaEx("ERROR_InvalidCapabilitySyntax", capName);
+                }
+                c = next();
+                if (Character.isWhitespace(c) || c == '=' || c == ';') {
+                    if (isEmpty()) {
+                        throw metaEx("ERROR_InvalidCapabilitySyntax", capName);
+                    }
+                    break;
+                } else if (!isAlphaNum(c)) {
+                    throw metaEx("ERROR_InvalidCapabilitySyntax", capName);
+                }
+            }
+            String type = cut(1);
+
+            switch (type.toLowerCase(Locale.ENGLISH)) {
+                case "version":
+                    makeVersion = true;
+                    break;
+                case "string":
+                    break;
+                case "long":
+                case "double":
+                case "":
+                default:
+                    throw metaEx("ERROR_UnsupportedCapabilityType", capName, type);
+            }
+            skipWhitespaces();
+        }
+        if (c != '=') { // NOI18N
+            throw metaEx("ERROR_InvalidCapabilitySyntax", capName);
+        }
+        String s = parseArgument();
+        Object o;
+
+        if (makeVersion) {
+            try {
+                o = Version.fromString(s);
+            } catch (IllegalArgumentException ex) {
+                throw metaEx("ERROR_InvalidCapabilityVersion", capName, s);
+            }
+        } else {
+            o = s;
+        }
+        capabilities.put(capName, o);
     }
 }

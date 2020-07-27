@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,26 +26,35 @@ package org.graalvm.component.installer.model;
 
 import java.io.IOException;
 import java.nio.file.NoSuchFileException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Date;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.MissingResourceException;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.graalvm.component.installer.CommonConstants;
+import org.graalvm.component.installer.ComponentCollection;
 import org.graalvm.component.installer.FailedOperationException;
 import org.graalvm.component.installer.Feedback;
+import org.graalvm.component.installer.SystemUtils;
+import org.graalvm.component.installer.Version;
 
 /**
  * Models catalog of installed components. Works closely with {@link ComponentStorage} which handles
  * serialization.
  */
-public final class ComponentRegistry {
-    private final ComponentStorage storage;
+public final class ComponentRegistry implements ComponentCollection {
+    private final ManagementStorage storage;
     private final Feedback env;
 
     /**
@@ -57,6 +66,10 @@ public final class ComponentRegistry {
      * Indexes files path -> component(s).
      */
     private Map<String, Collection<String>> fileIndex;
+
+    /**
+     * For each component ID, a list of components, in their ascending Version order.
+     */
     private Map<String, ComponentInfo> components = new HashMap<>();
     private Map<String, String> graalAttributes;
     private Map<String, Collection<String>> replacedFiles;
@@ -67,48 +80,126 @@ public final class ComponentRegistry {
      */
     private boolean replaceFilesChanged;
 
-    public ComponentRegistry(Feedback env, ComponentStorage storage) {
+    /**
+     * Allows update to a newer distribution, not just patches. This will cause components from
+     * newer GraalVM distributions to be accepted, even though it means a reinstall. Normally just
+     * minor patches are accepted so the current component can be replaced.
+     */
+    private boolean allowDistUpdate;
+
+    public ComponentRegistry(Feedback env, ManagementStorage storage) {
         this.storage = storage;
         this.env = env;
     }
 
-    public ComponentInfo findComponent(String id) {
+    public boolean compatibleVersion(Version v) {
+        Version gv = getGraalVersion();
+        if (allowDistUpdate) {
+            return gv.updatable().equals(v.updatable());
+        } else {
+            return gv.onlyVersion().equals(v.installVersion());
+        }
+    }
+
+    /**
+     * @return True, if components from newer distributions are allowed.
+     */
+    public boolean isAllowDistUpdate() {
+        return allowDistUpdate;
+    }
+
+    /**
+     * Enables components from newer distributions.
+     * 
+     * @param allowDistUpdate
+     */
+    @Override
+    public void setAllowDistUpdate(boolean allowDistUpdate) {
+        this.allowDistUpdate = allowDistUpdate;
+    }
+
+    @Override
+    public ComponentInfo findComponentMatch(String idspec, Version.Match vm, boolean exact) {
+        Version.Match[] vmatch = new Version.Match[1];
+        String id = Version.idAndVersion(idspec, vmatch);
         if (!allLoaded) {
-            return loadSingleComponent(id, false, false);
+            return loadSingleComponent(id, false, false, exact);
         }
         ComponentInfo ci = components.get(id);
         if (ci != null) {
             return ci;
         }
-        String fullId = findAbbreviatedId(id);
+        String fullId = exact ? id : findAbbreviatedId(id);
         return fullId == null ? null : components.get(fullId);
     }
 
     private String findAbbreviatedId(String id) {
         String candidate = null;
-        String end = "." + id.toLowerCase(); // NOI18N
-        for (String s : getComponentIDs()) {
-            if (s.equals(id)) {
-                return id;
+        String lcid = id.toLowerCase(Locale.ENGLISH);
+        String end = "." + lcid; // NOI18N
+        Collection<String> ids = getComponentIDs();
+        String ambiguous = null;
+        for (String s : ids) {
+            String lcs = s.toLowerCase(Locale.ENGLISH);
+            if (lcs.equals(lcid)) {
+                return s;
             }
-            if (s.toLowerCase().endsWith(end)) {
+            if (lcs.endsWith(end)) {
                 if (candidate != null) {
-                    throw env.failure("COMPONENT_AmbiguousIdFound", null, candidate, s);
+                    ambiguous = s;
+                } else {
+                    candidate = s;
                 }
-                candidate = s;
             }
+        }
+        if (ambiguous != null) {
+            throw env.failure("COMPONENT_AmbiguousIdFound", null, candidate, ambiguous);
         }
         return candidate;
     }
+
+    /**
+     * Regexp to extract specification version. Optional {@code "1."} in front, optional
+     * {@code ".micro_patchlevel"} suffix.
+     */
+    private static final Pattern JAVA_VERSION_PATTERN = Pattern.compile("((?:1\\.)?[0-9]+)([._].*)?"); // NOI18N
 
     public Map<String, String> getGraalCapabilities() {
         if (graalAttributes != null) {
             return graalAttributes;
         }
-        graalAttributes = storage.loadGraalVersionInfo();
+        Map<String, String> m = new HashMap<>(storage.loadGraalVersionInfo());
+        String v = m.get(CommonConstants.CAP_JAVA_VERSION);
+        if (v != null) {
+            Matcher rm = JAVA_VERSION_PATTERN.matcher(v);
+            if (rm.matches()) {
+                v = rm.group(1);
+            }
+            int mv = SystemUtils.interpretJavaMajorVersion(v);
+            if (mv < 1) {
+                m.remove(CommonConstants.CAP_JAVA_VERSION);
+            } else {
+                m.put(CommonConstants.CAP_JAVA_VERSION, "" + mv); // NOI18N
+            }
+            graalAttributes = m;
+        }
+        // On JDK11, amd64 architecture name changed to x86_64.
+        v = SystemUtils.normalizeArchitecture(
+                        m.get(CommonConstants.CAP_OS_NAME),
+                        m.get(CommonConstants.CAP_OS_ARCH));
+        if (v != null) {
+            m.put(CommonConstants.CAP_OS_ARCH, v);
+        }
+        v = SystemUtils.normalizeOSName(
+                        m.get(CommonConstants.CAP_OS_NAME),
+                        m.get(CommonConstants.CAP_OS_ARCH));
+        if (v != null) {
+            m.put(CommonConstants.CAP_OS_NAME, v);
+        }
         return graalAttributes;
     }
 
+    @Override
     public Collection<String> getComponentIDs() {
         if (!allLoaded) {
             try {
@@ -136,7 +227,7 @@ public final class ComponentRegistry {
             }
         }
         if (allLoaded) {
-            components.remove(id, info);
+            components.remove(id);
         }
         storage.deleteComponent(id);
         updateReplacedFiles();
@@ -162,10 +253,18 @@ public final class ComponentRegistry {
             }
         }
         if (allLoaded) {
-            components.put(id, info);
+            addComponentToCache(info);
         }
         storage.saveComponent(info);
         updateReplacedFiles();
+    }
+
+    private void addComponentToCache(ComponentInfo info) {
+        String id = info.getId();
+        ComponentInfo old = components.put(id, info);
+        if (old != null) {
+            throw new IllegalStateException("Replacing existing component");
+        }
     }
 
     private void computeReplacedFiles() {
@@ -237,11 +336,17 @@ public final class ComponentRegistry {
     }
 
     public ComponentInfo loadSingleComponent(String id, boolean filelist) {
-        return loadSingleComponent(id, filelist, false);
+        return loadSingleComponent(id, filelist, false, false);
     }
 
-    ComponentInfo loadSingleComponent(String id, boolean filelist, boolean notFoundFailure) {
-        String fid = findAbbreviatedId(id);
+    @Override
+    public Collection<ComponentInfo> loadComponents(String id, Version.Match selector, boolean filelist) {
+        ComponentInfo ci = loadSingleComponent(id, filelist);
+        return ci == null ? null : Collections.singletonList(ci);
+    }
+
+    ComponentInfo loadSingleComponent(String id, boolean filelist, boolean notFoundFailure, boolean exact) {
+        String fid = exact ? id : findAbbreviatedId(id);
         if (fid == null) {
             if (notFoundFailure) {
                 throw env.failure("REMOTE_UnknownComponentId", null, id);
@@ -255,13 +360,17 @@ public final class ComponentRegistry {
         }
         String cid = id;
         try {
-            info = storage.loadComponentMetadata(fid);
-            if (info == null) {
+            Collection<ComponentInfo> infos = storage.loadComponentMetadata(fid);
+            if (infos == null || infos.isEmpty()) {
                 if (notFoundFailure) {
                     throw env.failure("REMOTE_UnknownComponentId", null, id);
                 }
                 return null;
             }
+            if (infos.size() != 1) {
+                throw new IllegalArgumentException("Wrong storage");
+            }
+            info = infos.iterator().next();
             cid = info.getId(); // may change if id was an abbreviation
             if (filelist) {
                 storage.loadComponentFiles(info);
@@ -327,10 +436,18 @@ public final class ComponentRegistry {
         return dispCapName;
     }
 
+    @Override
     public String shortenComponentId(ComponentInfo info) {
         String id = info.getId();
         if (id.startsWith(CommonConstants.GRAALVM_CORE_PREFIX)) {
-            String shortId = id.substring(CommonConstants.GRAALVM_CORE_PREFIX.length());
+            int l = CommonConstants.GRAALVM_CORE_PREFIX.length();
+            if (id.length() == l) {
+                return CommonConstants.GRAALVM_CORE_SHORT_ID;
+            }
+            if (id.charAt(l) != '.' && id.length() > l + 1) {
+                return id;
+            }
+            String shortId = id.substring(l + 1);
             try {
                 ComponentInfo reg = findComponent(shortId);
                 if (reg == null || reg.getId().equals(id)) {
@@ -341,5 +458,81 @@ public final class ComponentRegistry {
             }
         }
         return id;
+    }
+
+    public Date isLicenseAccepted(ComponentInfo info, String id) {
+        return storage.licenseAccepted(info, id);
+    }
+
+    public void acceptLicense(ComponentInfo info, String id, String text) {
+        acceptLicense(info, id, text, null);
+    }
+
+    public void acceptLicense(ComponentInfo info, String id, String text, Date d) {
+        try {
+            storage.recordLicenseAccepted(info, id, text, d);
+        } catch (IOException ex) {
+            env.error("ERROR_RecordLicenseAccepted", ex, ex.getLocalizedMessage());
+        }
+    }
+
+    private Version graalVer;
+
+    public Version getGraalVersion() {
+        if (graalVer == null) {
+            graalVer = Version.fromString(getGraalCapabilities().get(CommonConstants.CAP_GRAALVM_VERSION));
+        }
+        return graalVer;
+    }
+
+    public Map<String, Collection<String>> getAcceptedLicenses() {
+        return storage.findAcceptedLicenses();
+    }
+
+    public String licenseText(String licId) {
+        return storage.licenseText(licId);
+    }
+
+    public boolean isMacOsX() {
+        return storage.loadGraalVersionInfo().get("os_name").toLowerCase().contains("macos");
+    }
+
+    public void verifyAdministratorAccess() throws IOException {
+        storage.saveComponent(null);
+    }
+
+    /**
+     * Finds components which depend on the supplied one. Optionally searches recursively, so it
+     * finds the dependency closure.
+     * 
+     * @param recursive create closure of dependent components.
+     * @param startFrom Component whose dependents should be returned.
+     * @return Dependent components or closure thereof, depending on parameters
+     */
+    public Set<ComponentInfo> findDependentComponents(ComponentInfo startFrom, boolean recursive) {
+        if (startFrom == null) {
+            return Collections.emptySet();
+        }
+        Deque<String> toSearch = new ArrayDeque<>();
+        toSearch.add(startFrom.getId());
+        Set<ComponentInfo> result = new HashSet<>();
+
+        while (!toSearch.isEmpty()) {
+            String id = toSearch.poll();
+            for (String cid : getComponentIDs()) {
+                ComponentInfo ci = loadSingleComponent(cid, false, false, true);
+                if (ci.getDependencies().contains(id)) {
+                    result.add(ci);
+                    if (recursive) {
+                        toSearch.add(ci.getId());
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    public String getJavaVersion() {
+        return getGraalCapabilities().get(CommonConstants.CAP_JAVA_VERSION);
     }
 }

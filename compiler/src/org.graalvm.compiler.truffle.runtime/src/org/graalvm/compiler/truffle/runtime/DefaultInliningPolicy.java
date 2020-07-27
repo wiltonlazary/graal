@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,18 +24,10 @@
  */
 package org.graalvm.compiler.truffle.runtime;
 
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TruffleInliningMaxCallerSize;
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TruffleMaximumRecursiveInlining;
-
-import org.graalvm.compiler.truffle.common.TruffleCompilerOptions;
-
+import org.graalvm.compiler.truffle.options.PolyglotCompilerOptions;
 import com.oracle.truffle.api.CompilerOptions;
 
 public class DefaultInliningPolicy implements TruffleInliningPolicy {
-
-    private static final String REASON_RECURSION = "number of recursions > " + TruffleCompilerOptions.getValue(TruffleMaximumRecursiveInlining);
-    private static final String REASON_MAXIMUM_NODE_COUNT = "deepNodeCount * callSites  > " + TruffleCompilerOptions.getValue(TruffleInliningMaxCallerSize);
-    private static final String REASON_MAXIMUM_TOTAL_NODE_COUNT = "totalNodeCount > " + TruffleCompilerOptions.getValue(TruffleInliningMaxCallerSize);
 
     @Override
     public double calculateScore(TruffleInliningProfile profile) {
@@ -48,19 +40,21 @@ public class DefaultInliningPolicy implements TruffleInliningPolicy {
             profile.setFailedReason(profile.getCached().getFailedReason());
             return false;
         }
-        if (profile.getRecursions() > TruffleCompilerOptions.getValue(TruffleMaximumRecursiveInlining)) {
-            profile.setFailedReason(REASON_RECURSION);
+
+        final OptimizedCallTarget target = profile.getCallNode().getCallTarget();
+        if (profile.getRecursions() > target.getOptionValue(PolyglotCompilerOptions.InliningRecursionDepth)) {
+            profile.setFailedReason(FailedReason.REASON_RECURSION);
             return false;
         }
 
-        int inliningMaxCallerSize = TruffleCompilerOptions.getValue(TruffleInliningMaxCallerSize);
+        int inliningMaxCallerSize = target.getOptionValue(PolyglotCompilerOptions.InliningNodeBudget);
 
         if (options instanceof GraalCompilerOptions) {
             inliningMaxCallerSize = Math.max(inliningMaxCallerSize, ((GraalCompilerOptions) options).getMinInliningMaxCallerSize());
         }
 
         if (currentNodeCount + profile.getDeepNodeCount() > inliningMaxCallerSize) {
-            profile.setFailedReason(REASON_MAXIMUM_TOTAL_NODE_COUNT);
+            profile.setFailedReason(FailedReason.REASON_MAXIMUM_TOTAL_NODE_COUNT);
             return false;
         }
 
@@ -70,7 +64,7 @@ public class DefaultInliningPolicy implements TruffleInliningPolicy {
 
         int cappedCallSites = Math.min(Math.max(profile.getCallSites(), 1), 10);
         if (profile.getDeepNodeCount() * cappedCallSites > inliningMaxCallerSize) {
-            profile.setFailedReason(REASON_MAXIMUM_NODE_COUNT);
+            profile.setFailedReason(FailedReason.REASON_MAXIMUM_NODE_COUNT);
             return false;
         }
 

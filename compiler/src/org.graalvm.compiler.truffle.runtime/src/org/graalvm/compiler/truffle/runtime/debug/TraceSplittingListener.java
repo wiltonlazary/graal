@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,22 +24,18 @@
  */
 package org.graalvm.compiler.truffle.runtime.debug;
 
-import static org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TraceTruffleSplitting;
+import java.util.Map;
+
+import org.graalvm.compiler.truffle.common.TruffleCompilerRuntime;
+import org.graalvm.compiler.truffle.runtime.GraalTruffleRuntime;
+import org.graalvm.compiler.truffle.runtime.GraalTruffleRuntimeListener;
+import org.graalvm.compiler.truffle.runtime.OptimizedCallTarget;
+import org.graalvm.compiler.truffle.runtime.OptimizedDirectCallNode;
+import org.graalvm.compiler.truffle.options.PolyglotCompilerOptions;
 
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.SourceSection;
-import org.graalvm.compiler.truffle.common.TruffleCompilerOptions;
-import org.graalvm.compiler.truffle.common.TruffleCompilerRuntime;
-import org.graalvm.compiler.truffle.runtime.GraalTruffleRuntimeListener;
-import org.graalvm.compiler.truffle.runtime.GraalTruffleRuntime;
-import org.graalvm.compiler.truffle.runtime.OptimizedCallTarget;
-import org.graalvm.compiler.truffle.runtime.OptimizedDirectCallNode;
-
-import java.io.File;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.Map;
 
 public final class TraceSplittingListener implements GraalTruffleRuntimeListener {
 
@@ -47,9 +43,7 @@ public final class TraceSplittingListener implements GraalTruffleRuntimeListener
     }
 
     public static void install(GraalTruffleRuntime runtime) {
-        if (TruffleCompilerOptions.getValue(TraceTruffleSplitting)) {
-            runtime.addListener(new TraceSplittingListener());
-        }
+        runtime.addListener(new TraceSplittingListener());
     }
 
     private int splitCount;
@@ -57,10 +51,23 @@ public final class TraceSplittingListener implements GraalTruffleRuntimeListener
     @Override
     public void onCompilationSplit(OptimizedDirectCallNode callNode) {
         OptimizedCallTarget callTarget = callNode.getCallTarget();
-        String label = String.format("split %3s-%-4s-%-4s ", splitCount++, Integer.toHexString(callNode.getCurrentCallTarget().hashCode()), callNode.getCallCount());
-        final Map<String, Object> debugProperties = callTarget.getDebugProperties(null);
-        debugProperties.put("SourceSection", extractSourceSection(callNode));
-        TruffleCompilerRuntime.getRuntime().logEvent(0, label, callTarget.toString(), debugProperties);
+        if (callTarget.getOptionValue(PolyglotCompilerOptions.TraceSplitting)) {
+            String label = String.format("split %3s-%-4s-%-4s ", splitCount++, Integer.toHexString(callNode.getCurrentCallTarget().hashCode()), callNode.getCallCount());
+            final Map<String, Object> debugProperties = callTarget.getDebugProperties(null);
+            debugProperties.put("SourceSection", extractSourceSection(callNode));
+            TruffleCompilerRuntime.getRuntime().logEvent(callTarget, 0, label, debugProperties);
+        }
+    }
+
+    @Override
+    public void onCompilationSplitFailed(OptimizedDirectCallNode callNode, CharSequence reason) {
+        OptimizedCallTarget callTarget = callNode.getCallTarget();
+        if (callTarget.getOptionValue(PolyglotCompilerOptions.TraceSplitting)) {
+            String label = String.format("split failed " + reason);
+            final Map<String, Object> debugProperties = callTarget.getDebugProperties(null);
+            debugProperties.put("SourceSection", extractSourceSection(callNode));
+            TruffleCompilerRuntime.getRuntime().logEvent(callTarget, 0, label, debugProperties);
+        }
     }
 
     private static String extractSourceSection(OptimizedDirectCallNode node) {
@@ -75,7 +82,7 @@ public final class TraceSplittingListener implements GraalTruffleRuntimeListener
     }
 
     static String getShortDescription(SourceSection sourceSection) {
-        if (sourceSection.getSource() == null) {
+        if (sourceSection == null || sourceSection.getSource() == null) {
             // TODO the source == null branch can be removed if the deprecated
             // SourceSection#createUnavailable has be removed.
             return "<Unknown>";
@@ -84,14 +91,7 @@ public final class TraceSplittingListener implements GraalTruffleRuntimeListener
         if (sourceSection.getSource().getPath() == null) {
             b.append(sourceSection.getSource().getName());
         } else {
-            Path pathAbsolute = Paths.get(sourceSection.getSource().getPath());
-            Path pathBase = new File("").getAbsoluteFile().toPath();
-            try {
-                Path pathRelative = pathBase.relativize(pathAbsolute);
-                b.append(pathRelative.toFile());
-            } catch (IllegalArgumentException e) {
-                b.append(sourceSection.getSource().getName());
-            }
+            b.append(sourceSection.getSource().getPath());
         }
 
         b.append("~").append(formatIndices(sourceSection, true));

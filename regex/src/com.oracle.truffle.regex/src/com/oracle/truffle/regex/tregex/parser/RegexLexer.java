@@ -1,44 +1,61 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.regex.tregex.parser;
-
-import com.oracle.truffle.regex.RegexFlags;
-import com.oracle.truffle.regex.RegexOptions;
-import com.oracle.truffle.regex.RegexSource;
-import com.oracle.truffle.regex.RegexSyntaxException;
-import com.oracle.truffle.regex.chardata.CodePointRange;
-import com.oracle.truffle.regex.chardata.CodePointSet;
-import com.oracle.truffle.regex.chardata.Constants;
-import com.oracle.truffle.regex.chardata.UnicodeCharacterProperties;
-import com.oracle.truffle.regex.tregex.util.DebugUtil;
-import com.oracle.truffle.regex.util.CompilationFinalBitSet;
 
 import java.math.BigInteger;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Map;
+
+import com.oracle.truffle.regex.RegexFlags;
+import com.oracle.truffle.regex.RegexOptions;
+import com.oracle.truffle.regex.RegexSource;
+import com.oracle.truffle.regex.RegexSyntaxException;
+import com.oracle.truffle.regex.charset.CodePointSet;
+import com.oracle.truffle.regex.charset.CodePointSetAccumulator;
+import com.oracle.truffle.regex.charset.Constants;
+import com.oracle.truffle.regex.charset.UnicodeProperties;
+import com.oracle.truffle.regex.tregex.string.Encodings.Encoding;
+import com.oracle.truffle.regex.tregex.util.Exceptions;
+import com.oracle.truffle.regex.util.CompilationFinalBitSet;
 
 public final class RegexLexer {
 
@@ -46,23 +63,27 @@ public final class RegexLexer {
     private static final CompilationFinalBitSet SYNTAX_CHARS = CompilationFinalBitSet.valueOf(
                     '^', '$', '/', '\\', '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|');
 
-    private static final CodePointSet ID_START = UnicodeCharacterProperties.getProperty("ID_Start");
-    private static final CodePointSet ID_CONTINUE = UnicodeCharacterProperties.getProperty("ID_Continue");
+    private static final CodePointSet ID_START = UnicodeProperties.getProperty("ID_Start");
+    private static final CodePointSet ID_CONTINUE = UnicodeProperties.getProperty("ID_Continue");
 
     private final RegexSource source;
     private final String pattern;
     private final RegexFlags flags;
+    private final Encoding encoding;
     private final RegexOptions options;
     private Token lastToken;
     private int index = 0;
     private int nGroups = 1;
     private boolean identifiedAllGroups = false;
     private Map<String, Integer> namedCaptureGroups = null;
+    private final CodePointSetAccumulator curCharClass = new CodePointSetAccumulator();
+    private final CodePointSetAccumulator charClassCaseFoldTmp = new CodePointSetAccumulator();
 
-    public RegexLexer(RegexSource source, RegexOptions options) {
+    public RegexLexer(RegexSource source, RegexFlags flags, RegexOptions options) {
         this.source = source;
         this.pattern = source.getPattern();
-        this.flags = source.getFlags();
+        this.flags = flags;
+        this.encoding = source.getEncoding();
         this.options = options;
     }
 
@@ -81,14 +102,14 @@ public final class RegexLexer {
     /**
      * Sets the {@link com.oracle.truffle.api.source.SourceSection} of a given {@link Token} in
      * respect of {@link RegexSource#getSource()}.
-     * 
+     *
      * @param startIndex inclusive start index of the source section in respect of
      *            {@link RegexSource#getPattern()}.
      * @param endIndex exclusive end index of the source section in respect of
      *            {@link RegexSource#getPattern()}.
      */
     private void setSourceSection(Token t, int startIndex, int endIndex) {
-        if (DebugUtil.DEBUG) {
+        if (options.isDumpAutomata()) {
             // RegexSource#getSource() prepends a slash ('/') to the pattern, so we have to add an
             // offset of 1 here.
             t.setSourceSection(source.getSource().createSection(startIndex + 1, endIndex - startIndex));
@@ -138,7 +159,7 @@ public final class RegexLexer {
         return index >= pattern.length();
     }
 
-    private int numberOfCaptureGroups() throws RegexSyntaxException {
+    public int numberOfCaptureGroups() throws RegexSyntaxException {
         if (!identifiedAllGroups) {
             identifyCaptureGroups();
             identifiedAllGroups = true;
@@ -214,15 +235,38 @@ public final class RegexLexer {
         index = restoreIndex;
     }
 
-    private Token charClass(CodePointSet codePointSet) {
-        return charClass(codePointSet, false);
+    private Token charClass(int codePoint) {
+        if (flags.isIgnoreCase()) {
+            curCharClass.clear();
+            curCharClass.appendRange(codePoint, codePoint);
+            return charClass(false);
+        } else {
+            return Token.createCharClass(CodePointSet.create(codePoint), true);
+        }
     }
 
-    private Token charClass(CodePointSet codePointSet, boolean invert) {
-        CodePointSet processedSet = codePointSet;
-        processedSet = flags.isIgnoreCase() ? CaseFoldTable.applyCaseFold(processedSet, flags.isUnicode()) : processedSet;
-        processedSet = invert ? processedSet.createInverse() : processedSet;
-        return Token.createCharClass(processedSet);
+    private Token charClass(CodePointSet codePointSet) {
+        if (flags.isIgnoreCase()) {
+            curCharClass.clear();
+            curCharClass.addSet(codePointSet);
+            return charClass(false);
+        } else {
+            return Token.createCharClass(codePointSet);
+        }
+    }
+
+    private Token charClass(boolean invert) {
+        boolean wasSingleChar = !invert && curCharClass.matchesSingleChar();
+        if (flags.isIgnoreCase()) {
+            CaseFoldTable.CaseFoldingAlgorithm caseFolding = flags.isUnicode() ? CaseFoldTable.CaseFoldingAlgorithm.ECMAScriptUnicode : CaseFoldTable.CaseFoldingAlgorithm.ECMAScriptNonUnicode;
+            CaseFoldTable.applyCaseFold(curCharClass, charClassCaseFoldTmp, caseFolding);
+        }
+        CodePointSet cps = pruneCharClass(curCharClass.toCodePointSet());
+        return Token.createCharClass(invert ? cps.createInverse(encoding) : cps, wasSingleChar);
+    }
+
+    private CodePointSet pruneCharClass(CodePointSet cps) {
+        return encoding.getFullSet().createIntersection(cps, curCharClass.getTmp());
     }
 
     /* lexer */
@@ -231,11 +275,11 @@ public final class RegexLexer {
         final char c = consumeChar();
         switch (c) {
             case '.':
-                return charClass(flags.isDotAll() ? Constants.DOT_ALL : Constants.DOT);
+                return Token.createCharClass(pruneCharClass(flags.isDotAll() ? Constants.DOT_ALL : Constants.DOT));
             case '^':
-                return Token.create(Token.Kind.caret);
+                return Token.createCaret();
             case '$':
-                return Token.create(Token.Kind.dollar);
+                return Token.createDollar();
             case '{':
             case '*':
             case '+':
@@ -249,27 +293,27 @@ public final class RegexLexer {
                     // Neverthelesss, in Unicode mode, we should still be strict.
                     throw syntaxError(ErrorMessages.UNMATCHED_RIGHT_BRACE);
                 }
-                return charClass(CodePointSet.create(c));
+                return charClass(c);
             case '|':
-                return Token.create(Token.Kind.alternation);
+                return Token.createAlternation();
             case '(':
                 return parseGroupBegin();
             case ')':
-                return Token.create(Token.Kind.groupEnd);
+                return Token.createGroupEnd();
             case '[':
                 return parseCharClass();
             case ']':
                 if (flags.isUnicode()) {
                     throw syntaxError(ErrorMessages.UNMATCHED_RIGHT_BRACKET);
                 }
-                return charClass(CodePointSet.create(c));
+                return charClass(c);
             case '\\':
                 return parseEscape();
             default:
                 if (flags.isUnicode() && Character.isHighSurrogate(c)) {
-                    return charClass(CodePointSet.create(finishSurrogatePair(c)));
+                    return charClass(finishSurrogatePair(c));
                 }
-                return charClass(CodePointSet.create(c));
+                return charClass(c);
         }
     }
 
@@ -309,12 +353,12 @@ public final class RegexLexer {
                     }
                     throw syntaxError(ErrorMessages.MISSING_GROUP_FOR_BACKREFERENCE);
                 } else {
-                    return charClass(CodePointSet.create(c));
+                    return charClass(c);
                 }
             case 'b':
-                return Token.create(Token.Kind.wordBoundary);
+                return Token.createWordBoundary();
             case 'B':
-                return Token.create(Token.Kind.nonWordBoundary);
+                return Token.createNonWordBoundary();
             default:
                 // Here we differentiate the case when parsing one of the six basic pre-defined
                 // character classes (\w, \W, \d, \D, \s, \S) and Unicode character property
@@ -322,11 +366,11 @@ public final class RegexLexer {
                 // the case-folding step in the `charClass` method and call `Token::createCharClass`
                 // directly.
                 if (isPredefCharClass(c)) {
-                    return Token.createCharClass(parsePredefCharClass(c));
+                    return Token.createCharClass(pruneCharClass(parsePredefCharClass(c)));
                 } else if (flags.isUnicode() && (c == 'p' || c == 'P')) {
                     return charClass(parseUnicodeCharacterProperty(c == 'P'));
                 } else {
-                    return charClass(CodePointSet.create(parseEscapeChar(c, false)));
+                    return charClass(parseEscapeChar(c, false));
                 }
         }
     }
@@ -341,14 +385,14 @@ public final class RegexLexer {
         } else if (consumingLookahead("?<!")) {
             return Token.createLookBehindAssertionBegin(true);
         } else if (consumingLookahead("?:")) {
-            return Token.create(Token.Kind.nonCaptureGroupBegin);
+            return Token.createNonCaptureGroupBegin();
         } else if (consumingLookahead("?<")) {
             String groupName = parseGroupName();
             registerNamedCaptureGroup(groupName);
-            return Token.create(Token.Kind.captureGroupBegin);
+            return Token.createCaptureGroupBegin();
         } else {
             registerCaptureGroup();
-            return Token.create(Token.Kind.captureGroupBegin);
+            return Token.createCaptureGroupBegin();
         }
     }
 
@@ -374,7 +418,7 @@ public final class RegexLexer {
     /**
      * Parse a {@code GroupName}, i.e. {@code <RegExpIdentifierName>}, assuming that the opening
      * {@code <} bracket was already read.
-     * 
+     *
      * @return the StringValue of the {@code RegExpIdentifierName}
      */
     private String parseGroupName() throws RegexSyntaxException {
@@ -449,68 +493,84 @@ public final class RegexLexer {
             throw syntaxError(ErrorMessages.INCOMPLETE_QUANTIFIER);
         }
         index = resetIndex;
-        return charClass(CodePointSet.create('{'));
+        return charClass('{');
     }
 
     private Token parseCharClass() throws RegexSyntaxException {
         final boolean invert = consumingLookahead("^");
-        CodePointSet curCharClass = CodePointSet.createEmpty();
+        curCharClass.clear();
         while (!atEnd()) {
             final char c = consumeChar();
             if (c == ']') {
-                return charClass(curCharClass, invert);
+                return charClass(invert);
             }
-            parseCharClassRange(c, curCharClass);
+            parseCharClassRange(c);
         }
         throw syntaxError(ErrorMessages.UNMATCHED_LEFT_BRACKET);
     }
 
-    private CodePointSet parseCharClassAtom(char c) throws RegexSyntaxException {
+    private CodePointSet parseCharClassAtomPredefCharClass(char c) throws RegexSyntaxException {
         if (c == '\\') {
             if (atEnd()) {
                 throw syntaxError(ErrorMessages.ENDS_WITH_UNFINISHED_ESCAPE_SEQUENCE);
             }
             if (isEscapeCharClass(curChar())) {
                 return parseEscapeCharClass(consumeChar());
-            } else {
-                return CodePointSet.create(parseEscapeChar(consumeChar(), true));
             }
+        }
+        return null;
+    }
+
+    private int parseCharClassAtomCodePoint(char c) throws RegexSyntaxException {
+        if (c == '\\') {
+            assert !atEnd();
+            assert !isEscapeCharClass(curChar());
+            return parseEscapeChar(consumeChar(), true);
         } else if (flags.isUnicode() && Character.isHighSurrogate(c)) {
-            return CodePointSet.create(finishSurrogatePair(c));
+            return finishSurrogatePair(c);
         } else {
-            return CodePointSet.create(c);
+            return c;
         }
     }
 
-    private void parseCharClassRange(char c, CodePointSet curCharClass) throws RegexSyntaxException {
-        CodePointSet firstAtom = parseCharClassAtom(c);
+    private void parseCharClassRange(char c) throws RegexSyntaxException {
+        CodePointSet firstAtomCC = parseCharClassAtomPredefCharClass(c);
+        int firstAtomCP = firstAtomCC == null ? parseCharClassAtomCodePoint(c) : -1;
         if (consumingLookahead("-")) {
             if (atEnd() || lookahead("]")) {
-                curCharClass.addSet(firstAtom);
-                curCharClass.addRange(new CodePointRange((int) '-'));
+                addCharClassAtom(firstAtomCC, firstAtomCP);
+                curCharClass.addRange('-', '-');
             } else {
-                CodePointSet secondAtom = parseCharClassAtom(consumeChar());
+                char nextC = consumeChar();
+                CodePointSet secondAtomCC = parseCharClassAtomPredefCharClass(nextC);
+                int secondAtomCP = secondAtomCC == null ? parseCharClassAtomCodePoint(nextC) : -1;
                 // Runtime Semantics: CharacterRangeOrUnion(firstAtom, secondAtom)
-                if (!firstAtom.matchesSingleChar() || !secondAtom.matchesSingleChar()) {
+                if (firstAtomCC != null || secondAtomCC != null) {
                     if (flags.isUnicode()) {
                         throw syntaxError(ErrorMessages.INVALID_CHARACTER_CLASS);
                     } else {
-                        curCharClass.addSet(firstAtom);
-                        curCharClass.addSet(secondAtom);
-                        curCharClass.addRange(new CodePointRange((int) '-'));
+                        addCharClassAtom(firstAtomCC, firstAtomCP);
+                        addCharClassAtom(secondAtomCC, secondAtomCP);
+                        curCharClass.addRange('-', '-');
                     }
                 } else {
-                    int firstChar = firstAtom.getRanges().get(0).lo;
-                    int secondChar = secondAtom.getRanges().get(0).lo;
-                    if (secondChar < firstChar) {
+                    if (secondAtomCP < firstAtomCP) {
                         throw syntaxError(ErrorMessages.CHAR_CLASS_RANGE_OUT_OF_ORDER);
                     } else {
-                        curCharClass.addRange(new CodePointRange(firstChar, secondChar));
+                        curCharClass.addRange(firstAtomCP, secondAtomCP);
                     }
                 }
             }
         } else {
-            curCharClass.addSet(firstAtom);
+            addCharClassAtom(firstAtomCC, firstAtomCP);
+        }
+    }
+
+    private void addCharClassAtom(CodePointSet preDefCharClass, int codePoint) {
+        if (preDefCharClass != null) {
+            curCharClass.addSet(preDefCharClass);
+        } else {
+            curCharClass.addRange(codePoint, codePoint);
         }
     }
 
@@ -520,7 +580,7 @@ public final class RegexLexer {
         } else if (flags.isUnicode() && (c == 'p' || c == 'P')) {
             return parseUnicodeCharacterProperty(c == 'P');
         } else {
-            throw new IllegalStateException();
+            throw Exceptions.shouldNotReachHere();
         }
     }
 
@@ -557,7 +617,7 @@ public final class RegexLexer {
                     return Constants.NON_WORD_CHARS;
                 }
             default:
-                throw new IllegalStateException();
+                throw Exceptions.shouldNotReachHere();
         }
     }
 
@@ -565,16 +625,16 @@ public final class RegexLexer {
         if (!consumingLookahead("{")) {
             throw syntaxError(ErrorMessages.INVALID_UNICODE_PROPERTY);
         }
-        StringBuilder propSpecBuilder = new StringBuilder();
+        int namePos = index;
         while (!atEnd() && curChar() != '}') {
-            propSpecBuilder.append(consumeChar());
+            advance();
         }
         if (!consumingLookahead("}")) {
             throw syntaxError(ErrorMessages.ENDS_WITH_UNFINISHED_UNICODE_PROPERTY);
         }
         try {
-            CodePointSet propertySet = UnicodeCharacterProperties.getProperty(propSpecBuilder.toString());
-            return invert ? propertySet.createInverse() : propertySet;
+            CodePointSet propertySet = encoding.getFullSet().createIntersection(UnicodeProperties.getProperty(pattern.substring(namePos, index - 1)), curCharClass.getTmp());
+            return invert ? propertySet.createInverse(encoding) : propertySet;
         } catch (IllegalArgumentException e) {
             throw syntaxError(e.getMessage());
         }
@@ -583,7 +643,7 @@ public final class RegexLexer {
     /**
      * Parse a {@code RegExpUnicodeEscapeSequence}, assuming that the prefix '&#92;u' has already
      * been read.
-     * 
+     *
      * @return the code point of the escaped character, or -1 if the escape was malformed
      */
     private int parseUnicodeEscapeChar() throws RegexSyntaxException {
@@ -619,7 +679,7 @@ public final class RegexLexer {
         }
         switch (c) {
             case '0':
-                if (flags.isUnicode() && isDecimal(curChar())) {
+                if (flags.isUnicode() && !atEnd() && isDecimal(curChar())) {
                     throw syntaxError(ErrorMessages.INVALID_ESCAPE);
                 }
                 if (!flags.isUnicode() && !atEnd() && isOctal(curChar())) {
@@ -804,6 +864,6 @@ public final class RegexLexer {
     }
 
     private RegexSyntaxException syntaxError(String msg) {
-        return new RegexSyntaxException(pattern, flags, msg);
+        return new RegexSyntaxException(source, msg);
     }
 }

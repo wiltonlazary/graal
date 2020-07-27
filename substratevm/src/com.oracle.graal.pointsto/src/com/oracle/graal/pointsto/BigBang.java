@@ -47,16 +47,15 @@ import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
 import org.graalvm.compiler.core.common.SuppressFBWarnings;
 import org.graalvm.compiler.core.common.spi.ConstantFieldProvider;
 import org.graalvm.compiler.debug.DebugContext;
+import org.graalvm.compiler.debug.DebugContext.Builder;
 import org.graalvm.compiler.debug.DebugHandlersFactory;
 import org.graalvm.compiler.debug.Indent;
-import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeSourcePosition;
-import org.graalvm.compiler.nodes.CallTargetNode;
-import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.spi.Replacements;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.printer.GraalDebugHandlersFactory;
 
+import com.oracle.graal.pointsto.ObjectScanner.ReusableSet;
 import com.oracle.graal.pointsto.api.HostVM;
 import com.oracle.graal.pointsto.api.PointstoOptions;
 import com.oracle.graal.pointsto.constraints.UnsupportedFeatures;
@@ -81,11 +80,14 @@ import com.oracle.graal.pointsto.util.CompletionExecutor;
 import com.oracle.graal.pointsto.util.CompletionExecutor.DebugContextRunnable;
 import com.oracle.graal.pointsto.util.Timer;
 import com.oracle.graal.pointsto.util.Timer.StopTimer;
+import com.oracle.svm.util.ImageGeneratorThreadMarker;
 
+import jdk.vm.ci.code.BytecodePosition;
 import jdk.vm.ci.common.JVMCIError;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
+import jdk.vm.ci.meta.JavaType;
 
 public abstract class BigBang {
 
@@ -94,6 +96,8 @@ public abstract class BigBang {
     private final DebugContext debug;
     private final HostedProviders providers;
     private final Replacements replacements;
+
+    private final HeapScanningPolicy heapScanningPolicy;
 
     /** The type of {@link java.lang.Object}. */
     private final AnalysisType objectType;
@@ -112,6 +116,7 @@ public abstract class BigBang {
      * Processing queue.
      */
     private final CompletionExecutor executor;
+    private final Runnable heartbeatCallback;
 
     private ConcurrentMap<AbstractUnsafeLoadTypeFlow, Boolean> unsafeLoads;
     private ConcurrentMap<AbstractUnsafeStoreTypeFlow, Boolean> unsafeStores;
@@ -119,15 +124,22 @@ public abstract class BigBang {
     public final AtomicLong numParsedGraphs = new AtomicLong();
     private final CompletionExecutor.Timing timing;
 
-    public final Timer typeFlowTimer = new Timer("(typeflow)", false);
-    public final Timer checkObjectsTimer = new Timer("(objects)", false);
+    public final Timer typeFlowTimer;
+    public final Timer checkObjectsTimer;
+    public final Timer processFeaturesTimer;
+    public final Timer analysisTimer;
 
-    public BigBang(OptionValues options, AnalysisUniverse universe, HostedProviders providers, HostVM hostVM, ForkJoinPool executorService,
+    public BigBang(OptionValues options, AnalysisUniverse universe, HostedProviders providers, HostVM hostVM, ForkJoinPool executorService, Runnable heartbeatCallback,
                     UnsupportedFeatures unsupportedFeatures) {
         this.options = options;
         this.debugHandlerFactories = Collections.singletonList(new GraalDebugHandlersFactory(providers.getSnippetReflection()));
-        this.debug = DebugContext.create(options, debugHandlerFactories);
+        this.debug = new Builder(options, debugHandlerFactories).build();
         this.hostVM = hostVM;
+        String imageName = hostVM.getImageName();
+        this.typeFlowTimer = new Timer(imageName, "(typeflow)", false);
+        this.checkObjectsTimer = new Timer(imageName, "(objects)", false);
+        this.processFeaturesTimer = new Timer(imageName, "(features)", false);
+        this.analysisTimer = new Timer(imageName, "analysis", true);
 
         this.universe = universe;
         this.metaAccess = (AnalysisMetaAccess) providers.getMetaAccess();
@@ -145,7 +157,7 @@ public abstract class BigBang {
         unknownTypeFlow = new UnknownTypeFlow();
 
         trackTypeFlowInputs = PointstoOptions.TrackInputFlows.getValue(options);
-        reportAnalysisStatistics = PointstoOptions.ReportAnalysisStatistics.getValue(options);
+        reportAnalysisStatistics = PointstoOptions.PrintPointsToStatistics.getValue(options);
         if (reportAnalysisStatistics) {
             PointsToStats.init(this);
         }
@@ -154,8 +166,21 @@ public abstract class BigBang {
         unsafeStores = new ConcurrentHashMap<>();
 
         timing = PointstoOptions.ProfileAnalysisOperations.getValue(options) ? new AnalysisTiming() : null;
-        executor = new CompletionExecutor(this, executorService);
+        executor = new CompletionExecutor(this, executorService, heartbeatCallback);
         executor.init(timing);
+        this.heartbeatCallback = heartbeatCallback;
+
+        heapScanningPolicy = PointstoOptions.ExhaustiveHeapScan.getValue(options)
+                        ? HeapScanningPolicy.scanAll()
+                        : HeapScanningPolicy.skipTypes(skippedHeapTypes());
+    }
+
+    public AnalysisType[] skippedHeapTypes() {
+        return new AnalysisType[]{metaAccess.lookupJavaType(String.class)};
+    }
+
+    public Runnable getHeartbeatCallback() {
+        return heartbeatCallback;
     }
 
     public boolean trackTypeFlowInputs() {
@@ -196,8 +221,8 @@ public abstract class BigBang {
         unsafeStores.putIfAbsent(unsafeStore, true);
     }
 
-    public void reportIllegalUnknownUse(AnalysisMethod method, Node source, String message) {
-        String trace = "Location: " + (source.getNodeSourcePosition() == null ? "[unknown]" : method.asStackTraceElement(source.getNodeSourcePosition().getBCI()).toString()) + "\n";
+    public void reportIllegalUnknownUse(AnalysisMethod method, BytecodePosition source, String message) {
+        String trace = "Location: " + (source == null ? "[unknown]" : source.getMethod().asStackTraceElement(source.getBCI()).toString()) + "\n";
         trace += "Call path:";
         getUnsupportedFeatures().addMessage(method.format("%H.%n(%p)"), method, message, trace);
     }
@@ -217,18 +242,28 @@ public abstract class BigBang {
 
         // force update of the unsafe loads
         for (AbstractUnsafeLoadTypeFlow unsafeLoad : unsafeLoads.keySet()) {
-            TypeFlow<?> receiverFlow = unsafeLoad.receiver();
-            // post the receiver object flow for update; an update of the receiver object
-            // flow will trigger an updated of the observers, i.e., of the unsafe load
-            this.postFlow(receiverFlow);
+            /* Force update for unsafe accessed static fields. */
+            unsafeLoad.initClone(this);
+
+            /*
+             * Force update for unsafe accessed instance fields: post the receiver object flow for
+             * update; an update of the receiver object flow will trigger an updated of the
+             * observers, i.e., of the unsafe load.
+             */
+            this.postFlow(unsafeLoad.receiver());
         }
 
         // force update of the unsafe stores
         for (AbstractUnsafeStoreTypeFlow unsafeStore : unsafeStores.keySet()) {
-            TypeFlow<?> receiverFlow = unsafeStore.receiver();
-            // post the receiver object flow for update; an update of the receiver object
-            // flow will trigger an updated of the observers, i.e., of the unsafe store
-            this.postFlow(receiverFlow);
+            /* Force update for unsafe accessed static fields. */
+            unsafeStore.initClone(this);
+
+            /*
+             * Force update for unsafe accessed instance fields: post the receiver object flow for
+             * update; an update of the receiver object flow will trigger an updated of the
+             * observers, i.e., of the unsafe store.
+             */
+            this.postFlow(unsafeStore.receiver());
         }
     }
 
@@ -252,6 +287,7 @@ public abstract class BigBang {
         unsafeLoads = null;
         unsafeStores = null;
         unknownTypeFlow = null;
+        scannedObjects = null;
 
         ConstantObjectsProfiler.constantTypes.clear();
 
@@ -261,11 +297,11 @@ public abstract class BigBang {
     }
 
     public AnalysisPolicy analysisPolicy() {
-        return hostVM.analysisPolicy();
+        return universe.analysisPolicy();
     }
 
     public AnalysisContextPolicy<AnalysisContext> contextPolicy() {
-        return hostVM.analysisPolicy().getContextPolicy();
+        return universe.analysisPolicy().getContextPolicy();
     }
 
     public AnalysisUniverse getUniverse() {
@@ -286,6 +322,10 @@ public abstract class BigBang {
 
     public UnsupportedFeatures getUnsupportedFeatures() {
         return unsupportedFeatures;
+    }
+
+    public AnalysisType lookup(JavaType type) {
+        return universe.lookup(type);
     }
 
     public AnalysisType getObjectType() {
@@ -337,6 +377,14 @@ public abstract class BigBang {
     }
 
     public TypeState getAllSynchronizedTypeState() {
+        /*
+         * If all-synchrnonized type flow, i.e., the type flow that keeps track of the types of all
+         * monitor objects, is saturated then we need to assume that any type can be used for
+         * monitors.
+         */
+        if (allSynchronizedTypeFlow.isSaturated()) {
+            return getAllInstantiatedTypeFlow().getState();
+        }
         return allSynchronizedTypeFlow.getState();
     }
 
@@ -381,8 +429,9 @@ public abstract class BigBang {
             }
 
             @Override
-            public DebugContext getDebug(OptionValues ignored, List<DebugHandlersFactory> factories) {
-                return DebugContext.DISABLED;
+            public DebugContext getDebug(OptionValues opts, List<DebugHandlersFactory> factories) {
+                assert opts == getOptions();
+                return DebugContext.disabled(opts);
             }
         });
 
@@ -480,8 +529,6 @@ public abstract class BigBang {
         return executor;
     }
 
-    public abstract boolean isValidClassLoader(Object valueObj);
-
     public void checkUserLimitations() {
     }
 
@@ -517,7 +564,8 @@ public abstract class BigBang {
 
             @Override
             public DebugContext getDebug(OptionValues opts, List<DebugHandlersFactory> factories) {
-                return DebugContext.DISABLED;
+                assert opts == getOptions();
+                return DebugContext.disabled(opts);
             }
         });
     }
@@ -539,14 +587,7 @@ public abstract class BigBang {
 
             int numTypes;
             do {
-                try (StopTimer t = typeFlowTimer.start()) {
-                    executor.start();
-                    executor.complete();
-                    didSomeWork |= (executor.getPostedOperations() > 0);
-                    executor.shutdown();
-                }
-                /* Initialize for the next iteration. */
-                executor.init(timing);
+                didSomeWork |= doTypeflow();
 
                 /*
                  * Check if the object graph introduces any new types, which leads to new operations
@@ -562,32 +603,46 @@ public abstract class BigBang {
 
             universe.setAnalysisDataValid(this, true);
 
-            if (PointstoOptions.ReportUnsupportedFeaturesDuringAnalysis.getValue(options)) {
-                unsupportedFeatures.report(this);
-            }
-
             return didSomeWork;
         }
     }
 
-    /**
-     * Check if the type is allowed to be used for synchronization.
-     *
-     * @param method - the method location of the synchronization
-     * @param bci - the bci location of the synchronization
-     * @param aType - the type that is synchronized on
-     */
-    public void checkUnsupportedSynchronization(AnalysisMethod method, int bci, AnalysisType aType) {
+    @SuppressWarnings("try")
+    public boolean doTypeflow() throws InterruptedException {
+        boolean didSomeWork;
+        try (StopTimer ignored = typeFlowTimer.start()) {
+            executor.start();
+            executor.complete();
+            didSomeWork = (executor.getPostedOperations() > 0);
+            executor.shutdown();
+        }
+        /* Initialize for the next iteration. */
+        executor.init(timing);
+        return didSomeWork;
     }
 
-    @SuppressWarnings("try")
-    private void checkObjectGraph() {
-        // scan constants
-        ObjectScanner objectScanner = new AnalysisObjectScanner(this);
-        checkObjectGraph(objectScanner);
-        objectScanner.scanBootImageHeapRoots();
+    private ReusableSet scannedObjects = new ReusableSet();
 
+    @SuppressWarnings("try")
+    private void checkObjectGraph() throws InterruptedException {
+        scannedObjects.reset();
+        // scan constants
+        ObjectScanner objectScanner = new AnalysisObjectScanner(this, scannedObjects);
+        checkObjectGraph(objectScanner);
+        if (PointstoOptions.ScanObjectsParallel.getValue(options)) {
+            executor.start();
+            objectScanner.scanBootImageHeapRoots(executor);
+            executor.complete();
+            executor.shutdown();
+            executor.init(timing);
+        } else {
+            objectScanner.scanBootImageHeapRoots(null);
+        }
         AnalysisType.updateAssignableTypes(this);
+    }
+
+    public HeapScanningPolicy scanningPolicy() {
+        return heapScanningPolicy;
     }
 
     /**
@@ -604,17 +659,12 @@ public abstract class BigBang {
 
     @SuppressFBWarnings(value = "NP_NONNULL_PARAM_VIOLATION", justification = "ForkJoinPool does support null for the exception handler.")
     public static ForkJoinPool createExecutor(DebugContext debug, int numberOfThreads) {
-        ForkJoinPool.ForkJoinWorkerThreadFactory factory = debug.areScopesEnabled() || debug.areMetricsEnabled() ? debugThreadFactory(debug) : ForkJoinPool.defaultForkJoinWorkerThreadFactory;
+        ForkJoinPool.ForkJoinWorkerThreadFactory factory = debugThreadFactory(debug.areScopesEnabled() || debug.areMetricsEnabled() ? debug : null);
         return new ForkJoinPool(numberOfThreads, factory, null, false);
     }
 
     private static ForkJoinPool.ForkJoinWorkerThreadFactory debugThreadFactory(DebugContext debug) {
-        return pool -> new ForkJoinWorkerThread(pool) {
-            @Override
-            protected void onTermination(Throwable exception) {
-                debug.closeDumpHandlers(true);
-            }
-        };
+        return pool -> new SubstrateWorkerThread(pool, debug);
     }
 
     public static class ConstantObjectsProfiler {
@@ -740,12 +790,6 @@ public abstract class BigBang {
             if (nanos > 500_000_000L && r instanceof TypeFlowRunnable) {
                 TypeFlow<?> tf = ((TypeFlowRunnable) r).getTypeFlow();
                 String source = String.valueOf(tf.getSource());
-                if (tf.getSource() instanceof ValueNode) {
-                    source = ((ValueNode) tf.getSource()).graph().method().format("%h.%n") + "@" + tf.getSource();
-                    if (tf.getSource() instanceof CallTargetNode) {
-                        source += "=" + ((CallTargetNode) tf.getSource()).targetName();
-                    }
-                }
                 System.out.format("LONG RUNNING  %.2f  %s %x %s  state %s %x  uses %d observers %d%n", (double) nanos / 1_000_000_000, tf.getClass().getSimpleName(), System.identityHashCode(tf),
                                 source, PointsToStats.asString(tf.getState()), System.identityHashCode(tf.getState()), tf.getUses().size(), tf.getObservers().size());
             }
@@ -791,6 +835,23 @@ public abstract class BigBang {
             System.out.format("%5d %5d %5d  |", numParsedGraphs.get(), getAllInstantiatedTypeFlow().getState().typesCount(), universe.getNextTypeId());
             super.print();
             System.out.println();
+        }
+    }
+
+    private static class SubstrateWorkerThread extends ForkJoinWorkerThread
+                    implements ImageGeneratorThreadMarker {
+        private final DebugContext debug;
+
+        SubstrateWorkerThread(ForkJoinPool pool, DebugContext debug) {
+            super(pool);
+            this.debug = debug;
+        }
+
+        @Override
+        protected void onTermination(Throwable exception) {
+            if (debug != null) {
+                debug.closeDumpHandlers(true);
+            }
         }
     }
 }

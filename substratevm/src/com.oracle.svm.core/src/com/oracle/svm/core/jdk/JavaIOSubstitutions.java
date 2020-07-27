@@ -25,8 +25,6 @@
 package com.oracle.svm.core.jdk;
 
 import java.io.Closeable;
-import java.io.IOException;
-import java.security.SecureRandom;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantLock;
@@ -73,24 +71,6 @@ final class Target_java_io_ObjectOutputStream {
     @Substitute
     private void writeUnshared(Object obj) {
         throw VMError.unsupportedFeature("ObjectOutputStream.writeUnshared()");
-    }
-}
-
-@TargetClass(className = "java.io.File$TempDirectory")
-final class Target_java_io_File_TempDirectory {
-
-    @Alias @InjectAccessors(FileTempDirectoryRandomAccessors.class)//
-    private static SecureRandom random;
-
-    static final class FileTempDirectoryRandomAccessors {
-        private static SecureRandom random;
-
-        static SecureRandom get() {
-            if (random == null) {
-                random = new SecureRandom();
-            }
-            return random;
-        }
     }
 }
 
@@ -175,16 +155,6 @@ final class Target_java_io_DeleteOnExitHook {
                 }
             }
         }
-    }
-}
-
-@TargetClass(className = "java.io.FileCleanable", onlyWith = JDK9OrLater.class)
-final class Target_java_io_FileCleanable {
-
-    @Substitute //
-    @SuppressWarnings({"unused"})
-    private static /* native */ void cleanupClose0(int fd, long handle) throws IOException {
-        throw VMError.unsupportedFeature("JDK9OrLater: Target_java_io_FileCleanable.cleanupClose0");
     }
 }
 

@@ -28,6 +28,7 @@ import static org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.Polygl
 import static org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotStatus.poly_generic_failure;
 import static org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotStatus.poly_number_expected;
 import static org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotStatus.poly_ok;
+import static org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotStatus.poly_pending_exception;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -40,11 +41,10 @@ import java.util.List;
 import java.util.Map.Entry;
 import java.util.stream.Collectors;
 
+import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ObjectHandle;
-import org.graalvm.nativeimage.ObjectHandles;
 import org.graalvm.nativeimage.UnmanagedMemory;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
-import org.graalvm.nativeimage.c.function.CEntryPointContext;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CCharPointerPointer;
@@ -57,6 +57,8 @@ import org.graalvm.nativeimage.c.type.WordPointer;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.Language;
+import org.graalvm.polyglot.PolyglotAccess;
+import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.nativeapi.types.CBoolPointer;
@@ -67,6 +69,7 @@ import org.graalvm.polyglot.nativeapi.types.CInt8Pointer;
 import org.graalvm.polyglot.nativeapi.types.CUnsignedBytePointer;
 import org.graalvm.polyglot.nativeapi.types.CUnsignedIntPointer;
 import org.graalvm.polyglot.nativeapi.types.CUnsignedShortPointer;
+import org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes;
 import org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotCallback;
 import org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotCallbackInfo;
 import org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotContext;
@@ -77,9 +80,10 @@ import org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotEngin
 import org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotEngineBuilder;
 import org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotEngineBuilderPointer;
 import org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotEnginePointer;
+import org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotExceptionHandle;
+import org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotExceptionHandlePointer;
 import org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotExtendedErrorInfo;
 import org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotExtendedErrorInfoPointer;
-import org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotHandle;
 import org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotIsolateThread;
 import org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotLanguage;
 import org.graalvm.polyglot.nativeapi.types.PolyglotNativeAPITypes.PolyglotLanguagePointer;
@@ -96,6 +100,10 @@ import org.graalvm.word.WordFactory;
 import com.oracle.svm.core.c.CConst;
 import com.oracle.svm.core.c.CHeader;
 import com.oracle.svm.core.c.CUnsigned;
+import com.oracle.svm.core.handles.ObjectHandlesImpl;
+import com.oracle.svm.core.handles.ThreadLocalHandles;
+import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
+import com.oracle.svm.core.threadlocal.FastThreadLocalObject;
 
 @SuppressWarnings("unused")
 @CHeader(value = PolyglotAPIHeader.class)
@@ -107,24 +115,36 @@ public final class PolyglotNativeAPI {
     private static final int MAX_UNSIGNED_SHORT = (1 << 16) - 1;
     private static final long MAX_UNSIGNED_INT = (1L << 32) - 1;
     private static final UnsignedWord POLY_AUTO_LENGTH = WordFactory.unsigned(0xFFFFFFFFFFFFFFFFL);
+    private static final int DEFAULT_FRAME_CAPACITY = 16;
 
-    private static ThreadLocal<ErrorInfoHolder> errorInfo = new ThreadLocal<>();
     private static ThreadLocal<CallbackException> exceptionsTL = new ThreadLocal<>();
+    private static ThreadLocal<ErrorStateHolder> errorHolder = new ThreadLocal<>();
+    @SuppressWarnings("rawtypes") private static final FastThreadLocalObject<ThreadLocalHandles> handles = FastThreadLocalFactory.createObject(ThreadLocalHandles.class);
 
-    private static class ErrorInfoHolder {
-        PolyglotExtendedErrorInfo info;
-        CCharPointerHolder messageHolder;
-
-        ErrorInfoHolder(PolyglotExtendedErrorInfo info, CCharPointerHolder messageHolder) {
-            this.info = info;
-            this.messageHolder = messageHolder;
+    @SuppressWarnings("unchecked")
+    private static ThreadLocalHandles<PolyglotNativeAPITypes.PolyglotHandle> getHandles() {
+        if (handles.get() == null) {
+            handles.set(new ThreadLocalHandles<PolyglotNativeAPITypes.PolyglotHandle>(DEFAULT_FRAME_CAPACITY));
         }
+        return handles.get();
+    }
+
+    private static final ObjectHandlesImpl objectHandles = new ObjectHandlesImpl(
+                    WordFactory.signed(Long.MIN_VALUE), ThreadLocalHandles.nullHandle().subtract(1), ThreadLocalHandles.nullHandle());
+
+    private static class ErrorStateHolder {
+        public PolyglotExtendedErrorInfo info = WordFactory.nullPointer();
+
+        // will be assigned to CTypeConversionSupportImpl::NULL_HOLDER by default
+        public CCharPointerHolder messageHolder = CTypeConversion.toCString(null);
+
+        public PolyglotException polyglotException = null;
     }
 
     @CEntryPoint(name = "poly_create_engine_builder", documentation = {
                     "Creates a new context builder that allows to configure an engine instance.",
                     "",
-                    " @since 1.1",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_engine_builder(PolyglotIsolateThread thread, PolyglotEngineBuilderPointer result) {
         return withHandledErrors(() -> {
@@ -141,7 +161,7 @@ public final class PolyglotNativeAPI {
                     " @param key_utf8 0 terminated and UTF-8 encoded key for the option.",
                     " @param value_utf8 0 terminated and UTF-8 encoded value for the option.",
                     " @return poly_ok if all works, poly_generic_error if there is a failure.",
-                    " @since 1.1",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_engine_builder(PolyglotIsolateThread thread, PolyglotEngineBuilder engine_builder, @CConst CCharPointer key_utf8, @CConst CCharPointer value_utf8) {
         return withHandledErrors(() -> {
@@ -157,7 +177,7 @@ public final class PolyglotNativeAPI {
                     " @param engine_builder that is used to build.",
                     " @param result the created engine.",
                     " @return poly_ok if all works, poly_generic_error if there is a failure.",
-                    " @since 1.1",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_engine_builder_build(PolyglotIsolateThread thread, PolyglotEngineBuilder engine_builder, PolyglotEnginePointer result) {
         return withHandledErrors(() -> {
@@ -172,11 +192,11 @@ public final class PolyglotNativeAPI {
                     "",
                     "Engine is a unit that holds configuration, instruments, and compiled code for all contexts assigned ",
                     "to this engine.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_engine(PolyglotIsolateThread thread, PolyglotEnginePointer result) {
         return withHandledErrors(() -> {
-            ObjectHandle handle = createHandle(Engine.create());
+            PolyglotNativeAPITypes.PolyglotHandle handle = createHandle(Engine.create());
             result.write(handle);
         });
     }
@@ -191,7 +211,7 @@ public final class PolyglotNativeAPI {
                     " @param engine to be closed.",
                     " @param cancel_if_executing if <code>true</code> then currently executing contexts will be cancelled.",
                     " @return poly_ok if all works, poly_generic_error if there is a failure.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_engine_close(PolyglotIsolateThread thread, PolyglotEngine engine, boolean cancel_if_executing) {
         return withHandledErrors(() -> {
@@ -206,7 +226,7 @@ public final class PolyglotNativeAPI {
                     " @param engine for which languages are returned.",
                     " @param language_array array to write <code>poly_language</code>s to or NULL.",
                     " @param size the number of languages in the engine.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_engine_get_languages(PolyglotIsolateThread thread, PolyglotEngine engine, PolyglotLanguagePointer language_array, SizeTPointer size) {
         return withHandledErrors(() -> {
@@ -234,7 +254,7 @@ public final class PolyglotNativeAPI {
                     " @param length of the array of language identifiers.",
                     " @param result the created context.",
                     " @return poly_ok if all works, poly_generic_error if there is a failure.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_context_builder(PolyglotIsolateThread thread, @CConst CCharPointerPointer permitted_languages, UnsignedWord length, PolyglotContextBuilderPointer result) {
         return withHandledErrors(() -> {
@@ -253,7 +273,7 @@ public final class PolyglotNativeAPI {
                     " @param context_builder that is assigned an engine.",
                     " @param engine to assign to this builder.",
                     " @return poly_ok if all works, poly_generic_error if there is a failure.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_context_builder_engine(PolyglotIsolateThread thread, PolyglotContextBuilder context_builder, PolyglotEngine engine) {
         return withHandledErrors(() -> {
@@ -270,7 +290,7 @@ public final class PolyglotNativeAPI {
                     " @param key_utf8 0 terminated and UTF-8 encoded key for the option.",
                     " @param value_utf8 0 terminated and UTF-8 encoded value for the option.",
                     " @return poly_ok if all works, poly_generic_error if there is a failure.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_context_builder_option(PolyglotIsolateThread thread, PolyglotContextBuilder context_builder, @CConst CCharPointer key_utf8, @CConst CCharPointer value_utf8) {
         return withHandledErrors(() -> {
@@ -285,7 +305,7 @@ public final class PolyglotNativeAPI {
                     " @param context_builder that is modified.",
                     " @param allow_all_access bool value that defines all access.",
                     " @return poly_ok if all works, poly_generic_error if there is a failure.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_context_builder_allow_all_access(PolyglotIsolateThread thread, PolyglotContextBuilder context_builder, boolean allow_all_access) {
         return withHandledErrors(() -> {
@@ -300,7 +320,7 @@ public final class PolyglotNativeAPI {
                     " @param context_builder that is modified.",
                     " @param allow_IO bool value that is passed to the builder.",
                     " @return poly_ok if all works, poly_generic_error if there is a failure.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_context_builder_allow_io(PolyglotIsolateThread thread, PolyglotContextBuilder context_builder, boolean allow_IO) {
         return withHandledErrors(() -> {
@@ -315,7 +335,7 @@ public final class PolyglotNativeAPI {
                     " @param context_builder that is modified.",
                     " @param allow_native_access bool value that is passed to the builder.",
                     " @return poly_ok if all works, poly_generic_error if there is a failure.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_context_builder_allow_native_access(PolyglotIsolateThread thread, PolyglotContextBuilder context_builder, boolean allow_native_access) {
         return withHandledErrors(() -> {
@@ -324,18 +344,48 @@ public final class PolyglotNativeAPI {
         });
     }
 
+    @CEntryPoint(name = "poly_context_builder_allow_polyglot_access", documentation = {
+                    "Allows or disallows polyglot access for a <code>poly_context_builder</code>.",
+                    "",
+                    " @param context_builder that is modified.",
+                    " @param allow_polyglot_access bool value that is passed to the builder.",
+                    " @return poly_ok if all works, poly_generic_error if there is a failure.",
+                    " @since 19.0",
+    })
+    public static PolyglotStatus poly_context_builder_allow_polyglot_access(PolyglotIsolateThread thread, PolyglotContextBuilder context_builder, boolean allow_polyglot_access) {
+        return withHandledErrors(() -> {
+            Context.Builder contextBuilder = fetchHandle(context_builder);
+            contextBuilder.allowPolyglotAccess(allow_polyglot_access ? PolyglotAccess.ALL : PolyglotAccess.NONE);
+        });
+    }
+
     @CEntryPoint(name = "poly_context_builder_allow_create_thread", documentation = {
-                    "Allows or disallows thread creation or a <code>poly_context_builder</code>.",
+                    "Allows or disallows thread creation for a <code>poly_context_builder</code>.",
                     "",
                     " @param context_builder that is modified.",
                     " @param allow_create_thread bool value that is passed to the builder.",
                     " @return poly_ok if all works, poly_generic_error if there is a failure.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_context_builder_allow_create_thread(PolyglotIsolateThread thread, PolyglotContextBuilder context_builder, boolean allow_create_thread) {
         return withHandledErrors(() -> {
             Context.Builder contextBuilder = fetchHandle(context_builder);
-            contextBuilder.allowNativeAccess(allow_create_thread);
+            contextBuilder.allowCreateThread(allow_create_thread);
+        });
+    }
+
+    @CEntryPoint(name = "poly_context_builder_allow_experimental_options", documentation = {
+                    "Allows or disallows experimental options for a <code>poly_context_builder</code>.",
+                    "",
+                    " @param context_builder that is modified.",
+                    " @param allow_experimental_options bool value that is passed to the builder.",
+                    " @return poly_ok if all works, poly_generic_error if there is a failure.",
+                    " @since 19.0",
+    })
+    public static PolyglotStatus poly_context_builder_allow_experimental_options(PolyglotIsolateThread thread, PolyglotContextBuilder context_builder, boolean allow_experimental_options) {
+        return withHandledErrors(() -> {
+            Context.Builder contextBuilder = fetchHandle(context_builder);
+            contextBuilder.allowExperimentalOptions(allow_experimental_options);
         });
     }
 
@@ -346,7 +396,7 @@ public final class PolyglotNativeAPI {
                     " @param context_builder that is used to construct a new context.",
                     " @param result the created context.",
                     " @return poly_ok if all works, poly_generic_error if there is a failure.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_context_builder_build(PolyglotIsolateThread thread, PolyglotContextBuilder context_builder, PolyglotContextPointer result) {
         return withHandledErrors(() -> {
@@ -366,7 +416,7 @@ public final class PolyglotNativeAPI {
                     " @param length of the array of language identifiers.",
                     " @param result the created context.",
                     " @return poly_ok if all works, poly_generic_error if there is a failure.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_context(PolyglotIsolateThread thread, @CConst CCharPointerPointer permitted_languages, UnsignedWord length, PolyglotContextPointer result) {
         return withHandledErrors(() -> {
@@ -401,7 +451,7 @@ public final class PolyglotNativeAPI {
                     " @param context to be closed.",
                     " @param cancel_if_executing if <code>true</code> then currently executing context will be cancelled.",
                     " @return poly_ok if all works, poly_generic_error if there is a failure.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_context_close(PolyglotIsolateThread thread, PolyglotContext context, boolean cancel_if_executing) {
         return withHandledErrors(() -> {
@@ -420,7 +470,7 @@ public final class PolyglotNativeAPI {
                     " @param result <code>poly_value</code> that is the result of the evaluation.",
                     " @return poly_ok if all works, poly_generic_error if there is a failure.",
                     " @see org::graalvm::polyglot::Context::eval",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_context_eval(PolyglotIsolateThread thread, PolyglotContext context, @CConst CCharPointer language_id, @CConst CCharPointer name_utf8,
                     @CConst CCharPointer source_utf8, PolyglotValuePointer result) {
@@ -442,7 +492,7 @@ public final class PolyglotNativeAPI {
                     " @param result a value whose members correspond to the symbols in the top scope of the `language_id`.",
                     " @return poly_ok if everything is fine, poly_generic_failure if there is an error.",
                     " @see org::graalvm::polyglot::Context::getEngine",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_context_get_engine(PolyglotIsolateThread thread, PolyglotContext context, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -465,7 +515,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_generic_failure if the language does not exist, if context is already closed, ",
                     "        in case the lazy initialization failed due to a guest language error.",
                     " @see org::graalvm::polyglot::Context::getBindings",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_context_get_bindings(PolyglotIsolateThread thread, PolyglotContext context, @CConst CCharPointer language_id, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -488,7 +538,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if context is already closed.",
                     " @see org::graalvm::polyglot::Context::getPolyglotBindings",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_context_get_polyglot_bindings(PolyglotIsolateThread thread, PolyglotContext context, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -504,7 +554,7 @@ public final class PolyglotNativeAPI {
                     " @param result true if the value can be executed, false otherwise.",
                     " @return poly_ok if all works, poly_generic_error if there is a failure.",
                     " @see org::graalvm::polyglot::Value::canExecute",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_can_execute(PolyglotIsolateThread thread, PolyglotValue value, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -524,7 +574,7 @@ public final class PolyglotNativeAPI {
                     "         number of arguments was provided or one of the arguments was not applicable, if this value cannot be executed,",
                     " and if a guest language error occurred during execution.",
                     " @see org::graalvm::polyglot::Value::execute",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_execute(PolyglotIsolateThread thread, PolyglotValue value, PolyglotValuePointer args, int args_size,
                     PolyglotValuePointer result) {
@@ -547,7 +597,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if the value has no members, the given identifier exists ",
                     "        but is not readable, if a guest language error occurred during execution.",
                     " @see org::graalvm::polyglot::Value::getMember",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_get_member(PolyglotIsolateThread thread, PolyglotValue value, @CConst CCharPointer utf8_identifier, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -563,7 +613,7 @@ public final class PolyglotNativeAPI {
                     "         not have any members, the key does not exist and new members cannot be added, or the existing ",
                     "         member is not modifiable.",
                     " @see org::graalvm::polyglot::Value::putMember",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_put_member(PolyglotIsolateThread thread, PolyglotValue value, @CConst CCharPointer utf8_identifier, PolyglotValue member) {
         return withHandledErrors(() -> {
@@ -580,7 +630,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if the underlying context was closed, if guest language error occurred ",
                     "         during execution.",
                     " @see org::graalvm::polyglot::Value::putMember",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_has_member(PolyglotIsolateThread thread, PolyglotValue value, @CConst CCharPointer utf8_identifier, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -594,7 +644,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if context is null, if the underlying context was closed.",
                     " @see org::graalvm::polyglot::Context::asValue",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_boolean(PolyglotIsolateThread thread, PolyglotContext context, boolean value, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -609,7 +659,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if context is null, if the underlying context was closed.",
                     " @see org::graalvm::polyglot::Context::asValue",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_int8(PolyglotIsolateThread thread, PolyglotContext context, byte value, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -624,7 +674,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if context is null, if the underlying context was closed.",
                     " @see org::graalvm::polyglot::Context::asValue",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_int16(PolyglotIsolateThread thread, PolyglotContext context, short value, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -639,7 +689,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if context is null, if the underlying context was closed.",
                     " @see org::graalvm::polyglot::Context::asValue",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_int32(PolyglotIsolateThread thread, PolyglotContext context, int value, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -654,7 +704,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if context is null, if the underlying context was closed.",
                     " @see org::graalvm::polyglot::Context::asValue",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_int64(PolyglotIsolateThread thread, PolyglotContext context, long value, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -669,7 +719,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if context is null, if the underlying context was closed.",
                     " @see org::graalvm::polyglot::Context::asValue",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_uint8(PolyglotIsolateThread thread, PolyglotContext context, @CUnsigned byte value, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -684,7 +734,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if context is null, if the underlying context was closed.",
                     " @see org::graalvm::polyglot::Context::asValue",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_uint16(PolyglotIsolateThread thread, PolyglotContext context, @CUnsigned short value, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -699,7 +749,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if context is null, if the underlying context was closed.",
                     " @see org::graalvm::polyglot::Context::asValue",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_uint32(PolyglotIsolateThread thread, PolyglotContext context, @CUnsigned int value, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -714,7 +764,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if context is null, if the underlying context was closed.",
                     " @see org::graalvm::polyglot::Context::asValue",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_float(PolyglotIsolateThread thread, PolyglotContext context, float value, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -729,7 +779,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if context is null, if the underlying context was closed.",
                     " @see org::graalvm::polyglot::Context::asValue",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_double(PolyglotIsolateThread thread, PolyglotContext context, double value, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -743,7 +793,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if context is null, if the underlying context was closed.",
                     " @see org::graalvm::polyglot::Context::asValue",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_character(PolyglotIsolateThread thread, PolyglotContext context, char character, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -761,7 +811,7 @@ public final class PolyglotNativeAPI {
                     " @return the polyglot string value.",
                     " @return poly_ok if all works, poly_generic_failure if context is null, if the underlying context was closed.",
                     " @see org::graalvm::polyglot::Context::asValue",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_string_utf8(PolyglotIsolateThread thread, PolyglotContext context, @CConst CCharPointer string, UnsignedWord length, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -775,7 +825,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if context is null, if the underlying context was closed.",
                     " @see org::graalvm::polyglot::Context::asValue",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_null(PolyglotIsolateThread thread, PolyglotContext context, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -789,7 +839,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if context is null, if the underlying context was closed.",
                     " @see org::graalvm::polyglot::ProxyObject::fromMap",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_object(PolyglotIsolateThread thread, PolyglotContext context, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -807,7 +857,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if context is null, if the underlying context was closed, ",
                     "         if the array does not contain polyglot values.",
                     " @see org::graalvm::polyglot::ProxyArray::fromList",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_array(PolyglotIsolateThread thread, PolyglotContext context, @CConst PolyglotValuePointer value_array, long array_length,
                     PolyglotValuePointer result) {
@@ -833,7 +883,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if the underlying context was closed, if guest language error occurred ",
                     "        during execution.",
                     " @see org::graalvm::polyglot::Value::hasArrayElements",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_has_array_elements(PolyglotIsolateThread thread, PolyglotValue value, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -855,7 +905,7 @@ public final class PolyglotNativeAPI {
                     "         underlying context was closed, if guest language error occurred during execution, poly_array_expected if the ",
                     "         value has no array elements.",
                     " @see org::graalvm::polyglot::Value::getArrayElement",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_get_array_element(PolyglotIsolateThread thread, PolyglotValue value, long index, PolyglotValuePointer result) {
         return withHandledErrors(() -> {
@@ -880,7 +930,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if the array index does not exist, if index is not writeable, if the ",
                     "         underlying context was closed, if guest language error occurred during execution, poly_array_expected if the value has no array elements..",
                     " @see org::graalvm::polyglot::Value::setArrayElement",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_set_array_element(PolyglotIsolateThread thread, PolyglotValue value, long index, PolyglotValue element) {
         return withHandledErrors(() -> {
@@ -894,20 +944,19 @@ public final class PolyglotNativeAPI {
     }
 
     @CEntryPoint(name = "poly_value_remove_array_element", documentation = {
-                    "Sets the value at a given index.",
+                    "Removes an array element at a given index.",
                     "",
                     "Polyglot arrays start with index `0`, independent of the guest language. The given array index must ",
                     "be greater or equal 0.",
                     "",
                     " @param value value that we are checking.",
                     " @param index index of the element starting from 0.",
-                    " @param element to be written into the array.",
-                    " @return true if the value has array elements.",
+                    " @param result true if the underlying array element could be removed, otherwise false.",
                     " @return poly_ok if all works, poly_generic_failure if the array index does not exist, if index is not removable, if the ",
                     "         underlying context was closed, if guest language error occurred during execution, poly_array_expected if the ",
                     "         value has no array elements.",
                     " @see org::graalvm::polyglot::Value::removeArrayElement",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_remove_array_element(PolyglotIsolateThread thread, PolyglotValue value, long index, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -927,7 +976,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if the underlying context was closed, if guest language error occurred ",
                     "         during execution, poly_array_expected if the value has no array elements.",
                     " @see org::graalvm::polyglot::Value::removeArrayElement",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_get_array_size(PolyglotIsolateThread thread, PolyglotValue value, CInt64Pointer result) {
         return withHandledErrors(() -> {
@@ -945,7 +994,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if the underlying context was closed, if guest language error occurred ",
                     "        during execution.",
                     " @see org::graalvm::polyglot::Value::isNull",
-                    " @since 1.0"
+                    " @since 19.0"
     })
     public static PolyglotStatus poly_value_is_null(PolyglotIsolateThread thread, PolyglotValue value, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -960,7 +1009,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if value is null, if a guest language error occurred during execution, ",
                     "        if the underlying context was closed, if value could not be converted. ",
                     " @see org::graalvm::polyglot::Value::isBoolean",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_is_boolean(PolyglotIsolateThread thread, PolyglotValue value, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -975,7 +1024,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if the underlying context was closed, if guest language error occurred ",
                     "        during execution.",
                     " @see org::graalvm::polyglot::Value::isString",
-                    " @since 1.0"
+                    " @since 19.0"
     })
     public static PolyglotStatus poly_value_is_string(PolyglotIsolateThread thread, PolyglotValue value, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -990,7 +1039,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if the underlying context was closed, if guest language error occurred ",
                     "        during execution.",
                     " @see org::graalvm::polyglot::Value::isNumber",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_is_number(PolyglotIsolateThread thread, PolyglotValue value, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -1005,7 +1054,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if the underlying context was closed, if guest language error occurred ",
                     "        during execution.",
                     " @see org::graalvm::polyglot::Value::fitsInFloat",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_fits_in_float(PolyglotIsolateThread thread, PolyglotValue value, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -1020,7 +1069,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if the underlying context was closed, if guest language error occurred ",
                     "        during execution.",
                     " @see org::graalvm::polyglot::Value::fitsInDouble",
-                    " @since 1.0"
+                    " @since 19.0"
     })
     public static PolyglotStatus poly_value_fits_in_double(PolyglotIsolateThread thread, PolyglotValue value, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -1035,7 +1084,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if the underlying context was closed, if guest language error occurred ",
                     "        during execution.",
                     " @see org::graalvm::polyglot::Value::fitsInByte",
-                    " @since 1.0"
+                    " @since 19.0"
     })
     public static PolyglotStatus poly_value_fits_in_int8(PolyglotIsolateThread thread, PolyglotValue value, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -1049,7 +1098,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if the underlying context was closed, if guest language error occurred ",
                     "        during execution.",
-                    " @since 1.0"
+                    " @since 19.0"
     })
     public static PolyglotStatus poly_value_fits_in_int16(PolyglotIsolateThread thread, PolyglotValue value, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -1069,7 +1118,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if the underlying context was closed, if guest language error occurred ",
                     "        during execution.",
                     " @see org::graalvm::polyglot::Value::fitsInInt",
-                    " @since 1.0"
+                    " @since 19.0"
     })
     public static PolyglotStatus poly_value_fits_in_int32(PolyglotIsolateThread thread, PolyglotValue value, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -1084,7 +1133,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if the underlying context was closed, if guest language error occurred ",
                     "        during execution.",
                     " @see org::graalvm::polyglot::Value::fitsInLong",
-                    " @since 1.0"
+                    " @since 19.0"
     })
     public static PolyglotStatus poly_value_fits_in_int64(PolyglotIsolateThread thread, PolyglotValue value, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -1098,7 +1147,8 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if the underlying context was closed, if guest language error occurred ",
                     "        during execution.",
-                    " @since 1.0"
+                    "",
+                    " @since 19.0"
     })
     public static PolyglotStatus poly_value_fits_in_uint8(PolyglotIsolateThread thread, PolyglotValue value, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -1117,7 +1167,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if the underlying context was closed, if guest language error occurred ",
                     "        during execution.",
-                    " @since 1.0"
+                    " @since 19.0"
     })
     public static PolyglotStatus poly_value_fits_in_uint16(PolyglotIsolateThread thread, PolyglotValue value, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -1136,7 +1186,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if the underlying context was closed, if guest language error occurred ",
                     "        during execution.",
-                    " @since 1.0"
+                    " @since 19.0"
     })
     public static PolyglotStatus poly_value_fits_in_uint32(PolyglotIsolateThread thread, PolyglotValue value, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -1157,7 +1207,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if a guest language error occurred during execution ",
                     "         poly_string_expected if the value is not a string.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_as_string_utf8(PolyglotIsolateThread thread, PolyglotValue value, CCharPointer buffer, UnsignedWord buffer_size, SizeTPointer result) {
         return withHandledErrors(() -> {
@@ -1177,7 +1227,7 @@ public final class PolyglotNativeAPI {
                     "",
                     " @return poly_ok if all works, poly_generic_failure if a guest language error occurred during execution ",
                     "         poly_string_expected if the value is not a string.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_to_string_utf8(PolyglotIsolateThread thread, PolyglotValue value, CCharPointer buffer, UnsignedWord buffer_size, SizeTPointer result) {
         return withHandledErrors(() -> {
@@ -1192,7 +1242,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if value is null, if a guest language error occurred during execution, ",
                     "         if the underlying context was closed, if value could not be converted. ",
                     " @see org::graalvm::polyglot::Value::asBoolean",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_as_bool(PolyglotIsolateThread thread, PolyglotValue value, CBoolPointer result) {
         return withHandledErrors(() -> {
@@ -1211,7 +1261,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if value is null, if a guest language error occurred during execution, ",
                     "         if the underlying context was closed, if value could not be converted. ",
                     " @see org::graalvm::polyglot::Value::asByte",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_as_int8(PolyglotIsolateThread thread, PolyglotValue value, CInt8Pointer result) {
         return withHandledErrors(() -> {
@@ -1226,7 +1276,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if value is null, if a guest language error occurred during execution, ",
                     "         if the underlying context was closed, if value could not be converted.",
                     " @see org::graalvm::polyglot::Value::asInt",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_as_int16(PolyglotIsolateThread thread, PolyglotValue value, CInt16Pointer result) {
         return withHandledErrors(() -> {
@@ -1245,7 +1295,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if value is null, if a guest language error occurred during execution, ",
                     "         if the underlying context was closed, if value could not be converted.",
                     " @see org::graalvm::polyglot::Value::asInt",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_as_int32(PolyglotIsolateThread thread, PolyglotValue value, CInt32Pointer result) {
         return withHandledErrors(() -> {
@@ -1260,7 +1310,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if value is null, if a guest language error occurred during execution, ",
                     "         if the underlying context was closed, if value could not be converted.",
                     " @see org::graalvm::polyglot::Value::asInt",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_as_int64(PolyglotIsolateThread thread, PolyglotValue value, CInt64Pointer result) {
         return withHandledErrors(() -> {
@@ -1275,7 +1325,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if value is null, if a guest language error occurred during execution, ",
                     "         if the underlying context was closed, if value could not be converted.",
                     " @see org::graalvm::polyglot::Value::asInt",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_as_uint8(PolyglotIsolateThread thread, PolyglotValue value, CUnsignedBytePointer result) {
         return withHandledErrors(() -> {
@@ -1294,7 +1344,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if value is null, if a guest language error occurred during execution, ",
                     "         if the underlying context was closed, if value could not be converted.",
                     " @see org::graalvm::polyglot::Value::asInt",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_as_uint16(PolyglotIsolateThread thread, PolyglotValue value, CUnsignedShortPointer result) {
         return withHandledErrors(() -> {
@@ -1313,7 +1363,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if value is null, if a guest language error occurred during execution, ",
                     "        if the underlying context was closed, if value could not be converted.",
                     " @see org::graalvm::polyglot::Value::asLong",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_as_uint32(PolyglotIsolateThread thread, PolyglotValue value, CUnsignedIntPointer result) {
         return withHandledErrors(() -> {
@@ -1332,7 +1382,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if value is null, if a guest language error occurred during execution, ",
                     "        if the underlying context was closed, if value could not be converted.",
                     " @see org::graalvm::polyglot::Value::asFloat",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_as_float(PolyglotIsolateThread thread, PolyglotValue value, CFloatPointer result) {
         return withHandledErrors(() -> {
@@ -1347,7 +1397,7 @@ public final class PolyglotNativeAPI {
                     " @return poly_ok if all works, poly_generic_failure if value is <code>null</code>, if a guest language error occurred during execution, ",
                     "        if the underlying context was closed, if value could not be converted.",
                     " @see org::graalvm::polyglot::Value::asDouble",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_value_as_double(PolyglotIsolateThread thread, PolyglotValue value, CDoublePointer result) {
         return withHandledErrors(() -> {
@@ -1365,7 +1415,7 @@ public final class PolyglotNativeAPI {
                     "used as the primary way of identifying languages in the polyglot API. (eg. <code>js</code>)",
                     "",
                     " @return a language ID string.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_language_get_id(PolyglotIsolateThread thread, PolyglotLanguage language, CCharPointer utf8_result, UnsignedWord buffer_size, SizeTPointer length) {
         return withHandledErrors(() -> {
@@ -1380,16 +1430,14 @@ public final class PolyglotNativeAPI {
                     "This method must be called right after a failure occurs and can be called only once.",
                     "",
                     " @return information about the last failure on this thread.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_get_last_error_info(PolyglotIsolateThread thread, @CConst PolyglotExtendedErrorInfoPointer result) {
-        ErrorInfoHolder errorInfoHolder = errorInfo.get();
-        if (errorInfoHolder != null) {
-            result.write(errorInfoHolder.info);
-            return poly_ok;
-        } else {
-            return poly_generic_failure;
+        ErrorStateHolder holder = errorHolder.get();
+        if (holder != null && holder.info.isNonNull()) {
+            result.write(holder.info);
         }
+        return poly_ok;
     }
 
     @CEntryPoint(name = "poly_create_function", documentation = {
@@ -1399,7 +1447,7 @@ public final class PolyglotNativeAPI {
                     " @param callback function that is called from the polyglot engine.",
                     " @return information about the last failure on this thread.",
                     " @see org::graalvm::polyglot::ProxyExecutable",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_create_function(PolyglotIsolateThread thread, PolyglotContext context, PolyglotCallback callback, VoidPointer data,
                     PolyglotValuePointer value) {
@@ -1412,7 +1460,7 @@ public final class PolyglotNativeAPI {
                 }
                 PolyglotCallbackInfo cbInfo = (PolyglotCallbackInfo) createHandle(new PolyglotCallbackInfoInternal(handleArgs, data));
                 try {
-                    PolyglotValue result = callback.invoke((PolyglotIsolateThread) CEntryPointContext.getCurrentIsolateThread(), cbInfo);
+                    PolyglotValue result = callback.invoke((PolyglotIsolateThread) CurrentIsolate.getCurrentThread(), cbInfo);
                     CallbackException ce = exceptionsTL.get();
                     if (ce != null) {
                         exceptionsTL.remove();
@@ -1422,10 +1470,6 @@ public final class PolyglotNativeAPI {
                     }
                 } finally {
                     PolyglotCallbackInfoInternal info = fetchHandle(cbInfo);
-                    for (ObjectHandle arg : info.arguments) {
-                        destroyHandle(arg);
-                    }
-                    destroyHandle(cbInfo);
                 }
             };
             value.write(createHandle(c.asValue(executable)));
@@ -1439,7 +1483,7 @@ public final class PolyglotNativeAPI {
                     " @param argc number of arguments to the callback.",
                     " @param argv poly_value array of arguments for the callback.",
                     " @param the data pointer for the callback.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_get_callback_info(PolyglotIsolateThread thread, PolyglotCallbackInfo callback_info, SizeTPointer argc, PolyglotValuePointer argv, WordPointer data) {
         return withHandledErrors(() -> {
@@ -1465,21 +1509,187 @@ public final class PolyglotNativeAPI {
                     "in the guest language.",
                     "",
                     " @param utf8_message 0 terminated error message.",
-                    " @since 1.0",
+                    " @since 19.0",
     })
     public static PolyglotStatus poly_throw_exception(PolyglotIsolateThread thread, @CConst CCharPointer utf8_message) {
         return withHandledErrors(() -> exceptionsTL.set(new CallbackException(CTypeConversion.toJavaString(utf8_message))));
     }
 
-    @CEntryPoint(name = "poly_destroy_handle", documentation = {
-                    "Destroys a poly_handle. After this point, the handle must not be used anymore. ",
+    @CEntryPoint(name = "poly_delete_reference", documentation = {
+                    "Deletes a poly_reference. After this point, the reference must not be used anymore.",
+                    "",
+                    " @since 19.0",
+    })
+    public static PolyglotStatus poly_delete_reference(PolyglotIsolateThread thread, PolyglotNativeAPITypes.PolyglotReference reference) {
+        return withHandledErrors(() -> objectHandles.destroy(reference));
+    }
+
+    @CEntryPoint(name = "poly_create_reference", documentation = {
+                    "Creates a poly_reference from a poly_handle. After this point, the reference is alive until poly_delete_reference is called. ",
                     "",
                     "Handles are: poly_engine, poly_engine_builder, poly_context, poly_context_builder, poly_language, poly_value, ",
                     "and poly_callback_info.",
-                    " @since 1.0",
+                    "",
+                    " @since 19.0",
     })
-    public static PolyglotStatus poly_destroy_handle(PolyglotIsolateThread thread, PolyglotHandle handle) {
-        return withHandledErrors(() -> destroyHandle(handle));
+    public static PolyglotStatus poly_create_reference(PolyglotIsolateThread thread, PolyglotNativeAPITypes.PolyglotHandle handle, PolyglotNativeAPITypes.PolyglotReferencePointer reference) {
+
+        return withHandledErrors(() -> {
+            ObjectHandle ref = objectHandles.create(getHandles().getObject(handle));
+            reference.write((PolyglotNativeAPITypes.PolyglotReference) ref);
+        });
+    }
+
+    @CEntryPoint(name = "poly_open_handle_scope", documentation = {
+                    "Opens a handle scope. Until the scope is closed, all objects will belong to the newly created scope.",
+                    "",
+                    "Handles are: poly_engine, poly_engine_builder, poly_context, poly_context_builder, poly_language, poly_value, ",
+                    "and poly_callback_info.",
+                    "",
+                    " @since 19.0",
+    })
+    public static PolyglotStatus poly_open_handle_scope(PolyglotIsolateThread thread) {
+        return withHandledErrors(() -> getHandles().pushFrame(DEFAULT_FRAME_CAPACITY));
+    }
+
+    @CEntryPoint(name = "poly_close_handle_scope", documentation = {
+                    "Closes a handle scope. After this point, the handles from the current scope must not be used anymore.",
+                    "",
+                    "Handles are: poly_engine, poly_engine_builder, poly_context, poly_context_builder, poly_language, poly_value, ",
+                    "and poly_callback_info.",
+                    "",
+                    " @since 19.0",
+    })
+    public static PolyglotStatus poly_close_handle_scope(PolyglotIsolateThread thread) {
+        return withHandledErrors(() -> getHandles().popFrame());
+    }
+
+    @CEntryPoint(name = "poly_get_last_exception", documentation = {
+                    "Returns the last exception that occurred on this thread, or does nothing if an exception did not happen.",
+                    "",
+                    "This method must be called right after an exception occurs (after a method returns poly_pending_exception), ",
+                    "and can be called only once.",
+                    "",
+                    " @param result On success, a handle to the last exception on this thread is put here.",
+                    " @return poly_ok if everything went ok, otherwise an error occurred.",
+                    " @since 19.0",
+    })
+    public static PolyglotStatus poly_get_last_exception(PolyglotIsolateThread thread, PolyglotExceptionHandlePointer result) {
+        ErrorStateHolder holder = errorHolder.get();
+        if (holder == null || holder.polyglotException == null) {
+            result.write(ThreadLocalHandles.nullHandle());
+        } else {
+            result.write(createHandle(holder.polyglotException));
+            holder.polyglotException = null;
+        }
+        return poly_ok;
+    }
+
+    @CEntryPoint(name = "poly_exception_is_syntax_error", documentation = {
+                    "Checks if an exception is caused by a parser or syntax error.",
+                    "",
+                    " @param exception Handle to the exception object.",
+                    " @param result The result of the check.",
+                    " @return poly_ok if everything went ok, otherwise an error occurred.",
+                    " @since 19.0",
+    })
+    public static PolyglotStatus poly_exception_is_syntax_error(PolyglotIsolateThread thread, PolyglotExceptionHandle exception, CBoolPointer result) {
+        return withHandledErrors(() -> {
+            PolyglotException e = fetchHandle(exception);
+            result.write(CTypeConversion.toCBoolean(e.isSyntaxError()));
+        });
+    }
+
+    @CEntryPoint(name = "poly_exception_is_cancelled", documentation = {
+                    "Checks if execution has been cancelled.",
+                    "",
+                    " @param exception Handle to the exception object.",
+                    " @param result The result of the check.",
+                    " @return poly_ok if everything went ok, otherwise an error occurred.",
+                    " @since 19.0",
+    })
+    public static PolyglotStatus poly_exception_is_cancelled(PolyglotIsolateThread thread, PolyglotExceptionHandle exception, CBoolPointer result) {
+        return withHandledErrors(() -> {
+            PolyglotException e = fetchHandle(exception);
+            result.write(CTypeConversion.toCBoolean(e.isCancelled()));
+        });
+    }
+
+    @CEntryPoint(name = "poly_exception_is_internal_error", documentation = {
+                    "Checks if this exception was caused by an internal implementation error.",
+                    "",
+                    " @param exception Handle to the exception object.",
+                    " @param result The result of the check.",
+                    " @return poly_ok if everything went ok, otherwise an error occurred.",
+                    " @since 19.0",
+    })
+    public static PolyglotStatus poly_exception_is_internal_error(PolyglotIsolateThread thread, PolyglotExceptionHandle exception, CBoolPointer result) {
+        return withHandledErrors(() -> {
+            PolyglotException e = fetchHandle(exception);
+            result.write(CTypeConversion.toCBoolean(e.isInternalError()));
+        });
+    }
+
+    @CEntryPoint(name = "poly_exception_has_object", documentation = {
+                    "Checks if this exception has a guest language exception object attached to it.",
+                    "",
+                    " @param exception Handle to the exception object.",
+                    " @param result The result of the check.",
+                    " @return poly_ok if everything went ok, otherwise an error occurred.",
+                    " @since 19.0",
+    })
+    public static PolyglotStatus poly_exception_has_object(PolyglotIsolateThread thread, PolyglotExceptionHandle exception, CBoolPointer result) {
+        return withHandledErrors(() -> {
+            PolyglotException e = fetchHandle(exception);
+            result.write(CTypeConversion.toCBoolean(e.getGuestObject() != null));
+        });
+    }
+
+    @CEntryPoint(name = "poly_exception_get_object", documentation = {
+                    "Gets the handle to the guest exception object. This object can then be used in other poly methods.",
+                    "",
+                    " @param exception Handle to the exception object.",
+                    " @param result The handle to the guest object if it exists.",
+                    " @return poly_ok if everything went ok, otherwise an error occurred.",
+                    " @since 19.0",
+    })
+    public static PolyglotStatus poly_exception_get_object(PolyglotIsolateThread thread, PolyglotExceptionHandle exception, PolyglotValuePointer result) {
+        return withHandledErrors(() -> {
+            PolyglotException e = fetchHandle(exception);
+            Value guestObject = e.getGuestObject();
+            if (guestObject == null) {
+                reportError("Attempted to get the guest object of an exception that did not have one.", poly_generic_failure);
+            } else {
+                result.write(createHandle(guestObject));
+            }
+        });
+    }
+
+    @CEntryPoint(name = "poly_exception_get_stack_trace", documentation = {
+                    "Gets the guest stack traces as a string.",
+                    "The returned string is valid until the next call to this function",
+                    "",
+                    " @param exception Handle to the exception object.",
+                    " @param buffer UTF-8 string representing the stack trace. Can be NULL.",
+                    " @param buffer_size Size of the user-supplied buffer.",
+                    " @param result If buffer is NULL, this will contain the buffer size required to put the trace string in, otherwise, it will contain the number of bytes written",
+                    " @return poly_ok if everything went ok, otherwise an error occurred.",
+                    " @since 19.0",
+    })
+    public static PolyglotStatus poly_exception_get_stack_trace(PolyglotIsolateThread thread, PolyglotExceptionHandle exception, CCharPointer buffer, UnsignedWord buffer_size, SizeTPointer result) {
+        return withHandledErrors(() -> {
+            PolyglotException e = fetchHandle(exception);
+            StringWriter sw = new StringWriter();
+            PrintWriter pw = new PrintWriter(sw);
+            Iterable<PolyglotException.StackFrame> traceElements = e.getPolyglotStackTrace();
+
+            for (PolyglotException.StackFrame trace : traceElements) {
+                if (trace.isGuestFrame()) {
+                    pw.println(trace.toString());
+                }
+            }
+            writeString(sw.toString(), buffer, buffer_size, result, UTF8_CHARSET);
+        });
     }
 
     private static class PolyglotCallbackInfoInternal {
@@ -1510,11 +1720,11 @@ public final class PolyglotNativeAPI {
     }
 
     private static void resetErrorState() {
-        ErrorInfoHolder current = errorInfo.get();
-        if (current != null) {
+        ErrorStateHolder current = errorHolder.get();
+        if (current != null && current.info.isNonNull()) {
             current.messageHolder.close();
             UnmanagedMemory.free(current.info);
-            errorInfo.remove();
+            current.info = WordFactory.nullPointer();
         }
     }
 
@@ -1523,7 +1733,22 @@ public final class PolyglotNativeAPI {
     }
 
     private static PolyglotStatus handleThrowable(Throwable t) {
+        ErrorStateHolder current = errorHolder.get();
+        if (current == null) {
+            errorHolder.set(new ErrorStateHolder());
+            current = errorHolder.get();
+        }
+
         PolyglotStatus errorCode = t instanceof PolyglotNativeAPIError ? ((PolyglotNativeAPIError) t).getCode() : poly_generic_failure;
+        if (t instanceof PolyglotException) {
+            /*
+             * We should never have both a PolyglotException and an error happening at the same
+             * time.
+             */
+            current.polyglotException = (PolyglotException) t;
+            errorCode = poly_pending_exception;
+
+        }
         PolyglotExtendedErrorInfo unmanagedErrorInfo = UnmanagedMemory.malloc(SizeOf.get(PolyglotExtendedErrorInfo.class));
         unmanagedErrorInfo.setErrorCode(errorCode.getCValue());
         StringWriter sw = new StringWriter();
@@ -1534,7 +1759,9 @@ public final class PolyglotNativeAPI {
         CCharPointerHolder holder = CTypeConversion.toCString(sw.toString());
         CCharPointer value = holder.get();
         unmanagedErrorInfo.setErrorMessage(value);
-        errorInfo.set(new ErrorInfoHolder(unmanagedErrorInfo, holder));
+
+        current.messageHolder = holder;
+        current.info = unmanagedErrorInfo;
 
         return errorCode;
     }
@@ -1553,16 +1780,25 @@ public final class PolyglotNativeAPI {
         }
     }
 
-    private static ObjectHandle createHandle(Object result) {
-        return ObjectHandles.getGlobal().create(result);
+    private static PolyglotNativeAPITypes.PolyglotHandle createHandle(Object result) {
+        return getHandles().create(result);
     }
 
-    private static <T> T fetchHandle(ObjectHandle object) {
-        return ObjectHandles.getGlobal().get(object);
-    }
+    @SuppressWarnings("unchecked")
+    private static <T> T fetchHandle(PolyglotNativeAPITypes.PolyglotHandle object) {
+        if (object.equal(ThreadLocalHandles.nullHandle())) {
+            return null;
+        }
 
-    private static void destroyHandle(ObjectHandle handle) {
-        ObjectHandles.getGlobal().destroy(handle);
+        if (ThreadLocalHandles.isInRange(object)) {
+            return getHandles().getObject(object);
+        }
+
+        if (objectHandles.isInRange(object)) {
+            return objectHandles.get(object);
+        }
+
+        throw new RuntimeException("Invalid poly_reference or poly_handle.");
     }
 
     public static class CallbackException extends RuntimeException {

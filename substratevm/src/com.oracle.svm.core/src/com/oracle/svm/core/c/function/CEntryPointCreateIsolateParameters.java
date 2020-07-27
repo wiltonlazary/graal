@@ -24,13 +24,42 @@
  */
 package com.oracle.svm.core.c.function;
 
+import org.graalvm.nativeimage.c.struct.CField;
 import org.graalvm.nativeimage.c.struct.CStruct;
+import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.word.PointerBase;
+import org.graalvm.word.UnsignedWord;
 
 /**
  * Parameters for the creation of an isolate.
  */
 @CStruct("graal_create_isolate_params_t")
 public interface CEntryPointCreateIsolateParameters extends PointerBase {
-    // for future use
+    @CField("version")
+    int version();
+
+    @CField("version")
+    void setVersion(int version);
+
+    /* fields below: version 1 */
+
+    @CField("reserved_address_space_size")
+    UnsignedWord reservedSpaceSize();
+
+    @CField("reserved_address_space_size")
+    void setReservedSpaceSize(UnsignedWord reservedSpaceSize);
+
+    /* fields below: version 2 */
+
+    @CField("auxiliary_image_path")
+    CCharPointer auxiliaryImagePath();
+
+    @CField("auxiliary_image_path")
+    void setAuxiliaryImagePath(CCharPointer filePath);
+
+    @CField("auxiliary_image_reserved_space_size")
+    UnsignedWord auxiliaryImageReservedSpaceSize();
+
+    @CField("auxiliary_image_reserved_space_size")
+    void setAuxiliaryImageReservedSpaceSize(UnsignedWord auxImageReservedSize);
 }

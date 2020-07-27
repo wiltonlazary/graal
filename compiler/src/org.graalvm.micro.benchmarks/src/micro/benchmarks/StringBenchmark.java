@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,7 +30,6 @@ import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.State;
-import org.openjdk.jmh.annotations.Warmup;
 
 /**
  * Benchmarks cost of {@link String#indexOf(int)} and {@link String#indexOf(String)}.
@@ -60,47 +59,71 @@ public class StringBenchmark extends BenchmarkBase {
         String lorem = "Lorem ipsum dolor sit amet, consectetur adipisici elit, sed eiusmod tempor incidunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquid ex ea commodi consequat. Quis aute iure reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint obcaecat cupiditat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.";
         String loremLastChar = "Lorem ipsum dolor sit amet, consectetur adipisici elit, sed eiusmod tempor incidunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquid ex ea commodi consequat. Quis aute iure reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint obcaecat cupiditat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum?";
         // Checkstyle: resume
+
+        String smallLorem = lorem.substring(0, 13);
+        String largeLorem = lorem.concat(lorem);
+
+        char[] smallCharArray = lorem.substring(0, 13).toCharArray();
+        char[] largeCharArray = lorem.concat(lorem).toCharArray();
     }
 
     @Benchmark
-    @Warmup(iterations = 5)
     public int indexOfChar(BenchState state) {
         return state.lorem.indexOf(state.ch1);
     }
 
     @Benchmark
-    @Warmup(iterations = 5)
+    public int indexOfConstantChar(BenchState state) {
+        return state.smallLorem.indexOf(' ');
+    }
+
+    @Benchmark
     public int indexOfSingleCharString(BenchState state) {
         return state.lorem.indexOf(state.ch1string);
     }
 
     @Benchmark
-    @Warmup(iterations = 5)
     public int indexOfSingleCharStringLong(BenchState state) {
         return state.longString.indexOf('x');
     }
 
     @Benchmark
-    @Warmup(iterations = 5)
     public int indexOfCharNotFound(BenchState state) {
         return state.lorem.indexOf(state.ch2);
     }
 
     @Benchmark
-    @Warmup(iterations = 5)
     public int indexOfString(BenchState state) {
         return state.lorem.indexOf(state.s1);
     }
 
     @Benchmark
-    @Warmup(iterations = 5)
     public int indexOfStringNotFound(BenchState state) {
         return state.lorem.indexOf(state.s2);
     }
 
     @Benchmark
-    @Warmup(iterations = 5)
     public int compareTo(BenchState state) {
         return state.lorem.compareTo(state.loremLastChar);
+    }
+
+    @Benchmark
+    public String compressSmallString(BenchState state) {
+        return new String(state.smallCharArray);
+    }
+
+    @Benchmark
+    public String compressLargeString(BenchState state) {
+        return new String(state.largeCharArray);
+    }
+
+    @Benchmark
+    public char[] inflateSmallString(BenchState state) {
+        return state.smallLorem.toCharArray();
+    }
+
+    @Benchmark
+    public char[] inflateLargeString(BenchState state) {
+        return state.largeLorem.toCharArray();
     }
 }

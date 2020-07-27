@@ -33,9 +33,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 import org.graalvm.compiler.core.common.NumUtil;
+import org.graalvm.compiler.nodes.PiNode;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderContext;
-import org.graalvm.nativeimage.Feature;
+import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.meta.ReadableJavaField;
@@ -81,7 +82,7 @@ class VMThreadLocalCollector implements Function<Object, Object> {
 
     public VMThreadLocalInfo findInfo(GraphBuilderContext b, ValueNode threadLocalNode) {
         if (!threadLocalNode.isConstant()) {
-            throw shouldNotReachHere("Accessed VMThreadLocal is not a compile time constant: " + b.getMethod().asStackTraceElement(b.bci()));
+            throw shouldNotReachHere("Accessed VMThreadLocal is not a compile time constant: " + b.getMethod().asStackTraceElement(b.bci()) + " - node " + unPi(threadLocalNode));
         }
 
         FastThreadLocal threadLocal = (FastThreadLocal) SubstrateObjectConstant.asObject(threadLocalNode.asConstant());
@@ -127,7 +128,9 @@ class VMThreadLocalCollector implements Function<Object, Object> {
 
             assert info.sizeInBytes == -1;
             if (info.sizeSupplier != null) {
-                info.sizeInBytes = NumUtil.roundUp(info.sizeSupplier.getAsInt(), 8);
+                int unalignedSize = info.sizeSupplier.getAsInt();
+                assert unalignedSize > 0;
+                info.sizeInBytes = NumUtil.roundUp(unalignedSize, 8);
             } else {
                 info.sizeInBytes = ConfigurationValues.getObjectLayout().sizeInBytes(info.storageKind);
             }
@@ -164,5 +167,13 @@ class VMThreadLocalCollector implements Function<Object, Object> {
         }
         assert result != 0 : "not distinguishable: " + info1 + ", " + info2;
         return result;
+    }
+
+    private static ValueNode unPi(ValueNode n) {
+        ValueNode cur = n;
+        while (cur instanceof PiNode) {
+            cur = ((PiNode) cur).object();
+        }
+        return cur;
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,8 @@
  */
 package com.oracle.truffle.sl.runtime;
 
+import static com.oracle.truffle.api.CompilerDirectives.shouldNotReachHere;
+
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
@@ -47,7 +49,6 @@ import java.util.Collections;
 import java.util.List;
 
 import com.oracle.truffle.api.CallTarget;
-import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.Scope;
 import com.oracle.truffle.api.Truffle;
@@ -58,9 +59,6 @@ import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.instrumentation.AllocationReporter;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.nodes.NodeInfo;
-import com.oracle.truffle.api.object.DynamicObject;
-import com.oracle.truffle.api.object.Layout;
-import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.sl.SLLanguage;
 import com.oracle.truffle.sl.builtins.SLBuiltinNode;
@@ -71,6 +69,7 @@ import com.oracle.truffle.sl.builtins.SLHasSizeBuiltinFactory;
 import com.oracle.truffle.sl.builtins.SLHelloEqualsWorldBuiltinFactory;
 import com.oracle.truffle.sl.builtins.SLImportBuiltinFactory;
 import com.oracle.truffle.sl.builtins.SLIsExecutableBuiltinFactory;
+import com.oracle.truffle.sl.builtins.SLIsInstanceBuiltinFactory;
 import com.oracle.truffle.sl.builtins.SLIsNullBuiltinFactory;
 import com.oracle.truffle.sl.builtins.SLNanoTimeBuiltinFactory;
 import com.oracle.truffle.sl.builtins.SLNewObjectBuiltinFactory;
@@ -79,6 +78,8 @@ import com.oracle.truffle.sl.builtins.SLPrintlnBuiltinFactory;
 import com.oracle.truffle.sl.builtins.SLReadlnBuiltin;
 import com.oracle.truffle.sl.builtins.SLReadlnBuiltinFactory;
 import com.oracle.truffle.sl.builtins.SLStackTraceBuiltinFactory;
+import com.oracle.truffle.sl.builtins.SLTypeOfBuiltinFactory;
+import com.oracle.truffle.sl.builtins.SLWrapPrimitiveBuiltinFactory;
 import com.oracle.truffle.sl.nodes.SLExpressionNode;
 import com.oracle.truffle.sl.nodes.SLRootNode;
 import com.oracle.truffle.sl.nodes.local.SLReadArgumentNode;
@@ -94,13 +95,11 @@ import com.oracle.truffle.sl.nodes.local.SLReadArgumentNode;
 public final class SLContext {
 
     private static final Source BUILTIN_SOURCE = Source.newBuilder(SLLanguage.ID, "", "SL builtin").build();
-    private static final Layout LAYOUT = Layout.createLayout();
 
     private final Env env;
     private final BufferedReader input;
     private final PrintWriter output;
     private final SLFunctionRegistry functionRegistry;
-    private final Shape emptyShape;
     private final SLLanguage language;
     private final AllocationReporter allocationReporter;
     private final Iterable<Scope> topScopes; // Cache the top scopes
@@ -117,7 +116,6 @@ public final class SLContext {
         for (NodeFactory<? extends SLBuiltinNode> builtin : externalBuiltins) {
             installBuiltin(builtin);
         }
-        this.emptyShape = LAYOUT.createShape(SLObjectType.SINGLETON);
     }
 
     /**
@@ -172,6 +170,9 @@ public final class SLContext {
         installBuiltin(SLHasSizeBuiltinFactory.getInstance());
         installBuiltin(SLIsExecutableBuiltinFactory.getInstance());
         installBuiltin(SLIsNullBuiltinFactory.getInstance());
+        installBuiltin(SLWrapPrimitiveBuiltinFactory.getInstance());
+        installBuiltin(SLTypeOfBuiltinFactory.getInstance());
+        installBuiltin(SLIsInstanceBuiltinFactory.getInstance());
     }
 
     public void installBuiltin(NodeFactory<? extends SLBuiltinNode> factory) {
@@ -220,29 +221,8 @@ public final class SLContext {
     /*
      * Methods for object creation / object property access.
      */
-
     public AllocationReporter getAllocationReporter() {
         return allocationReporter;
-    }
-
-    /**
-     * Allocate an empty object. All new objects initially have no properties. Properties are added
-     * when they are first stored, i.e., the store triggers a shape change of the object.
-     */
-    public DynamicObject createObject() {
-        DynamicObject object = null;
-        allocationReporter.onEnter(null, 0, AllocationReporter.SIZE_UNKNOWN);
-        object = emptyShape.newInstance();
-        allocationReporter.onReturnValue(object, 0, AllocationReporter.SIZE_UNKNOWN);
-        return object;
-    }
-
-    public static boolean isSLObject(TruffleObject value) {
-        /*
-         * LAYOUT.getType() returns a concrete implementation class, i.e., a class that is more
-         * precise than the base class DynamicObject. This makes the type check faster.
-         */
-        return LAYOUT.getType().isInstance(value) && LAYOUT.getType().cast(value).getShape().getObjectType() == SLObjectType.SINGLETON;
     }
 
     /*
@@ -253,7 +233,7 @@ public final class SLContext {
         if (a instanceof Long || a instanceof SLBigNumber || a instanceof String || a instanceof Boolean) {
             return a;
         } else if (a instanceof Character) {
-            return String.valueOf(a);
+            return fromForeignCharacter((Character) a);
         } else if (a instanceof Number) {
             return fromForeignNumber(a);
         } else if (a instanceof TruffleObject) {
@@ -261,8 +241,7 @@ public final class SLContext {
         } else if (a instanceof SLContext) {
             return a;
         }
-        CompilerDirectives.transferToInterpreter();
-        throw new IllegalStateException(a + " is not a Truffle value");
+        throw shouldNotReachHere("Value is not a truffle value.");
     }
 
     @TruffleBoundary
@@ -270,8 +249,13 @@ public final class SLContext {
         return ((Number) a).longValue();
     }
 
+    @TruffleBoundary
+    private static String fromForeignCharacter(char c) {
+        return String.valueOf(c);
+    }
+
     public CallTarget parse(Source source) {
-        return env.parse(source);
+        return env.parsePublic(source);
     }
 
     /**

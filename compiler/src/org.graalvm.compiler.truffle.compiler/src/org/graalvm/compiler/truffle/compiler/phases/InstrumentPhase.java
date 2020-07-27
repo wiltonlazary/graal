@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,13 @@
  */
 package org.graalvm.compiler.truffle.compiler.phases;
 
+import static org.graalvm.compiler.truffle.compiler.TruffleCompilerOptions.getPolyglotOptionValue;
+import static org.graalvm.compiler.truffle.options.PolyglotCompilerOptions.InstrumentBoundaries;
+import static org.graalvm.compiler.truffle.options.PolyglotCompilerOptions.InstrumentBoundariesPerInlineSite;
+import static org.graalvm.compiler.truffle.options.PolyglotCompilerOptions.InstrumentBranches;
+import static org.graalvm.compiler.truffle.options.PolyglotCompilerOptions.InstrumentBranchesPerInlineSite;
+import static org.graalvm.compiler.truffle.options.PolyglotCompilerOptions.InstrumentationTableSize;
+
 import java.lang.reflect.Method;
 import java.util.AbstractMap;
 import java.util.ArrayList;
@@ -47,17 +54,17 @@ import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.calc.AddNode;
 import org.graalvm.compiler.nodes.java.LoadIndexedNode;
 import org.graalvm.compiler.nodes.java.StoreIndexedNode;
-import org.graalvm.compiler.options.OptionValues;
+import org.graalvm.compiler.nodes.spi.CoreProviders;
 import org.graalvm.compiler.phases.BasePhase;
-import org.graalvm.compiler.phases.tiers.PhaseContext;
-import org.graalvm.compiler.truffle.common.TruffleCompilerOptions;
+import org.graalvm.compiler.truffle.options.PolyglotCompilerOptions;
+import org.graalvm.options.OptionValues;
 
 import jdk.vm.ci.code.CodeUtil;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MetaUtil;
 
-public abstract class InstrumentPhase extends BasePhase<PhaseContext> {
+public abstract class InstrumentPhase extends BasePhase<CoreProviders> {
 
     private static boolean checkMethodExists(String declaringClassName, String methodName) {
         try {
@@ -79,14 +86,13 @@ public abstract class InstrumentPhase extends BasePhase<PhaseContext> {
     }
 
     private static final String[] OMITTED_STACK_PATTERNS = new String[]{
-                    asStackPattern("org.graalvm.compiler.truffle.runtime.OptimizedCallTarget", "callProxy"),
-                    asStackPattern("org.graalvm.compiler.truffle.runtime.OptimizedCallTarget", "callRoot"),
-                    asStackPattern("org.graalvm.compiler.truffle.runtime.OptimizedCallTarget", "callInlined"),
-                    asStackPattern("org.graalvm.compiler.truffle.runtime.OptimizedDirectCallNode", "callProxy"),
+                    asStackPattern("org.graalvm.compiler.truffle.runtime.OptimizedCallTarget", "executeRootNode"),
+                    asStackPattern("org.graalvm.compiler.truffle.runtime.OptimizedCallTarget", "profiledPERoot"),
+                    asStackPattern("org.graalvm.compiler.truffle.runtime.OptimizedCallTarget", "callDirect"),
                     asStackPattern("org.graalvm.compiler.truffle.runtime.OptimizedDirectCallNode", "call"),
     };
     private final Instrumentation instrumentation;
-    protected final MethodFilter[] methodFilter;
+    protected final MethodFilter methodFilter;
     protected final SnippetReflectionProvider snippetReflection;
 
     public InstrumentPhase(OptionValues options, SnippetReflectionProvider snippetReflection, Instrumentation instrumentation) {
@@ -94,7 +100,7 @@ public abstract class InstrumentPhase extends BasePhase<PhaseContext> {
         if (filterValue != null) {
             methodFilter = MethodFilter.parse(filterValue);
         } else {
-            methodFilter = new MethodFilter[0];
+            methodFilter = MethodFilter.matchNothing();
         }
         this.snippetReflection = snippetReflection;
         this.instrumentation = instrumentation;
@@ -105,10 +111,10 @@ public abstract class InstrumentPhase extends BasePhase<PhaseContext> {
     }
 
     protected String instrumentationFilter(OptionValues options) {
-        return TruffleCompilerOptions.TruffleInstrumentFilter.getValue(options);
+        return getPolyglotOptionValue(options, PolyglotCompilerOptions.InstrumentFilter);
     }
 
-    protected static void insertCounter(StructuredGraph graph, PhaseContext context, JavaConstant tableConstant,
+    protected static void insertCounter(StructuredGraph graph, CoreProviders context, JavaConstant tableConstant,
                     FixedWithNextNode targetNode, int slotIndex) {
         assert (tableConstant != null);
         TypeReference typeRef = TypeReference.createExactTrusted(context.getMetaAccess().lookupJavaType(tableConstant));
@@ -129,7 +135,7 @@ public abstract class InstrumentPhase extends BasePhase<PhaseContext> {
     }
 
     @Override
-    protected void run(StructuredGraph graph, PhaseContext context) {
+    protected void run(StructuredGraph graph, CoreProviders context) {
         JavaConstant tableConstant = snippetReflection.forObject(instrumentation.getAccessTable());
         try {
             instrumentGraph(graph, context, tableConstant);
@@ -138,11 +144,11 @@ public abstract class InstrumentPhase extends BasePhase<PhaseContext> {
         }
     }
 
-    protected abstract void instrumentGraph(StructuredGraph graph, PhaseContext context, JavaConstant tableConstant);
+    protected abstract void instrumentGraph(StructuredGraph graph, CoreProviders context, JavaConstant tableConstant);
 
     protected abstract int instrumentationPointSlotCount();
 
-    protected abstract boolean instrumentPerInlineSite(OptionValues options);
+    protected abstract boolean instrumentPerInlineSite();
 
     protected abstract Point createPoint(int id, int startIndex, Node n);
 
@@ -193,13 +199,13 @@ public abstract class InstrumentPhase extends BasePhase<PhaseContext> {
          * we discriminate nodes by their inlining site, or only by the method in which they were
          * defined.
          */
-        private static String filterAndEncode(MethodFilter[] methodFilter, Node node, InstrumentPhase phase) {
+        private static String filterAndEncode(MethodFilter methodFilter, Node node, InstrumentPhase phase) {
             NodeSourcePosition pos = node.getNodeSourcePosition();
             if (pos != null) {
-                if (!MethodFilter.matches(methodFilter, pos.getMethod())) {
+                if (!methodFilter.matches(pos.getMethod())) {
                     return null;
                 }
-                if (phase.instrumentPerInlineSite(node.getOptions())) {
+                if (phase.instrumentPerInlineSite()) {
                     StringBuilder sb = new StringBuilder();
                     while (pos != null) {
                         MetaUtil.appendLocation(sb.append("at "), pos.getMethod(), pos.getBCI());
@@ -219,8 +225,8 @@ public abstract class InstrumentPhase extends BasePhase<PhaseContext> {
             }
         }
 
-        private static String prettify(String key, Point p, OptionValues options) {
-            if (p.isPrettified(options)) {
+        private static String prettify(String key, Point p) {
+            if (p.isPrettified()) {
                 StringBuilder sb = new StringBuilder();
                 NodeSourcePosition pos = p.getPosition();
                 NodeSourcePosition lastPos = null;
@@ -272,7 +278,7 @@ public abstract class InstrumentPhase extends BasePhase<PhaseContext> {
             }
         }
 
-        public synchronized ArrayList<String> accessTableToList(OptionValues options) {
+        public synchronized ArrayList<String> accessTableToList() {
 
             /*
              * Using sortedEntries.addAll(pointMap.entrySet(), instead of the iteration below, is
@@ -296,7 +302,7 @@ public abstract class InstrumentPhase extends BasePhase<PhaseContext> {
 
             ArrayList<String> list = new ArrayList<>();
             for (Map.Entry<String, Point> entry : sortedEntries) {
-                list.add(prettify(entry.getKey(), entry.getValue(), options) + CodeUtil.NEW_LINE + entry.getValue());
+                list.add(prettify(entry.getKey(), entry.getValue()) + CodeUtil.NEW_LINE + entry.getValue());
             }
             return list;
         }
@@ -324,7 +330,7 @@ public abstract class InstrumentPhase extends BasePhase<PhaseContext> {
             return histogram;
         }
 
-        public synchronized void dumpAccessTable(OptionValues options) {
+        public synchronized void dumpAccessTable() {
             // Dump accumulated profiling information.
             TTY.println("Execution profile (sorted by hotness)");
             TTY.println("=====================================");
@@ -332,13 +338,13 @@ public abstract class InstrumentPhase extends BasePhase<PhaseContext> {
                 TTY.println(line);
             }
             TTY.println();
-            for (String line : accessTableToList(options)) {
+            for (String line : accessTableToList()) {
                 TTY.println(line);
                 TTY.println();
             }
         }
 
-        public synchronized Point getOrCreatePoint(MethodFilter[] methodFilter, Node n, InstrumentPhase phase) {
+        public synchronized Point getOrCreatePoint(MethodFilter methodFilter, Node n, InstrumentPhase phase) {
             String key = filterAndEncode(methodFilter, n, phase);
             if (key == null) {
                 return null;
@@ -365,6 +371,23 @@ public abstract class InstrumentPhase extends BasePhase<PhaseContext> {
 
         public long[] getAccessTable() {
             return accessTable;
+        }
+    }
+
+    public static final class InstrumentationConfiguration {
+
+        public final boolean instrumentBranches;
+        public final boolean instrumentBranchesPerInlineSite;
+        public final boolean instrumentBoundaries;
+        public final boolean instrumentBoundariesPerInlineSite;
+        public final int instrumentationTableSize;
+
+        public InstrumentationConfiguration(OptionValues options) {
+            this.instrumentBranches = getPolyglotOptionValue(options, InstrumentBranches);
+            this.instrumentBranchesPerInlineSite = getPolyglotOptionValue(options, InstrumentBranchesPerInlineSite);
+            this.instrumentBoundaries = getPolyglotOptionValue(options, InstrumentBoundaries);
+            this.instrumentBoundariesPerInlineSite = getPolyglotOptionValue(options, InstrumentBoundariesPerInlineSite);
+            this.instrumentationTableSize = getPolyglotOptionValue(options, InstrumentationTableSize);
         }
     }
 
@@ -396,7 +419,7 @@ public abstract class InstrumentPhase extends BasePhase<PhaseContext> {
 
         public abstract long getHotness();
 
-        public abstract boolean isPrettified(OptionValues options);
+        public abstract boolean isPrettified();
 
         public boolean shouldInclude() {
             return true;

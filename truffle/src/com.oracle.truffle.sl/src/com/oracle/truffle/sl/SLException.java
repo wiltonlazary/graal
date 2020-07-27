@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,15 +40,17 @@
  */
 package com.oracle.truffle.sl;
 
+import static com.oracle.truffle.api.CompilerDirectives.shouldNotReachHere;
+
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleException;
+import com.oracle.truffle.api.interop.InteropLibrary;
+import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.source.SourceSection;
-import com.oracle.truffle.sl.runtime.SLBigNumber;
 import com.oracle.truffle.sl.runtime.SLContext;
-import com.oracle.truffle.sl.runtime.SLFunction;
-import com.oracle.truffle.sl.runtime.SLNull;
+import com.oracle.truffle.sl.runtime.SLLanguageView;
 
 /**
  * SL does not need a sophisticated error checking and reporting mechanism, so all unexpected
@@ -58,6 +60,7 @@ import com.oracle.truffle.sl.runtime.SLNull;
 public class SLException extends RuntimeException implements TruffleException {
 
     private static final long serialVersionUID = -6799734410727348507L;
+    private static final InteropLibrary UNCACHED_LIB = InteropLibrary.getFactory().getUncached();
 
     private final Node location;
 
@@ -69,8 +72,8 @@ public class SLException extends RuntimeException implements TruffleException {
 
     @SuppressWarnings("sync-override")
     @Override
-    public Throwable fillInStackTrace() {
-        return null;
+    public final Throwable fillInStackTrace() {
+        return this;
     }
 
     public Node getLocation() {
@@ -105,24 +108,38 @@ public class SLException extends RuntimeException implements TruffleException {
 
         String sep = " ";
         for (int i = 0; i < values.length; i++) {
-            Object value = values[i];
+            /*
+             * For primitive or foreign values we request a language view so the values are printed
+             * from the perspective of simple language and not another language. Since this is a
+             * rather rarely invoked exceptional method, we can just create the language view for
+             * primitive values and then conveniently request the meta-object and display strings.
+             * Using the language view for core builtins like the typeOf builtin might not be a good
+             * idea for performance reasons.
+             */
+            Object value = SLLanguageView.forValue(values[i]);
             result.append(sep);
             sep = ", ";
-            if (value instanceof Long || value instanceof SLBigNumber) {
-                result.append("Number ").append(value);
-            } else if (value instanceof Boolean) {
-                result.append("Boolean ").append(value);
-            } else if (value instanceof String) {
-                result.append("String \"").append(value).append("\"");
-            } else if (value instanceof SLFunction) {
-                result.append("Function ").append(value);
-            } else if (value == SLNull.SINGLETON) {
-                result.append("NULL");
-            } else if (value == null) {
-                // value is not evaluated because of short circuit evaluation
+            if (value == null) {
                 result.append("ANY");
             } else {
-                result.append(value);
+                InteropLibrary valueLib = InteropLibrary.getFactory().getUncached(value);
+                if (valueLib.hasMetaObject(value) && !valueLib.isNull(value)) {
+                    String qualifiedName;
+                    try {
+                        qualifiedName = UNCACHED_LIB.asString(UNCACHED_LIB.getMetaQualifiedName(valueLib.getMetaObject(value)));
+                    } catch (UnsupportedMessageException e) {
+                        throw shouldNotReachHere(e);
+                    }
+                    result.append(qualifiedName);
+                    result.append(" ");
+                }
+                if (valueLib.isString(value)) {
+                    result.append("\"");
+                }
+                result.append(valueLib.toDisplayString(value));
+                if (valueLib.isString(value)) {
+                    result.append("\"");
+                }
             }
         }
         return new SLException(result.toString(), operation);

@@ -29,7 +29,9 @@ import org.graalvm.compiler.bytecode.BytecodeProvider;
 import org.graalvm.compiler.bytecode.ResolvedJavaMethodBytecodeProvider;
 import org.graalvm.compiler.core.common.spi.ConstantFieldProvider;
 import org.graalvm.compiler.core.common.spi.ForeignCallsProvider;
+import org.graalvm.compiler.core.common.spi.MetaAccessExtensionProvider;
 import org.graalvm.compiler.nodes.spi.LoweringProvider;
+import org.graalvm.compiler.nodes.spi.PlatformConfigurationProvider;
 import org.graalvm.compiler.nodes.spi.Replacements;
 import org.graalvm.compiler.nodes.spi.StampProvider;
 import org.graalvm.compiler.options.OptionValues;
@@ -37,8 +39,9 @@ import org.graalvm.compiler.phases.util.Providers;
 
 import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.svm.core.config.ConfigurationValues;
-import com.oracle.svm.core.graal.code.amd64.SubstrateAMD64Backend;
+import com.oracle.svm.core.graal.code.SubstrateBackendFactory;
 import com.oracle.svm.hosted.SVMHost;
+import com.oracle.svm.hosted.c.NativeLibraries;
 import com.oracle.svm.hosted.meta.HostedConstantFieldProvider;
 import com.oracle.svm.hosted.meta.HostedConstantReflectionProvider;
 import com.oracle.svm.hosted.meta.HostedMemoryAccessProvider;
@@ -47,6 +50,7 @@ import com.oracle.svm.hosted.meta.HostedSnippetReflectionProvider;
 import com.oracle.svm.hosted.meta.HostedUniverse;
 
 import jdk.vm.ci.code.CodeCacheProvider;
+import jdk.vm.ci.code.RegisterConfig;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 
 public class HostedRuntimeConfigurationBuilder extends SharedRuntimeConfigurationBuilder {
@@ -54,24 +58,19 @@ public class HostedRuntimeConfigurationBuilder extends SharedRuntimeConfiguratio
     private final HostedUniverse universe;
     private final HostedProviders analysisProviders;
 
-    public HostedRuntimeConfigurationBuilder(OptionValues options, SVMHost hostVM, HostedUniverse universe, HostedMetaAccess metaAccess, HostedProviders analysisProviders) {
-        super(options, hostVM, metaAccess, (providers) -> new SubstrateAMD64Backend(providers));
+    public HostedRuntimeConfigurationBuilder(OptionValues options, SVMHost hostVM, HostedUniverse universe, HostedMetaAccess metaAccess, HostedProviders analysisProviders,
+                    NativeLibraries nativeLibraries) {
+        super(options, hostVM, metaAccess, SubstrateBackendFactory.get()::newBackend, nativeLibraries);
         this.universe = universe;
         this.analysisProviders = analysisProviders;
     }
 
     @Override
-    public HostedRuntimeConfigurationBuilder build() {
-        super.build();
-        updateLazyState((HostedMetaAccess) metaAccess);
-        return this;
-    }
-
-    @Override
     protected Providers createProviders(CodeCacheProvider codeCache, ConstantReflectionProvider constantReflection, ConstantFieldProvider constantFieldProvider, ForeignCallsProvider foreignCalls,
-                    LoweringProvider lowerer, Replacements replacements, StampProvider stampProvider, SnippetReflectionProvider snippetReflection) {
+                    LoweringProvider lowerer, Replacements replacements, StampProvider stampProvider, SnippetReflectionProvider snippetReflection,
+                    PlatformConfigurationProvider platformConfigurationProvider, MetaAccessExtensionProvider metaAccessExtensionProvider) {
         return new HostedProviders(metaAccess, codeCache, constantReflection, constantFieldProvider, foreignCalls, lowerer, replacements, stampProvider, snippetReflection,
-                        wordTypes);
+                        wordTypes, platformConfigurationProvider, metaAccessExtensionProvider);
     }
 
     @Override
@@ -81,13 +80,18 @@ public class HostedRuntimeConfigurationBuilder extends SharedRuntimeConfiguratio
 
     @Override
     protected SnippetReflectionProvider createSnippetReflectionProvider() {
-        return new HostedSnippetReflectionProvider(hostVM);
+        return new HostedSnippetReflectionProvider(hostVM, getWordTypes());
     }
 
     @Override
     protected Replacements createReplacements(Providers p, SnippetReflectionProvider reflectionProvider) {
         BytecodeProvider bytecodeProvider = new ResolvedJavaMethodBytecodeProvider();
-        return new HostedReplacements(universe, p, reflectionProvider, ConfigurationValues.getTarget(), analysisProviders, bytecodeProvider, options);
+        return new HostedReplacements(universe, p, reflectionProvider, ConfigurationValues.getTarget(), analysisProviders, bytecodeProvider, getWordTypes());
+    }
+
+    @Override
+    protected CodeCacheProvider createCodeCacheProvider(RegisterConfig registerConfig) {
+        return new HostedCodeCacheProvider(ConfigurationValues.getTarget(), registerConfig);
     }
 
     @Override

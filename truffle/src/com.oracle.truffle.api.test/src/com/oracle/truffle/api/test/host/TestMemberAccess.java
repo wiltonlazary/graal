@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.test.host;
 
@@ -41,26 +57,15 @@ import java.util.Set;
 
 import org.junit.Test;
 
-import com.oracle.truffle.api.interop.ForeignAccess;
 import com.oracle.truffle.api.interop.InteropException;
-import com.oracle.truffle.api.interop.KeyInfo;
-import com.oracle.truffle.api.interop.Message;
+import com.oracle.truffle.api.interop.InteropLibrary;
+import com.oracle.truffle.api.interop.InvalidArrayIndexException;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
-import com.oracle.truffle.api.nodes.Node;
 
 public class TestMemberAccess extends ProxyLanguageEnvTest {
-
-    private final Node newNode = Message.NEW.createNode();
-    private final Node executeNode = Message.EXECUTE.createNode();
-    private final Node unboxNode = Message.UNBOX.createNode();
-    private final Node isBoxedNode = Message.IS_BOXED.createNode();
-    private final Node isNullNode = Message.IS_NULL.createNode();
-    private final Node isExecutableNode = Message.IS_EXECUTABLE.createNode();
-    private final Node readNode = Message.READ.createNode();
-    private final Node keysNode = Message.KEYS.createNode();
-    private final Node keyInfoNode = Message.KEY_INFO.createNode();
+    private static final InteropLibrary INTEROP = InteropLibrary.getFactory().getUncached();
 
     @Test
     public void testFields() throws IllegalAccessException, InteropException {
@@ -155,38 +160,36 @@ public class TestMemberAccess extends ProxyLanguageEnvTest {
     }
 
     private void assertKeys(TruffleObject obj) throws UnsupportedMessageException {
-        List<?> keys = asJavaObject(List.class, ForeignAccess.sendKeys(keysNode, obj));
+        List<?> keys = asJavaObject(List.class, INTEROP.getMembers(obj));
         Set<String> foundKeys = new HashSet<>();
         for (Object key : keys) {
             assertTrue("Is string" + key, key instanceof String);
             String keyName = (String) key;
             assertEquals("No __ in " + keyName, -1, keyName.indexOf("__"));
-            int info = ForeignAccess.sendKeyInfo(keyInfoNode, obj, keyName);
-            if (!KeyInfo.isInvocable(info)) {
+            if (!INTEROP.isMemberInvocable(obj, keyName)) {
                 continue;
             }
             foundKeys.add(keyName);
         }
 
         Set<String> foundInternalKeys = new HashSet<>();
-        List<?> internalKeys = asJavaObject(List.class, ForeignAccess.sendKeys(keysNode, obj, true));
+        List<?> internalKeys = asJavaObject(List.class, INTEROP.getMembers(obj, true));
         for (Object key : internalKeys) {
             assertTrue("Is string" + key, key instanceof String);
             String keyName = (String) key;
-            int info = ForeignAccess.sendKeyInfo(keyInfoNode, obj, keyName);
 
             if (!keyName.contains("__")) {
-                if (!KeyInfo.isInvocable(info)) {
+                if (!INTEROP.isMemberInvocable(obj, keyName)) {
                     continue;
                 }
-                assertTrue("Not internal: " + keyName, !KeyInfo.isInternal(info) || isObjectMethodName(keyName));
+                assertTrue("Not internal: " + keyName, !INTEROP.isMemberInternal(obj, keyName) || isObjectMethodName(keyName));
                 boolean found = foundKeys.remove(keyName);
                 assertTrue("Non-internal key has been listed before: " + keyName, found || isObjectMethodName(keyName));
             } else {
-                assertTrue("Internal: " + keyName, KeyInfo.isInternal(info));
+                assertTrue("Internal: " + keyName, INTEROP.isMemberInternal(obj, keyName));
                 foundInternalKeys.add(keyName);
             }
-            assertTrue("Is invocable " + keyName, KeyInfo.isInvocable(info));
+            assertTrue("Is invocable " + keyName, INTEROP.isMemberInvocable(obj, keyName));
         }
 
         assertTrue("All normal keys listed in internal mode too: " + foundKeys, foundKeys.isEmpty());
@@ -303,21 +306,21 @@ public class TestMemberAccess extends ProxyLanguageEnvTest {
     @Test
     public void testNewArray() throws InteropException {
         TruffleObject arrayClass = asTruffleHostSymbol(Array.class);
-        TruffleObject newInstanceMethod = (TruffleObject) ForeignAccess.send(readNode, arrayClass, "newInstance");
-        TruffleObject stringArray = (TruffleObject) ForeignAccess.sendExecute(executeNode, newInstanceMethod, asTruffleHostSymbol(String.class), 2);
-        assertTrue(HostInteropTest.isArray(stringArray));
+        TruffleObject newInstanceMethod = (TruffleObject) INTEROP.readMember(arrayClass, "newInstance");
+        TruffleObject stringArray = (TruffleObject) INTEROP.execute(newInstanceMethod, asTruffleHostSymbol(String.class), 2);
+        assertTrue(INTEROP.hasArrayElements(stringArray));
     }
 
     @Test
     public void testArrayOutOfBoundsAccess() throws InteropException {
         Object[] array = new Object[1];
         TruffleObject arrayObject = asTruffleObject(array);
-        assertTrue(HostInteropTest.isArray(arrayObject));
-        ForeignAccess.sendRead(readNode, arrayObject, 0);
+        assertTrue(INTEROP.hasArrayElements(arrayObject));
+        INTEROP.readArrayElement(arrayObject, 0);
         try {
-            ForeignAccess.sendRead(readNode, arrayObject, 1);
+            INTEROP.readArrayElement(arrayObject, 1);
             fail();
-        } catch (UnknownIdentifierException e) {
+        } catch (InvalidArrayIndexException e) {
         }
     }
 
@@ -325,7 +328,7 @@ public class TestMemberAccess extends ProxyLanguageEnvTest {
     public void testObjectReadIndex() throws InteropException {
         TruffleObject arrayObject = asTruffleObject(new TestClass());
         try {
-            ForeignAccess.sendRead(readNode, arrayObject, 0);
+            INTEROP.readArrayElement(arrayObject, 0);
             fail();
         } catch (UnsupportedMessageException e) {
         }
@@ -335,31 +338,31 @@ public class TestMemberAccess extends ProxyLanguageEnvTest {
     public void testOverloadedConstructor1() throws InteropException {
         TruffleObject testClass = asTruffleHostSymbol(TestConstructor.class);
         TruffleObject testObj;
-        testObj = (TruffleObject) ForeignAccess.sendNew(newNode, testClass);
-        assertEquals(void.class.getName(), ForeignAccess.sendRead(readNode, testObj, "ctor"));
-        testObj = (TruffleObject) ForeignAccess.sendNew(newNode, testClass, 42);
-        assertEquals(int.class.getName(), ForeignAccess.sendRead(readNode, testObj, "ctor"));
-        testObj = (TruffleObject) ForeignAccess.sendNew(newNode, testClass, 4.2f);
-        assertEquals(float.class.getName(), ForeignAccess.sendRead(readNode, testObj, "ctor"));
+        testObj = (TruffleObject) INTEROP.instantiate(testClass);
+        assertEquals(void.class.getName(), INTEROP.readMember(testObj, "ctor"));
+        testObj = (TruffleObject) INTEROP.instantiate(testClass, 42);
+        assertEquals(int.class.getName(), INTEROP.readMember(testObj, "ctor"));
+        testObj = (TruffleObject) INTEROP.instantiate(testClass, 4.2f);
+        assertEquals(float.class.getName(), INTEROP.readMember(testObj, "ctor"));
     }
 
     @Test
     public void testOverloadedConstructor2() throws InteropException {
         TruffleObject testClass = asTruffleHostSymbol(TestConstructor.class);
         TruffleObject testObj;
-        testObj = (TruffleObject) ForeignAccess.sendNew(newNode, testClass, (short) 42);
-        assertEquals(int.class.getName(), ForeignAccess.sendRead(readNode, testObj, "ctor"));
-        testObj = (TruffleObject) ForeignAccess.sendNew(newNode, testClass, 4.2f);
+        testObj = (TruffleObject) INTEROP.instantiate(testClass, (short) 42);
+        assertEquals(int.class.getName(), INTEROP.readMember(testObj, "ctor"));
+        testObj = (TruffleObject) INTEROP.instantiate(testClass, 4.2f);
         // TODO prioritize conversion from double to float over double to int
-        // assertEquals(float.class.getName(), ForeignAccess.sendRead(readNode, testObj, "ctor"));
+        // assertEquals(float.class.getName(), INTEROP.readMember(testObj, "ctor"));
     }
 
     @Test
     public void testOverloadedConstructor3() throws InteropException {
         TruffleObject clazz = asTruffleHostSymbol(TestConstructorException.class);
-        Object testObj = ForeignAccess.sendNew(Message.NEW.createNode(), clazz, "test", 42);
+        Object testObj = INTEROP.instantiate(clazz, "test", 42);
         assertTrue(testObj instanceof TruffleObject && env.asHostObject(testObj) instanceof TestConstructorException);
-        HostInteropTest.assertThrowsExceptionWithCause(() -> ForeignAccess.sendNew(Message.NEW.createNode(), clazz, "test"), IOException.class);
+        assertThrowsExceptionWithCause(() -> INTEROP.instantiate(clazz, "test"), IOException.class);
     }
 
     @Test
@@ -368,13 +371,13 @@ public class TestMemberAccess extends ProxyLanguageEnvTest {
         l.add("one");
         l.add("two");
         TruffleObject listObject = asTruffleObject(l);
-        TruffleObject itFunction = (TruffleObject) ForeignAccess.sendRead(readNode, listObject, "iterator");
-        TruffleObject it = (TruffleObject) ForeignAccess.sendExecute(executeNode, itFunction);
-        TruffleObject hasNextFunction = (TruffleObject) ForeignAccess.sendRead(readNode, it, "hasNext");
+        TruffleObject itFunction = (TruffleObject) INTEROP.readMember(listObject, "iterator");
+        TruffleObject it = (TruffleObject) INTEROP.execute(itFunction);
+        TruffleObject hasNextFunction = (TruffleObject) INTEROP.readMember(it, "hasNext");
         List<Object> returned = new ArrayList<>();
-        while ((boolean) ForeignAccess.sendExecute(executeNode, hasNextFunction)) {
-            TruffleObject nextFunction = (TruffleObject) ForeignAccess.sendRead(readNode, it, "next");
-            Object element = ForeignAccess.sendExecute(executeNode, nextFunction);
+        while ((boolean) INTEROP.execute(hasNextFunction)) {
+            TruffleObject nextFunction = (TruffleObject) INTEROP.readMember(it, "next");
+            Object element = INTEROP.execute(nextFunction);
             returned.add(element);
         }
         assertEquals(l.size(), returned.size());
@@ -384,13 +387,13 @@ public class TestMemberAccess extends ProxyLanguageEnvTest {
 
     @Test
     public void testMethodThrowsIOException() {
-        HostInteropTest.assertThrowsExceptionWithCause(() -> getValueFromMember(TestClass2.class, "methodThrowsIOException"), IOException.class);
+        assertThrowsExceptionWithCause(() -> getValueFromMember(TestClass2.class, "methodThrowsIOException"), IOException.class);
     }
 
     private void testForValue(String name, Object value) throws InteropException {
         Object o = getValueFromMember(name);
         if (value == null) {
-            if (o == null || (o instanceof TruffleObject && ForeignAccess.sendIsNull(isNullNode, (TruffleObject) o))) {
+            if (o == null || (o instanceof TruffleObject && INTEROP.isNull(o))) {
                 return;
             }
         }
@@ -403,17 +406,14 @@ public class TestMemberAccess extends ProxyLanguageEnvTest {
 
     private Object getValueFromMember(Class<?> javaClazz, String name, Object... parameters) throws InteropException {
         TruffleObject clazz = asTruffleHostSymbol(javaClazz);
-        Object o = ForeignAccess.sendNew(newNode, clazz);
+        Object o = INTEROP.instantiate(clazz);
         try {
-            o = ForeignAccess.sendRead(readNode, (TruffleObject) o, name);
+            o = INTEROP.readMember(o, name);
         } catch (UnknownIdentifierException e) {
-            o = ForeignAccess.sendRead(readNode, clazz, name);
+            o = INTEROP.readMember(clazz, name);
         }
-        if (o instanceof TruffleObject && ForeignAccess.sendIsExecutable(isExecutableNode, (TruffleObject) o)) {
-            o = ForeignAccess.sendExecute(executeNode, (TruffleObject) o, parameters);
-        }
-        if (o instanceof TruffleObject && ForeignAccess.sendIsBoxed(isBoxedNode, (TruffleObject) o)) {
-            o = ForeignAccess.sendUnbox(unboxNode, (TruffleObject) o);
+        if (o instanceof TruffleObject && INTEROP.isExecutable(o)) {
+            o = INTEROP.execute((TruffleObject) o, parameters);
         }
         return o;
     }

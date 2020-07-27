@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,8 +24,10 @@
  */
 package org.graalvm.compiler.replacements.nodes;
 
+import static org.graalvm.compiler.core.common.GraalOptions.UseGraalStubs;
 import static org.graalvm.compiler.nodeinfo.InputType.Memory;
 
+import org.graalvm.compiler.core.common.spi.ForeignCallLinkage;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
@@ -41,7 +43,7 @@ import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.ValueNodeUtil;
 import org.graalvm.compiler.nodes.memory.MemoryAccess;
-import org.graalvm.compiler.nodes.memory.MemoryNode;
+import org.graalvm.compiler.nodes.memory.MemoryKill;
 import org.graalvm.compiler.nodes.spi.LIRLowerable;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
 import org.graalvm.compiler.nodes.spi.Virtualizable;
@@ -60,7 +62,7 @@ import jdk.vm.ci.meta.Value;
 /**
  * Compares two arrays with the same length.
  */
-@NodeInfo(cycles = NodeCycles.CYCLES_UNKNOWN, size = NodeSize.SIZE_128)
+@NodeInfo(cycles = NodeCycles.CYCLES_UNKNOWN, size = NodeSize.SIZE_128, allowedUsageTypes = {Memory})
 public final class ArrayEqualsNode extends FixedWithNextNode implements LIRLowerable, Canonicalizable, Virtualizable, MemoryAccess {
 
     public static final NodeClass<ArrayEqualsNode> TYPE = NodeClass.create(ArrayEqualsNode.class);
@@ -76,7 +78,7 @@ public final class ArrayEqualsNode extends FixedWithNextNode implements LIRLower
     /** Length of both arrays. */
     @Input ValueNode length;
 
-    @OptionalInput(Memory) MemoryNode lastLocationAccess;
+    @OptionalInput(Memory) MemoryKill lastLocationAccess;
 
     public ArrayEqualsNode(ValueNode array1, ValueNode array2, ValueNode length, @ConstantNodeParameter JavaKind kind) {
         super(TYPE, StampFactory.forKind(JavaKind.Boolean));
@@ -84,18 +86,6 @@ public final class ArrayEqualsNode extends FixedWithNextNode implements LIRLower
         this.array1 = array1;
         this.array2 = array2;
         this.length = length;
-    }
-
-    public ValueNode getArray1() {
-        return array1;
-    }
-
-    public ValueNode getArray2() {
-        return array2;
-    }
-
-    public ValueNode getLength() {
-        return length;
     }
 
     private static boolean isNaNFloat(JavaConstant constant) {
@@ -157,14 +147,14 @@ public final class ArrayEqualsNode extends FixedWithNextNode implements LIRLower
                             // Float NaN constants are different constant nodes but treated as
                             // equal in Arrays.equals([F[F) or Arrays.equals([D[D).
                             if (entry1.getStackKind() == JavaKind.Float && entry2.getStackKind() == JavaKind.Float) {
-                                float value1 = ((JavaConstant) ((ConstantNode) entry1).asConstant()).asFloat();
-                                float value2 = ((JavaConstant) ((ConstantNode) entry2).asConstant()).asFloat();
+                                float value1 = ((JavaConstant) entry1.asConstant()).asFloat();
+                                float value2 = ((JavaConstant) entry2.asConstant()).asFloat();
                                 if (Float.floatToIntBits(value1) != Float.floatToIntBits(value2)) {
                                     allEqual = false;
                                 }
                             } else if (entry1.getStackKind() == JavaKind.Double && entry2.getStackKind() == JavaKind.Double) {
-                                double value1 = ((JavaConstant) ((ConstantNode) entry1).asConstant()).asDouble();
-                                double value2 = ((JavaConstant) ((ConstantNode) entry2).asConstant()).asDouble();
+                                double value1 = ((JavaConstant) entry1.asConstant()).asDouble();
+                                double value2 = ((JavaConstant) entry2.asConstant()).asDouble();
                                 if (Double.doubleToLongBits(value1) != Double.doubleToLongBits(value2)) {
                                     allEqual = false;
                                 }
@@ -190,7 +180,7 @@ public final class ArrayEqualsNode extends FixedWithNextNode implements LIRLower
     }
 
     @NodeIntrinsic
-    static native boolean equals(Object array1, Object array2, int length, @ConstantNodeParameter JavaKind kind);
+    public static native boolean equals(Object array1, Object array2, int length, @ConstantNodeParameter JavaKind kind);
 
     public static boolean equals(boolean[] array1, boolean[] array2, int length) {
         return equals(array1, array2, length, JavaKind.Boolean);
@@ -224,9 +214,25 @@ public final class ArrayEqualsNode extends FixedWithNextNode implements LIRLower
         return equals(array1, array2, length, JavaKind.Double);
     }
 
+    public ValueNode getLength() {
+        return length;
+    }
+
+    public JavaKind getKind() {
+        return kind;
+    }
+
     @Override
     public void generate(NodeLIRBuilderTool gen) {
-        Value result = gen.getLIRGeneratorTool().emitArrayEquals(kind, gen.operand(array1), gen.operand(array2), gen.operand(length));
+        if (UseGraalStubs.getValue(graph().getOptions())) {
+            ForeignCallLinkage linkage = gen.lookupGraalStub(this);
+            if (linkage != null) {
+                Value result = gen.getLIRGeneratorTool().emitForeignCall(linkage, null, gen.operand(array1), gen.operand(array2), gen.operand(length));
+                gen.setResult(this, result);
+                return;
+            }
+        }
+        Value result = gen.getLIRGeneratorTool().emitArrayEquals(kind, gen.operand(array1), gen.operand(array2), gen.operand(length), false);
         gen.setResult(this, result);
     }
 
@@ -236,13 +242,14 @@ public final class ArrayEqualsNode extends FixedWithNextNode implements LIRLower
     }
 
     @Override
-    public MemoryNode getLastLocationAccess() {
+    public MemoryKill getLastLocationAccess() {
         return lastLocationAccess;
     }
 
     @Override
-    public void setLastLocationAccess(MemoryNode lla) {
+    public void setLastLocationAccess(MemoryKill lla) {
         updateUsages(ValueNodeUtil.asNode(lastLocationAccess), ValueNodeUtil.asNode(lla));
         lastLocationAccess = lla;
     }
+
 }

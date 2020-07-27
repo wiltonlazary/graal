@@ -1,72 +1,90 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.object.basic.test;
 
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
 
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
+import org.junit.runners.Parameterized.Parameter;
 import org.junit.runners.Parameterized.Parameters;
 
 import com.oracle.truffle.api.object.DynamicObject;
+import com.oracle.truffle.api.object.DynamicObjectLibrary;
 import com.oracle.truffle.api.object.Layout;
 import com.oracle.truffle.api.object.Layout.ImplicitCast;
 import com.oracle.truffle.api.object.Location;
 import com.oracle.truffle.api.object.ObjectType;
 import com.oracle.truffle.api.object.Shape;
-import com.oracle.truffle.object.basic.DefaultLayoutFactory;
+import com.oracle.truffle.api.test.AbstractParametrizedLibraryTest;
 
 @RunWith(Parameterized.class)
-public class ImplicitCastTest {
+public class ImplicitCastTest extends AbstractParametrizedLibraryTest {
 
-    static final Layout longLayout = new DefaultLayoutFactory().createLayout(Layout.newLayout().addAllowedImplicitCast(ImplicitCast.IntToLong));
-    static final Layout doubleLayout = new DefaultLayoutFactory().createLayout(Layout.newLayout().addAllowedImplicitCast(ImplicitCast.IntToDouble));
+    static final Layout longLayout = Layout.newLayout().addAllowedImplicitCast(ImplicitCast.IntToLong).build();
+    static final Layout doubleLayout = Layout.newLayout().addAllowedImplicitCast(ImplicitCast.IntToDouble).build();
 
     @Parameters
     public static Collection<Object[]> data() {
-        return Arrays.asList(new Object[][]{
-                        {longLayout, 1, 1L << 42, long.class},
-                        {doubleLayout, 1, 3.14, double.class}
-        });
+        List<Object[]> params = new ArrayList<>();
+
+        for (TestRun run : TestRun.values()) {
+            params.add(new Object[]{run, longLayout, 1, 1L << 42, long.class});
+            params.add(new Object[]{run, doubleLayout, 1, 3.14, double.class});
+        }
+
+        return Collections.unmodifiableList(params);
     }
 
-    final Layout layout;
-    final int intVal;
-    final Object otherVal;
-    final Class<?> otherPrimClass;
+    @Parameter(1) public Layout layout;
+    @Parameter(2) public int intVal;
+    @Parameter(3) public Object otherVal;
+    @Parameter(4) public Class<?> otherPrimClass;
 
-    public ImplicitCastTest(Layout layout, int intVal, Object otherVal, Class<?> otherPrimClass) {
-        this.layout = layout;
-        this.intVal = intVal;
-        this.otherVal = otherVal;
-        this.otherPrimClass = otherPrimClass;
-    }
-
+    @SuppressWarnings("deprecation")
     private static Class<?> getLocationType(Location location) {
         return ((com.oracle.truffle.api.object.TypedLocation) location).getType();
     }
@@ -75,14 +93,17 @@ public class ImplicitCastTest {
     public void testIntOther() {
         Shape rootShape = layout.createShape(new ObjectType());
         DynamicObject object = rootShape.newInstance();
-        object.define("a", intVal);
+
+        DynamicObjectLibrary library = createLibrary(DynamicObjectLibrary.class, object);
+
+        library.put(object, "a", intVal);
         Location location1 = object.getShape().getProperty("a").getLocation();
         Assert.assertEquals(int.class, getLocationType(location1));
 
-        object.define("a", otherVal);
+        library.put(object, "a", otherVal);
         Location location2 = object.getShape().getProperty("a").getLocation();
         Assert.assertEquals(otherPrimClass, getLocationType(location2));
-        Assert.assertEquals(otherVal.getClass(), object.get("a").getClass());
+        Assert.assertEquals(otherVal.getClass(), library.getOrDefault(object, "a", null).getClass());
         DOTestAsserts.assertSameLocation(location1, location2);
     }
 
@@ -90,14 +111,17 @@ public class ImplicitCastTest {
     public void testOtherInt() {
         Shape rootShape = layout.createShape(new ObjectType());
         DynamicObject object = rootShape.newInstance();
-        object.define("a", otherVal);
+
+        DynamicObjectLibrary library = createLibrary(DynamicObjectLibrary.class, object);
+
+        library.put(object, "a", otherVal);
         Location location1 = object.getShape().getProperty("a").getLocation();
         Assert.assertEquals(otherPrimClass, getLocationType(location1));
 
-        object.define("a", intVal);
+        library.put(object, "a", intVal);
         Location location2 = object.getShape().getProperty("a").getLocation();
         Assert.assertEquals(otherPrimClass, getLocationType(location2));
-        Assert.assertEquals(otherVal.getClass(), object.get("a").getClass());
+        Assert.assertEquals(otherVal.getClass(), library.getOrDefault(object, "a", null).getClass());
         DOTestAsserts.assertSameLocation(location1, location2);
     }
 
@@ -105,20 +129,23 @@ public class ImplicitCastTest {
     public void testIntOtherDoesNotGoBack() {
         Shape rootShape = layout.createShape(new ObjectType());
         DynamicObject object = rootShape.newInstance();
-        object.define("a", intVal);
+
+        DynamicObjectLibrary library = createLibrary(DynamicObjectLibrary.class, object);
+
+        library.put(object, "a", intVal);
         Location location1 = object.getShape().getProperty("a").getLocation();
         Assert.assertEquals(int.class, getLocationType(location1));
 
-        object.define("a", otherVal);
+        library.put(object, "a", otherVal);
         Location location2 = object.getShape().getProperty("a").getLocation();
         Assert.assertEquals(otherPrimClass, getLocationType(location2));
-        Assert.assertEquals(otherVal.getClass(), object.get("a").getClass());
+        Assert.assertEquals(otherVal.getClass(), library.getOrDefault(object, "a", null).getClass());
         DOTestAsserts.assertSameLocation(location1, location2);
 
-        object.define("a", intVal);
+        library.put(object, "a", intVal);
         Location location3 = object.getShape().getProperty("a").getLocation();
         Assert.assertEquals(otherPrimClass, getLocationType(location3));
-        Assert.assertEquals(otherVal.getClass(), object.get("a").getClass());
+        Assert.assertEquals(otherVal.getClass(), library.getOrDefault(object, "a", null).getClass());
         DOTestAsserts.assertSameLocation(location2, location3);
     }
 
@@ -126,41 +153,50 @@ public class ImplicitCastTest {
     public void testIntObject() {
         Shape rootShape = layout.createShape(new ObjectType());
         DynamicObject object = rootShape.newInstance();
-        object.define("a", intVal);
-        object.define("a", "");
+
+        DynamicObjectLibrary library = createLibrary(DynamicObjectLibrary.class, object);
+
+        library.put(object, "a", intVal);
+        library.put(object, "a", "");
         Location location = object.getShape().getProperty("a").getLocation();
         Assert.assertEquals(Object.class, getLocationType(location));
-        Assert.assertEquals(String.class, object.get("a").getClass());
+        Assert.assertEquals(String.class, library.getOrDefault(object, "a", null).getClass());
     }
 
     @Test
     public void testIntOtherObject() {
         Shape rootShape = layout.createShape(new ObjectType());
         DynamicObject object = rootShape.newInstance();
-        object.define("a", intVal);
-        object.define("a", otherVal);
-        object.define("a", "");
+
+        DynamicObjectLibrary library = createLibrary(DynamicObjectLibrary.class, object);
+
+        library.put(object, "a", intVal);
+        library.put(object, "a", otherVal);
+        library.put(object, "a", "");
         Location location = object.getShape().getProperty("a").getLocation();
         Assert.assertEquals(Object.class, getLocationType(location));
-        Assert.assertEquals(String.class, object.get("a").getClass());
+        Assert.assertEquals(String.class, library.getOrDefault(object, "a", null).getClass());
     }
 
     @Test
     public void testLocationDecoratorEquals() {
-        Layout defaultLayout = new DefaultLayoutFactory().createLayout(Layout.newLayout());
+        Layout defaultLayout = Layout.newLayout().build();
         Shape defaultRootShape = defaultLayout.createShape(new ObjectType());
         Shape implicitCastRootShape = layout.createShape(new ObjectType());
 
         DynamicObject object1 = implicitCastRootShape.newInstance();
-        object1.define("a", otherVal);
+
+        DynamicObjectLibrary library = createLibrary(DynamicObjectLibrary.class, object1);
+
+        library.put(object1, "a", otherVal);
         Location location1 = object1.getShape().getProperty("a").getLocation();
 
         // Location of "a" should not change if an Integer is set
-        object1.set("a", intVal);
+        library.putIfPresent(object1, "a", intVal);
         Assert.assertEquals(location1, object1.getShape().getProperty("a").getLocation());
 
         DynamicObject object2 = defaultRootShape.newInstance();
-        object2.define("a", otherVal);
+        library.put(object2, "a", otherVal);
         Location location2 = object2.getShape().getProperty("a").getLocation();
 
         // This test relies on the assumption that both locations are of the same class

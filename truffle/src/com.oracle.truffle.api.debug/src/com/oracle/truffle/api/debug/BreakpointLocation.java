@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.debug;
 
@@ -46,10 +62,18 @@ import com.oracle.truffle.api.source.SourceSection;
  */
 abstract class BreakpointLocation {
 
+    protected final SourceElement[] sourceElements;
+
+    protected BreakpointLocation(SourceElement[] sourceElements) {
+        this.sourceElements = sourceElements;
+    }
+
     /**
      * A source location with {@code key == null} that always matches.
      */
     static final BreakpointLocation ANY = new BreakpointSourceLocation();
+
+    static final URI ANY_SOURCE = URI.create("");
 
     static BreakpointLocation create(Object key, SourceElement[] sourceElements, SourceSection sourceSection) {
         return new BreakpointSourceLocation(key, sourceElements, sourceSection);
@@ -63,7 +87,23 @@ abstract class BreakpointLocation {
         return new BreakpointFilteredLocation(sourceElements, filter);
     }
 
+    final boolean containsRoot() {
+        if (sourceElements == null) {
+            return true;
+        }
+        for (SourceElement elem : sourceElements) {
+            if (SourceElement.ROOT == elem) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     abstract SourceFilter createSourceFilter();
+
+    abstract Predicate<Source> createSourcePredicate();
+
+    abstract boolean canAdjustLocation();
 
     abstract SourceSection adjustLocation(Source source, TruffleInstrument.Env env, SuspendAnchor suspendAnchor);
 
@@ -80,7 +120,6 @@ abstract class BreakpointLocation {
     private static final class BreakpointSourceLocation extends BreakpointLocation {
 
         private final Object key;
-        private final SourceElement[] sourceElements;
         private final SourceSection sourceSection;
         private int line;
         private int column;
@@ -90,9 +129,9 @@ abstract class BreakpointLocation {
          * @param line 1-based line number, -1 for unspecified
          */
         BreakpointSourceLocation(Object key, SourceElement[] sourceElements, SourceSection sourceSection) {
+            super(sourceElements);
             assert key instanceof Source || key instanceof URI;
             this.key = key;
-            this.sourceElements = sourceElements;
             this.sourceSection = sourceSection;
             this.line = -1;
             this.column = -1;
@@ -104,19 +143,19 @@ abstract class BreakpointLocation {
          * @param column 1-based column number, -1 for unspecified
          */
         BreakpointSourceLocation(Object key, SourceElement[] sourceElements, int line, int column) {
+            super(sourceElements);
             assert key instanceof Source || key instanceof URI;
-            assert line > 0;
+            assert line > 0 || line == -1;
             assert column > 0 || column == -1;
             this.key = key;
-            this.sourceElements = sourceElements;
             this.line = line;
             this.column = column;
             this.sourceSection = null;
         }
 
         private BreakpointSourceLocation() {
+            super(null);
             this.key = null;
-            this.sourceElements = null;
             this.line = -1;
             this.column = -1;
             this.sourceSection = null;
@@ -125,23 +164,11 @@ abstract class BreakpointLocation {
         @Override
         SourceFilter createSourceFilter() {
             if (key == null) {
-                return SourceFilter.ANY;
+                return null;
             }
             SourceFilter.Builder f = SourceFilter.newBuilder();
             if (key instanceof URI) {
-                final URI sourceUri = (URI) key;
-                f.sourceIs(new Predicate<Source>() {
-                    @Override
-                    public boolean test(Source s) {
-                        URI uri = s.getURI();
-                        return sourceUri.equals(uri);
-                    }
-
-                    @Override
-                    public String toString() {
-                        return "URI equals " + sourceUri;
-                    }
-                });
+                f.sourceIs(createSourcePredicate());
             } else {
                 assert key instanceof Source;
                 Source s = (Source) key;
@@ -151,12 +178,64 @@ abstract class BreakpointLocation {
         }
 
         @Override
+        Predicate<Source> createSourcePredicate() {
+            if (key == null) {
+                return null;
+            }
+            if (key instanceof URI) {
+                if (key == ANY_SOURCE) {
+                    return new Predicate<Source>() {
+                        @Override
+                        public boolean test(Source s) {
+                            return true;
+                        }
+                    };
+                }
+                final URI sourceUri = (URI) key;
+                final String sourceRawPath = sourceUri.getRawPath() != null ? sourceUri.getRawPath() : sourceUri.getRawSchemeSpecificPart();
+                return new Predicate<Source>() {
+                    @Override
+                    public boolean test(Source s) {
+                        URI uri = s.getURI();
+                        if (uri.isAbsolute()) {
+                            return sourceUri.equals(uri);
+                        } else {
+                            return sourceRawPath != null && sourceRawPath.endsWith(uri.getRawPath());
+                        }
+                    }
+
+                    @Override
+                    public String toString() {
+                        return "URI equals " + sourceUri;
+                    }
+                };
+            } else {
+                assert key instanceof Source;
+                Source source = (Source) key;
+                return new Predicate<Source>() {
+                    @Override
+                    public boolean test(Source s) {
+                        return source.equals(s);
+                    }
+                };
+            }
+        }
+
+        @Override
+        boolean canAdjustLocation() {
+            return key != null;
+        }
+
+        @Override
         SourceSection adjustLocation(Source source, TruffleInstrument.Env env, SuspendAnchor suspendAnchor) {
             if (sourceSection != null) {
                 return sourceSection;
             }
             if (key == null) {
                 return null;
+            }
+            if (line == -1) {
+                return source.createUnavailableSection();
             }
             boolean hasColumn = column > 0;
             SourceSection location = SuspendableLocationFinder.findNearest(source, sourceElements, line, column, suspendAnchor, env);
@@ -187,10 +266,12 @@ abstract class BreakpointLocation {
             if (key == null) {
                 return f.tagIs(DebuggerTags.AlwaysHalt.class).build();
             }
-            if (source != null) {
-                f.sourceIs(source);
-            } else {
-                f.sourceFilter(createSourceFilter());
+            if (key != ANY_SOURCE) {
+                if (source != null) {
+                    f.sourceIs(source);
+                } else {
+                    f.sourceFilter(createSourceFilter());
+                }
             }
             if (line != -1) {
                 switch (suspendAnchor) {
@@ -237,16 +318,25 @@ abstract class BreakpointLocation {
     private static final class BreakpointFilteredLocation extends BreakpointLocation {
 
         private final SuspensionFilter filter;
-        private final SourceElement[] sourceElements;
 
         BreakpointFilteredLocation(SourceElement[] sourceElements, SuspensionFilter filter) {
+            super(sourceElements);
             this.filter = filter;
-            this.sourceElements = sourceElements;
         }
 
         @Override
         SourceFilter createSourceFilter() {
             return null;
+        }
+
+        @Override
+        Predicate<Source> createSourcePredicate() {
+            return null;
+        }
+
+        @Override
+        boolean canAdjustLocation() {
+            return false;
         }
 
         @Override

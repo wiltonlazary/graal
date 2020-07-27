@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.hosted.substitute;
 
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 
@@ -58,7 +59,25 @@ public class DeletedMethod extends CustomSubstitutionMethod {
         this.deleteAnnotation = deleteAnnotation;
     }
 
-    static final Method reportErrorMethod;
+    @Override
+    public Annotation[] getAnnotations() {
+        return AnnotatedField.appendAnnotationTo(original.getAnnotations(), deleteAnnotation);
+    }
+
+    @Override
+    public Annotation[] getDeclaredAnnotations() {
+        return AnnotatedField.appendAnnotationTo(original.getDeclaredAnnotations(), deleteAnnotation);
+    }
+
+    @Override
+    public <T extends Annotation> T getAnnotation(Class<T> annotationClass) {
+        if (annotationClass.isInstance(deleteAnnotation)) {
+            return annotationClass.cast(deleteAnnotation);
+        }
+        return original.getAnnotation(annotationClass);
+    }
+
+    public static final Method reportErrorMethod;
 
     static {
         try {
@@ -97,12 +116,9 @@ public class DeletedMethod extends CustomSubstitutionMethod {
 
         String msg = AnnotationSubstitutionProcessor.deleteErrorMessage(method, message, false);
         ValueNode msgNode = ConstantNode.forConstant(SubstrateObjectConstant.forObject(msg), providers.getMetaAccess(), graph);
-        ValueNode exceptionNode = kit.createInvokeWithExceptionAndUnwind(providers.getMetaAccess().lookupJavaMethod(reportErrorMethod), InvokeKind.Static, state, bci++, bci++, msgNode);
-
+        ValueNode exceptionNode = kit.createInvokeWithExceptionAndUnwind(providers.getMetaAccess().lookupJavaMethod(reportErrorMethod), InvokeKind.Static, state, bci++, msgNode);
         kit.append(new UnwindNode(exceptionNode));
-        kit.mergeUnwinds();
 
-        assert graph.verify();
-        return graph;
+        return kit.finalizeGraph();
     }
 }

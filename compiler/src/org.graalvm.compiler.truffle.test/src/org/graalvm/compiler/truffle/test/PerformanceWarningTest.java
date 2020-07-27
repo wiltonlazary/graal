@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,26 +29,25 @@ import java.io.ByteArrayOutputStream;
 import org.graalvm.compiler.core.common.CompilationIdentifier;
 import org.graalvm.compiler.debug.DebugCloseable;
 import org.graalvm.compiler.debug.DebugContext;
-import org.graalvm.compiler.debug.DebugHandlersFactory;
-import org.graalvm.compiler.debug.LogStream;
-import org.graalvm.compiler.debug.TTY;
-import org.graalvm.compiler.options.OptionValues;
-import org.graalvm.compiler.truffle.common.TruffleCompilerOptions;
-import org.graalvm.compiler.truffle.common.TruffleCompilerOptions.TruffleOptionsOverrideScope;
+import org.graalvm.compiler.debug.DebugContext.Builder;
 import org.graalvm.compiler.truffle.common.TruffleInliningPlan;
-import org.graalvm.compiler.truffle.compiler.TruffleCompilerImpl;
+import org.graalvm.compiler.serviceprovider.GraalServices;
+import org.graalvm.compiler.truffle.compiler.TruffleCompilerOptions;
 import org.graalvm.compiler.truffle.runtime.DefaultInliningPolicy;
+import org.graalvm.compiler.truffle.runtime.GraalCompilerDirectives;
 import org.graalvm.compiler.truffle.runtime.GraalTruffleRuntime;
 import org.graalvm.compiler.truffle.runtime.OptimizedCallTarget;
 import org.graalvm.compiler.truffle.runtime.TruffleInlining;
+import org.graalvm.polyglot.Context;
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Test;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.RootNode;
 
-public class PerformanceWarningTest {
+public class PerformanceWarningTest extends TruffleCompilerImplTest {
 
     // Marker object indicating that no performance warnings are expected.
     private static final String[] EMPTY_PERF_WARNINGS = new String[0];
@@ -57,6 +56,18 @@ public class PerformanceWarningTest {
     @SuppressWarnings("unused") private static final VirtualObject1 object1 = new VirtualObject1();
     @SuppressWarnings("unused") private static final VirtualObject2 object2 = new VirtualObject2();
     @SuppressWarnings("unused") private static final SubClass object3 = new SubClass();
+    @SuppressWarnings("unused") private static final L9a object4 = new L9a();
+    @SuppressWarnings("unused") private static final L9b object5 = new L9b();
+    @SuppressWarnings("unused") private static final Boolean inFirstTier = GraalCompilerDirectives.inFirstTier();
+
+    private ByteArrayOutputStream outContent;
+
+    @Before
+    public void setUp() {
+        outContent = new ByteArrayOutputStream();
+        setupContext(Context.newBuilder().logHandler(outContent).allowAllAccess(true).allowExperimentalOptions(true).option("engine.TracePerformanceWarnings", "all").option(
+                        "engine.TreatPerformanceWarningsAsErrors", "all").option("engine.CompilationFailureAction", "ExitVM").build());
+    }
 
     @Test
     public void testVirtualCall() {
@@ -89,41 +100,42 @@ public class PerformanceWarningTest {
     }
 
     @Test
-    public void testCast() {
-        testHelper(new RootNodeCast(), false, "perf info", "foo", "bar", "execute");
+    public void testInterfaceCast() {
+        testHelper(new RootNodeInterfaceCast(), false, "perf info", Interface.class.getSimpleName(), "foo", "bar", "execute");
     }
 
     @Test
     public void testSingleImplementor() {
-        testHelper(new RootNodeInterfaceSingleImplementorCall(), false, "perf info", "type check", "foo");
+        if (GraalServices.hasLookupReferencedType()) {
+            testHelper(new RootNodeInterfaceSingleImplementorCall(), false, EMPTY_PERF_WARNINGS);
+        }
+    }
+
+    @Test
+    public void testSlowClassCast() {
+        testHelper(new RootNodeDeepClass(), false, "perf info", L8.class.getSimpleName(), "foo", "execute");
     }
 
     @SuppressWarnings("try")
-    private static void testHelper(RootNode rootNode, boolean expectException, String... outputStrings) {
+    private void testHelper(RootNode rootNode, boolean expectException, String... outputStrings) {
 
-        GraalTruffleRuntime runtime = GraalTruffleRuntime.getRuntime();
-        OptimizedCallTarget target = (OptimizedCallTarget) runtime.createCallTarget(rootNode);
-
-        // Compile and capture output to TTY.
-        ByteArrayOutputStream outContent = new ByteArrayOutputStream();
+        // Compile and capture output to logger's stream.
         boolean seenException = false;
-        try (TTY.Filter filter = new TTY.Filter(new LogStream(outContent))) {
-            try (TruffleOptionsOverrideScope scope = TruffleCompilerOptions.overrideOptions(TruffleCompilerOptions.TraceTrufflePerformanceWarnings, Boolean.TRUE);
-                            TruffleOptionsOverrideScope scope2 = TruffleCompilerOptions.overrideOptions(TruffleCompilerOptions.TrufflePerformanceWarningsAreFatal, Boolean.TRUE)) {
-                OptionValues options = TruffleCompilerOptions.getOptions();
-                DebugContext debug = DebugContext.create(options, DebugHandlersFactory.LOADER);
-                try (DebugCloseable d = debug.disableIntercept(); DebugContext.Scope s = debug.scope("PerformanceWarningTest")) {
-                    final OptimizedCallTarget compilable = target;
-                    TruffleCompilerImpl compiler = (TruffleCompilerImpl) runtime.newTruffleCompiler();
-                    CompilationIdentifier compilationId = compiler.getCompilationIdentifier(compilable);
-                    TruffleInliningPlan inliningPlan = new TruffleInlining(compilable, new DefaultInliningPolicy());
-                    compiler.compileAST(debug, compilable, inliningPlan, compilationId, null, null);
-                }
-            } catch (AssertionError e) {
-                seenException = true;
-                if (!expectException) {
-                    throw new AssertionError("Unexpected exception caught", e);
-                }
+        try {
+            GraalTruffleRuntime runtime = GraalTruffleRuntime.getRuntime();
+            OptimizedCallTarget target = (OptimizedCallTarget) runtime.createCallTarget(rootNode);
+            DebugContext debug = new Builder(TruffleCompilerOptions.getOptions()).build();
+            try (DebugCloseable d = debug.disableIntercept(); DebugContext.Scope s = debug.scope("PerformanceWarningTest")) {
+                final OptimizedCallTarget compilable = target;
+                CompilationIdentifier compilationId = getTruffleCompiler(target).createCompilationIdentifier(compilable);
+                TruffleInliningPlan inliningPlan = new TruffleInlining(compilable, new DefaultInliningPolicy());
+                getTruffleCompiler(target).compileAST(compilable.getOptionValues(), debug, compilable, inliningPlan, compilationId, null, null);
+                assertTrue(compilable.isValid());
+            }
+        } catch (AssertionError e) {
+            seenException = true;
+            if (!expectException) {
+                throw new AssertionError("Unexpected exception caught." + (outContent.size() > 0 ? '\n' + outContent.toString() : ""), e);
             }
         }
         if (expectException && !seenException) {
@@ -136,7 +148,7 @@ public class PerformanceWarningTest {
             Assert.assertEquals("", output);
         } else {
             for (String s : outputStrings) {
-                Assert.assertTrue(String.format("Root node class %s: \"%s\" not found in output \"%s\"", rootNode.getClass(), s, output), output.contains(s));
+                Assert.assertTrue(String.format("Root node class %s: \"%s\" not found in output \"%s\"", rootNode.getClass().getName(), s, output), output.contains(s));
             }
         }
     }
@@ -243,7 +255,7 @@ public class PerformanceWarningTest {
         }
     }
 
-    private final class RootNodeCast extends TestRootNode {
+    private final class RootNodeInterfaceCast extends TestRootNode {
         protected Object obj;
 
         @Override
@@ -318,4 +330,48 @@ public class PerformanceWarningTest {
     private static class SubClass extends SingleImplementorClass {
     }
 
+    private static class L1 {
+    }
+
+    private static class L2 extends L1 {
+    }
+
+    private static class L3 extends L2 {
+    }
+
+    private static class L4 extends L3 {
+    }
+
+    private static class L5 extends L4 {
+    }
+
+    private static class L6 extends L5 {
+    }
+
+    private static class L7 extends L6 {
+    }
+
+    private static class L8 extends L7 {
+    }
+
+    private static class L9a extends L8 {
+    }
+
+    private static class L9b extends L8 {
+    }
+
+    private final class RootNodeDeepClass extends TestRootNode {
+        protected Object obj;
+
+        @Override
+        public Object execute(VirtualFrame frame) {
+            foo();
+            return null;
+        }
+
+        @SuppressWarnings("unused")
+        private void foo() {
+            L8 c = (L8) obj;
+        }
+    }
 }

@@ -27,13 +27,14 @@ package com.oracle.svm.hosted.thread;
 import java.util.List;
 
 import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
+import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderContext;
 import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugin;
 import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugin.Receiver;
 import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugins;
 import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugins.Registration;
-import org.graalvm.compiler.nodes.memory.HeapAccess.BarrierType;
+import org.graalvm.compiler.nodes.memory.OnHeapMemoryAccess.BarrierType;
 import org.graalvm.compiler.phases.util.Providers;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
@@ -173,21 +174,25 @@ public class VMThreadSTFeature implements GraalFeature {
     private boolean handleGet(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver) {
         VMThreadLocalInfo info = threadLocalCollector.findInfo(b, receiver.get());
         VMThreadLocalSTHolderNode holder = b.add(new VMThreadLocalSTHolderNode(info));
-        b.addPush(targetMethod.getSignature().getReturnKind(), new LoadVMThreadLocalNode(b.getMetaAccess(), info, holder, BarrierType.PRECISE));
+        b.addPush(targetMethod.getSignature().getReturnKind(), new LoadVMThreadLocalNode(b.getMetaAccess(), info, holder, BarrierType.ARRAY));
         return true;
     }
 
     private boolean handleSet(GraphBuilderContext b, Receiver receiver, ValueNode valueNode) {
         VMThreadLocalInfo info = threadLocalCollector.findInfo(b, receiver.get());
         VMThreadLocalSTHolderNode holder = b.add(new VMThreadLocalSTHolderNode(info));
-        b.add(new StoreVMThreadLocalNode(info, holder, valueNode, BarrierType.PRECISE));
+        StoreVMThreadLocalNode store = new StoreVMThreadLocalNode(info, holder, valueNode, BarrierType.ARRAY);
+        b.add(store);
+        assert store.stateAfter() != null : store + " has no state after with graph builder context " + b;
         return true;
     }
 
     private boolean handleCompareAndSet(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode expect, ValueNode update) {
         VMThreadLocalInfo threadLocalInfo = threadLocalCollector.findInfo(b, receiver.get());
         VMThreadLocalSTHolderNode holder = b.add(new VMThreadLocalSTHolderNode(threadLocalInfo));
-        b.addPush(targetMethod.getSignature().getReturnKind(), new CompareAndSetVMThreadLocalNode(threadLocalInfo, holder, expect, update));
+        CompareAndSetVMThreadLocalNode cas = new CompareAndSetVMThreadLocalNode(threadLocalInfo, holder, expect, update);
+        b.addPush(targetMethod.getSignature().getReturnKind(), cas);
+        assert cas.stateAfter() != null : cas + " has no state after with graph builder context " + b;
         return true;
     }
 
@@ -217,11 +222,11 @@ public class VMThreadSTFeature implements GraalFeature {
         int nextPrimitive = 0;
         for (VMThreadLocalInfo info : sortedThreadLocalInfos) {
             if (info.isObject) {
-                info.offset = layout.getArrayElementOffset(JavaKind.Object, nextObject);
+                info.offset = NumUtil.safeToInt(layout.getArrayElementOffset(JavaKind.Object, nextObject));
                 nextObject += 1;
             } else {
                 assert nextPrimitive % Math.min(8, info.sizeInBytes) == 0 : "alignment mismatch: " + info.sizeInBytes + ", " + nextPrimitive;
-                info.offset = layout.getArrayElementOffset(JavaKind.Byte, nextPrimitive);
+                info.offset = NumUtil.safeToInt(layout.getArrayElementOffset(JavaKind.Byte, nextPrimitive));
                 nextPrimitive += info.sizeInBytes;
             }
         }

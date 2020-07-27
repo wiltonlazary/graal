@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,8 +26,8 @@ package org.graalvm.compiler.lir.amd64;
 
 import static jdk.vm.ci.code.ValueUtil.asStackSlot;
 
-import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.compiler.core.common.LIRKind;
+import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.compiler.lir.framemap.FrameMap;
 
 import jdk.vm.ci.amd64.AMD64Kind;
@@ -48,9 +48,12 @@ import jdk.vm.ci.code.StackSlot;
  *   frame    :     ...                        :    | positive
  *            | incoming overflow argument 0   |    | offsets
  *   ---------+--------------------------------+---------------------
- *            | return address                 |    |            ^
- *   current  +--------------------------------+    |            |    -----
- *   frame    |                                |    |            |      ^
+ *   current  | return address                 |    |            ^
+ *   frame    +--------------------------------+    |            |
+ *            | preserved rbp                  |    |            |
+ *            | (iff {@link #useStandardFrameProlog})   |    |            |
+ *            +--------------------------------+    |            |    -----
+ *            |                                |    |            |      ^
  *            : callee save area               :    |            |      |
  *            |                                |    |            |      |
  *            +--------------------------------+    |            |      |
@@ -78,28 +81,32 @@ import jdk.vm.ci.code.StackSlot;
  */
 public class AMD64FrameMap extends FrameMap {
 
+    private final boolean useStandardFrameProlog;
     private StackSlot rbpSpillSlot;
 
-    public AMD64FrameMap(CodeCacheProvider codeCache, RegisterConfig registerConfig, ReferenceMapBuilderFactory referenceMapFactory) {
+    public AMD64FrameMap(CodeCacheProvider codeCache, RegisterConfig registerConfig, ReferenceMapBuilderFactory referenceMapFactory, boolean useStandardFrameProlog) {
         super(codeCache, registerConfig, referenceMapFactory);
         // (negative) offset relative to sp + total frame size
-        initialSpillSize = returnAddressSize();
-        spillSize = initialSpillSize;
+        this.useStandardFrameProlog = useStandardFrameProlog;
+        this.initialSpillSize = returnAddressSize() + (useStandardFrameProlog ? getTarget().arch.getWordSize() : 0);
+        this.spillSize = initialSpillSize;
     }
 
     @Override
     public int totalFrameSize() {
-        return frameSize() + returnAddressSize();
+        int result = frameSize() + initialSpillSize;
+        assert result % getTarget().stackAlignment == 0 : "Total frame size not aligned: " + result;
+        return result;
     }
 
     @Override
     public int currentFrameSize() {
-        return alignFrameSize(outgoingSize + spillSize - returnAddressSize());
+        return alignFrameSize(outgoingSize + spillSize - initialSpillSize);
     }
 
     @Override
     protected int alignFrameSize(int size) {
-        return NumUtil.roundUp(size + returnAddressSize(), getTarget().stackAlignment) - returnAddressSize();
+        return NumUtil.roundUp(size + initialSpillSize, getTarget().stackAlignment) - initialSpillSize;
     }
 
     @Override
@@ -134,5 +141,9 @@ public class AMD64FrameMap extends FrameMap {
         assert spillSize == initialSpillSize || spillSize == initialSpillSize +
                         spillSlotSize(LIRKind.value(AMD64Kind.QWORD)) : "Deoptimization rescue slot must be the first or second (if there is an RBP spill slot) stack slot";
         return allocateSpillSlot(LIRKind.value(AMD64Kind.QWORD));
+    }
+
+    public boolean useStandardFrameProlog() {
+        return useStandardFrameProlog;
     }
 }

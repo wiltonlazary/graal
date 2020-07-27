@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.debug.test;
 
@@ -33,6 +49,9 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+
+import com.oracle.truffle.api.instrumentation.test.InstrumentationTestLanguage;
+import com.oracle.truffle.api.test.polyglot.ProxyLanguage;
 import org.junit.Test;
 
 import com.oracle.truffle.api.debug.Breakpoint;
@@ -82,7 +101,7 @@ public class DebugExceptionTest extends AbstractDebugTest {
                 SourceSection throwLocation = exception.getThrowLocation();
                 assertEquals(10, throwLocation.getCharIndex());
                 assertEquals(21, throwLocation.getCharEndIndex());
-                assertEquals("a: b", exception.getExceptionObject().as(String.class));
+                assertEquals("a: b", exception.getExceptionObject().toDisplayString());
                 assertDebugStackTrace(exception.getDebugStackTrace(), " <1:11, 1:21>");
                 assertStack(exception.getStackTrace(), "<instrumentation-test-language>.(Unnamed:1)");
             });
@@ -113,7 +132,7 @@ public class DebugExceptionTest extends AbstractDebugTest {
                 assertEquals("TestExceptionMessage", exception.getMessage());
                 SourceSection throwLocation = exception.getThrowLocation();
                 assertEquals("THROW(IllegalState, TestExceptionMessage)", throwLocation.getCharacters());
-                assertEquals("IllegalState: TestExceptionMessage", exception.getExceptionObject().as(String.class));
+                assertEquals("IllegalState: TestExceptionMessage", exception.getExceptionObject().toDisplayString());
                 assertDebugStackTrace(exception.getDebugStackTrace(), "UncaughtThrow <3:28, 3:68>", " <6:1, 6:19>");
                 assertStack(exception.getStackTrace(), "<instrumentation-test-language>.UncaughtThrow(Unnamed:3)", "<instrumentation-test-language>.(Unnamed:6)");
             });
@@ -141,7 +160,7 @@ public class DebugExceptionTest extends AbstractDebugTest {
                 assertEquals(event.getTopStackFrame(), catchLocation.getFrame());
                 SourceSection throwLocation = exception.getThrowLocation();
                 assertEquals("THROW(NPE, TestExceptionMessage)", throwLocation.getCharacters());
-                assertEquals("NPE: TestExceptionMessage", exception.getExceptionObject().as(String.class));
+                assertEquals("NPE: TestExceptionMessage", exception.getExceptionObject().toDisplayString());
                 assertDebugStackTrace(exception.getDebugStackTrace(), " <1:15, 1:46>");
                 assertStack(exception.getStackTrace(), "<instrumentation-test-language>.(Unnamed:1)");
             });
@@ -179,12 +198,55 @@ public class DebugExceptionTest extends AbstractDebugTest {
                 assertEquals(nextFrame, catchLocation.getFrame());
                 SourceSection throwLocation = exception.getThrowLocation();
                 assertEquals("THROW(NPE, TestExceptionMessage)", throwLocation.getCharacters());
-                assertEquals("NPE: TestExceptionMessage", exception.getExceptionObject().as(String.class));
+                assertEquals("NPE: TestExceptionMessage", exception.getExceptionObject().toDisplayString());
                 assertDebugStackTrace(exception.getDebugStackTrace(), "ThrownNPE <7:13, 7:44>", "CaughtThrow <3:17, 3:31>", " <9:1, 9:17>");
                 assertStack(exception.getStackTrace(), "<instrumentation-test-language>.ThrownNPE(Unnamed:7)", "<instrumentation-test-language>.CaughtThrow(Unnamed:3)",
                                 "<instrumentation-test-language>.(Unnamed:9)");
             });
             expectDone();
+        }
+    }
+
+    @Test
+    public void testGetRawUncaughtException() {
+        Source testSource = testSource("STATEMENT(THROW(a, b))");
+        Breakpoint uncaughtBreakpoint = Breakpoint.newExceptionBuilder(false, true).build();
+        try (DebuggerSession session = startSession()) {
+            session.install(uncaughtBreakpoint);
+            assertTrue(uncaughtBreakpoint.isResolved()); // Exception breakpoints are resolved right
+            // away
+
+            startEval(testSource);
+            expectSuspended((SuspendedEvent event) -> {
+                assertSame(uncaughtBreakpoint, event.getBreakpoints().iterator().next());
+                assertSame(SuspendAnchor.AFTER, event.getSuspendAnchor());
+                DebugException exception = event.getException();
+                assertEquals(InstrumentationTestLanguage.ThrowNode.TestLanguageException.class, exception.getRawException(InstrumentationTestLanguage.class).getClass());
+            });
+            Throwable t = expectThrowable();
+            assertEquals("b", t.getMessage());
+        }
+    }
+
+    @Test
+    public void testGetRawUncaughtExceptionRestricted() {
+        Source testSource = testSource("STATEMENT(THROW(a, b))");
+        Breakpoint uncaughtBreakpoint = Breakpoint.newExceptionBuilder(false, true).build();
+        try (DebuggerSession session = startSession()) {
+            session.install(uncaughtBreakpoint);
+            assertTrue(uncaughtBreakpoint.isResolved()); // Exception breakpoints are resolved right
+            // away
+
+            startEval(testSource);
+            expectSuspended((SuspendedEvent event) -> {
+                assertSame(uncaughtBreakpoint, event.getBreakpoints().iterator().next());
+                assertSame(SuspendAnchor.AFTER, event.getSuspendAnchor());
+                DebugException exception = event.getException();
+                // no access from other languages
+                assertEquals(null, exception.getRawException(ProxyLanguage.class));
+            });
+            Throwable t = expectThrowable();
+            assertEquals("b", t.getMessage());
         }
     }
 
@@ -208,7 +270,7 @@ public class DebugExceptionTest extends AbstractDebugTest {
                 assertEquals(event.getTopStackFrame(), catchLocation.getFrame());
                 SourceSection throwLocation = exception.getThrowLocation();
                 assertEquals("THROW(a, b)", throwLocation.getCharacters());
-                assertEquals("a: b", exception.getExceptionObject().as(String.class));
+                assertEquals("a: b", exception.getExceptionObject().toDisplayString());
             });
             expectDone();
 
@@ -305,7 +367,7 @@ public class DebugExceptionTest extends AbstractDebugTest {
                     SourceSection throwLocation = dex.getThrowLocation();
                     assertEquals("THROW(NPE, TestExceptionMessage)", throwLocation.getCharacters());
                     assertNull(dex.getCatchLocation());
-                    assertEquals("NPE: TestExceptionMessage", dex.getExceptionObject().as(String.class));
+                    assertEquals("NPE: TestExceptionMessage", dex.getExceptionObject().toDisplayString());
                     List<DebugStackTraceElement> debugStackTrace = dex.getDebugStackTrace();
                     assertEquals(2, debugStackTrace.size());
                     assertEquals("THROW(NPE, TestExceptionMessage)", debugStackTrace.get(0).getSourceSection().getCharacters());

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -97,7 +97,7 @@ public class PthreadConditionUtils {
         assert delayNanos >= 0;
         long sec = TimeUtils.addOrMaxValue(currentTimespec.tv_sec(), TimeUtils.divideNanosToSeconds(delayNanos));
         long nsec = currentTimespec.tv_nsec() + TimeUtils.remainderNanosToSeconds(delayNanos);
-        if (nsec > TimeUtils.nanosPerSecond) {
+        if (nsec >= TimeUtils.nanosPerSecond) {
             sec = TimeUtils.addOrMaxValue(sec, 1);
             nsec -= TimeUtils.nanosPerSecond;
         }

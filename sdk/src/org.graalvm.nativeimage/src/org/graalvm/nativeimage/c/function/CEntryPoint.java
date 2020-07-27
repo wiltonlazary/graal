@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2009, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package org.graalvm.nativeimage.c.function;
 
@@ -29,6 +45,7 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
+import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.Isolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.LogHandler;
@@ -44,7 +61,7 @@ import org.graalvm.word.WordFactory;
  * <p>
  * An execution context must be passed as a parameter and can be either an {@link IsolateThread}
  * that is specific to the current thread, or an {@link Isolate} for an isolate in which the current
- * thread is attached. These pointers can be obtained via the methods of {@link CEntryPointContext}.
+ * thread is attached. These pointers can be obtained via the methods of {@link CurrentIsolate}.
  * When there is more than one parameter of these types, exactly one of the parameters must be
  * annotated with {@link IsolateThreadContext} for {@link IsolateThread}, or {@link IsolateContext}
  * for {@link Isolate}.
@@ -59,7 +76,7 @@ import org.graalvm.word.WordFactory;
  * method with a {@link CEnumLookup} annotation. For enum return types, the enum class must have a
  * method that is annotated with {@link CEnumValue}.
  *
- * @since 1.0
+ * @since 19.0
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.METHOD)
@@ -68,14 +85,14 @@ public @interface CEntryPoint {
     /**
      * The symbol name to use for this entry point.
      *
-     * @since 1.0
+     * @since 19.0
      */
     String name() default "";
 
     /**
      * Method documentation to be included in the header file, as an array of lines.
      *
-     * @since 1.0
+     * @since 19.0
      */
     String[] documentation() default "";
 
@@ -91,7 +108,7 @@ public @interface CEntryPoint {
      * and the exception is passed as the argument. The return value of the exception handler method
      * is then the return value of the entry point, i.e., passed back to the C code.
      *
-     * @since 1.0
+     * @since 19.0
      */
     Class<?> exceptionHandler() default FatalExceptionHandler.class;
 
@@ -99,7 +116,7 @@ public @interface CEntryPoint {
      * Special placeholder value for {@link #exceptionHandler()} to print the caught exception and
      * treat it as a {@link LogHandler#fatalError() fatal error}.
      *
-     * @since 1.0
+     * @since 19.0
      */
     final class FatalExceptionHandler {
         private FatalExceptionHandler() {
@@ -114,31 +131,31 @@ public @interface CEntryPoint {
      * descriptions of the built-ins, and to the {@linkplain Builtin individual built-ins} for their
      * requirements to the annotated method's signature.
      *
-     * @since 1.0
+     * @since 19.0
      */
-    Builtin builtin() default Builtin.NoBuiltin;
+    Builtin builtin() default Builtin.NO_BUILTIN;
 
     /**
      * The built-in methods which can be {@linkplain #builtin() aliased}.
      *
-     * @since 1.0
+     * @since 19.0
      */
     enum Builtin {
         /**
          * The annotated method is not an alias for a built-in method.
          *
-         * @since 1.0
+         * @since 19.0
          */
-        NoBuiltin,
+        NO_BUILTIN,
 
         /**
          * The annotated method creates an isolate. An alias for this built-in requires no
-         * arguments, and must have a return type of {@link Isolate}. In case of an error,
+         * arguments, and must have a return type of {@link IsolateThread}. In case of an error,
          * {@link WordFactory#nullPointer() NULL} is returned.
          *
-         * @since 1.0
+         * @since 19.0
          */
-        CreateIsolate,
+        CREATE_ISOLATE,
 
         /**
          * The annotated method attaches the current thread to an isolate. It requires a parameter
@@ -146,29 +163,29 @@ public @interface CEntryPoint {
          * {@link IsolateThread}. In case of an error, {@link WordFactory#nullPointer() NULL} is
          * returned.
          *
-         * @since 1.0
+         * @since 19.0
          */
-        AttachThread,
+        ATTACH_THREAD,
 
         /**
          * The annotated method returns the {@link IsolateThread} of the current thread in a
          * specified {@link Isolate}. It requires a parameter of type {@link Isolate} for the
-         * isolate in question, and a return type of {@link IsolateThread}. In case of an error,
+         * isolate in question, and a return type of {@link IsolateThread}. In case of an error or
+         * if the current thread is not attached to the specified isolate,
          * {@link WordFactory#nullPointer() NULL} is returned.
          *
-         * @since 1.0
+         * @since 19.0
          */
-        CurrentThread,
+        GET_CURRENT_THREAD,
 
         /**
-         * The annotated method returns the {@link Isolate} for an {@link IsolateThread} which
-         * represents the current thread. It requires a parameter of type {@link IsolateThread}, and
-         * a return type of {@link Isolate}. In case of an error, {@link WordFactory#nullPointer()
-         * NULL} is returned.
+         * The annotated method returns the {@link Isolate} for an {@link IsolateThread}. It
+         * requires a parameter of type {@link IsolateThread}, and a return type of {@link Isolate}.
+         * In case of an error, {@link WordFactory#nullPointer() NULL} is returned.
          *
-         * @since 1.0
+         * @since 19.0
          */
-        CurrentIsolate,
+        GET_ISOLATE,
 
         /**
          * The annotated method detaches the current thread, given as an {@link IsolateThread}, from
@@ -176,25 +193,26 @@ public @interface CEntryPoint {
          * {@code int} or {@code void}. With an {@code int} return type, zero is returned when
          * successful, or non-zero in case of an error.
          *
-         * @since 1.0
+         * @since 19.0
          */
-        DetachThread,
+        DETACH_THREAD,
 
         /**
          * The annotated method tears down the specified isolate. It requires a parameter of type
-         * {@link Isolate}, and a return type of {@code int} or {@code void}. With an {@code int}
-         * return type, zero is returned when successful, or non-zero in case of an error.
+         * {@link IsolateThread}, and a return type of {@code int} or {@code void}. With an
+         * {@code int} return type, zero is returned when successful, or non-zero in case of an
+         * error.
          *
-         * @since 1.0
+         * @since 19.0
          */
-        TearDownIsolate,
+        TEAR_DOWN_ISOLATE,
     }
 
     /**
      * Designates an {@link IsolateThread} parameter to use as the execution context. At most one
      * parameter can be annotated with this annotation or {@link IsolateContext}.
      *
-     * @since 1.0
+     * @since 19.0
      */
     @Retention(RetentionPolicy.RUNTIME)
     @Target(ElementType.PARAMETER)
@@ -205,7 +223,7 @@ public @interface CEntryPoint {
      * Designates an {@link Isolate} parameter to use as the execution context. At most one
      * parameter can be annotated with this annotation or {@link IsolateThreadContext}.
      *
-     * @since 1.0
+     * @since 19.0
      */
     @Retention(RetentionPolicy.RUNTIME)
     @Target(ElementType.PARAMETER)

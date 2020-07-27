@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.debug.test;
 
@@ -39,6 +55,8 @@ import org.junit.Test;
 
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.debug.Breakpoint;
@@ -47,6 +65,7 @@ import com.oracle.truffle.api.debug.DebugValue;
 import com.oracle.truffle.api.debug.DebuggerSession;
 import com.oracle.truffle.api.debug.SuspendedEvent;
 import com.oracle.truffle.api.frame.FrameSlot;
+import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.instrumentation.GenerateWrapper;
 import com.oracle.truffle.api.instrumentation.InstrumentableNode;
@@ -54,14 +73,14 @@ import com.oracle.truffle.api.instrumentation.ProbeNode;
 import com.oracle.truffle.api.instrumentation.ProvidedTags;
 import com.oracle.truffle.api.instrumentation.StandardTags;
 import com.oracle.truffle.api.instrumentation.Tag;
-import com.oracle.truffle.api.interop.ForeignAccess;
-import com.oracle.truffle.api.interop.Message;
-import com.oracle.truffle.api.interop.MessageResolution;
-import com.oracle.truffle.api.interop.Resolve;
+import com.oracle.truffle.api.interop.InteropLibrary;
+import com.oracle.truffle.api.interop.InvalidArrayIndexException;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.interop.UnsupportedTypeException;
+import com.oracle.truffle.api.library.ExportLibrary;
+import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.api.nodes.LanguageInfo;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
@@ -70,6 +89,7 @@ import com.oracle.truffle.api.source.SourceSection;
 /**
  * Test of value association with language and language-specific view of values.
  */
+@SuppressWarnings("static-method")
 public class ValueLanguageTest extends AbstractDebugTest {
 
     @Test
@@ -100,21 +120,21 @@ public class ValueLanguageTest extends AbstractDebugTest {
 
                 DebugValue value = frame.getScope().getDeclaredValue("i");
                 assertNull(value.getOriginalLanguage());
-                assertEquals("L1:10", value.as(String.class));
+                assertEquals("L1:10", value.toDisplayString());
 
                 value = frame.getScope().getDeclaredValue("s");
                 assertNull(value.getOriginalLanguage());
-                assertEquals("L1:test", value.as(String.class));
+                assertEquals("L1:test", value.toDisplayString());
 
                 value = frame.getScope().getDeclaredValue("a");
                 assertNull(value.getOriginalLanguage());
-                assertEquals("null", value.as(String.class));
+                assertEquals("null", value.toDisplayString());
 
                 value = frame.getScope().getDeclaredValue("b");
                 LanguageInfo lang = value.getOriginalLanguage();
                 assertNotNull(lang);
                 assertEquals(ValuesLanguage1.NAME, lang.getName());
-                assertEquals("{a={}, j=100}", value.as(String.class));
+                assertEquals("{a={}, j=100}", value.toDisplayString());
 
                 event.prepareContinue();
             });
@@ -130,17 +150,17 @@ public class ValueLanguageTest extends AbstractDebugTest {
 
                 DebugValue value = frame.getScope().getDeclaredValue("j");
                 assertNull(value.getOriginalLanguage());
-                assertEquals("L2:20", value.as(String.class));
+                assertEquals("L2:20", value.toDisplayString());
 
                 value = frame.getScope().getDeclaredValue("s");
                 assertNull(value.getOriginalLanguage());
-                assertEquals("L2:test2", value.as(String.class));
+                assertEquals("L2:test2", value.toDisplayString());
 
                 value = frame.getScope().getDeclaredValue("e");
                 LanguageInfo lang2 = value.getOriginalLanguage();
                 assertNotNull(lang2);
                 assertEquals(ValuesLanguage2.NAME, lang2.getName());
-                assertEquals("{d={}}", value.as(String.class));
+                assertEquals("{d={}}", value.toDisplayString());
 
                 value = frame.getScope().getDeclaredValue("b");
                 LanguageInfo lang1 = value.getOriginalLanguage();
@@ -148,13 +168,14 @@ public class ValueLanguageTest extends AbstractDebugTest {
                 assertNotEquals(lang1, lang2);
                 assertEquals(ValuesLanguage1.NAME, lang1.getName());
                 // info from current lang2:
-                assertEquals("Object", value.as(String.class));
-                assertEquals("L2:Object", value.getMetaObject().as(String.class));
+                assertEquals("Object", value.toDisplayString());
+                assertEquals("L2:Object", value.getMetaObject().toDisplayString());
                 // info from original lang1:
                 value = value.asInLanguage(lang1);
-                assertEquals("{a={}, j=100, k=200, c={}}", value.as(String.class));
-                assertEquals("L1:Map", value.getMetaObject().as(String.class));
-                assertEquals("L2:Map", value.getMetaObject().asInLanguage(lang2).as(String.class));
+                assertEquals("{a={}, j=100, k=200, c={}}", value.toDisplayString());
+                assertEquals("L1:Map", value.getMetaObject().getMetaQualifiedName());
+                // The String value of meta object can not be changed by a different language
+                assertEquals("L1:Map", value.getMetaObject().asInLanguage(lang2).getMetaQualifiedName());
 
                 // Properties are always in the original language:
                 value = frame.getScope().getDeclaredValue("b");
@@ -179,13 +200,13 @@ public class ValueLanguageTest extends AbstractDebugTest {
                 value = frame.getScope().getDeclaredValue("j");
                 assertNull(value.getSourceLocation());
                 value = value.asInLanguage(lang1);
-                assertEquals("L1:20", value.as(String.class));
+                assertEquals("L1:20", value.toDisplayString());
                 assertNull(value.getSourceLocation());
 
                 value = frame.getScope().getDeclaredValue("d");
-                assertEquals("null", value.as(String.class));
+                assertEquals("null", value.toDisplayString());
                 value = value.asInLanguage(lang1);
-                assertEquals("null", value.as(String.class));
+                assertEquals("null", value.toDisplayString());
 
                 value = frame.getScope().getDeclaredValue("e");
                 assertEquals(getSourceImpl(source2).createSection(4, 3, 2), value.getSourceLocation());
@@ -298,13 +319,13 @@ public class ValueLanguageTest extends AbstractDebugTest {
             if (op == '=') {
                 String valueStr = variable.substring(2);
                 Object value = getValue(var, valueStr, sourceSection.getSource().createSection(sourceSection.getCharIndex() + 2, valueStr.length()));
-                return new VarNode(new String(new char[]{var}), value, sourceSection, getContextReference());
+                return new VarNode(this, new String(new char[]{var}), value, sourceSection);
             } else {
                 char p = variable.charAt(2);
                 assert variable.charAt(3) == '=';
                 String valueStr = variable.substring(4);
                 Object value = getValue(p, valueStr, sourceSection.getSource().createSection(sourceSection.getCharIndex() + 4, valueStr.length()));
-                return new PropNode(new String(new char[]{var}), new String(new char[]{p}), value, sourceSection, getContextReference());
+                return new PropNode(this, new String(new char[]{var}), new String(new char[]{p}), value, sourceSection);
             }
         }
 
@@ -326,98 +347,15 @@ public class ValueLanguageTest extends AbstractDebugTest {
                     if ("null".equals(valueStr)) {
                         value = new NullObject();
                     } else {
-                        value = new PropertiesMapObject(id, sourceSection);
+                        value = new PropertiesMapObject(this, sourceSection);
                     }
             }
             return value;
         }
 
         @Override
-        protected boolean isObjectOfLanguage(Object object) {
-            if (!(object instanceof PropertiesMapObject)) {
-                return false;
-            }
-            PropertiesMapObject pmo = (PropertiesMapObject) object;
-            return id.equals(pmo.getLanguageId());
-        }
-
-        @Override
-        protected String toString(Context context, Object value) {
-            if (value instanceof Number) {
-                return "L" + id + ":" + ((Number) value).toString();
-            }
-            if (value instanceof String) {
-                return "L" + id + ":" + value.toString();
-            }
-            if (ForeignAccess.sendIsNull(Message.IS_NULL.createNode(), (TruffleObject) value)) {
-                return "null";
-            }
-            PropertiesMapObject pmo = (PropertiesMapObject) value;
-            if (id.equals(pmo.getLanguageId())) {
-                return toString(pmo);
-            } else {
-                return "Object";
-            }
-        }
-
-        private static String toString(PropertiesMapObject pmo) {
-            Iterator<Map.Entry<String, Object>> i = pmo.map.entrySet().iterator();
-            if (!i.hasNext()) {
-                return "{}";
-            }
-            StringBuilder sb = new StringBuilder();
-            sb.append('{');
-            for (;;) {
-                Map.Entry<String, Object> e = i.next();
-                String key = e.getKey();
-                Object value = e.getValue();
-                if (value instanceof PropertiesMapObject) {
-                    if (value == pmo) {
-                        value = "(this Map)";
-                    } else {
-                        value = toString((PropertiesMapObject) value);
-                    }
-                }
-                sb.append(key);
-                sb.append('=');
-                sb.append(value);
-                if (!i.hasNext()) {
-                    return sb.append('}').toString();
-                }
-                sb.append(',').append(' ');
-            }
-        }
-
-        @Override
-        protected Object findMetaObject(Context context, Object value) {
-            if (value instanceof Number) {
-                return "L" + id + ": Number";
-            }
-            if (value instanceof String) {
-                return "L" + id + ": String";
-            }
-            if (ForeignAccess.sendIsNull(Message.IS_NULL.createNode(), (TruffleObject) value)) {
-                return "Null";
-            }
-            PropertiesMapObject pmo = (PropertiesMapObject) value;
-            if (id.equals(pmo.getLanguageId())) {
-                return "Map";
-            } else {
-                return "Object";
-            }
-        }
-
-        @Override
-        protected SourceSection findSourceLocation(Context context, Object value) {
-            if (!(value instanceof TruffleObject)) {
-                return null;
-            }
-            PropertiesMapObject pmo = (PropertiesMapObject) value;
-            if (id.equals(pmo.getLanguageId())) {
-                return pmo.getSourceSection();
-            } else {
-                return null;
-            }
+        protected Object getLanguageView(Context context, Object value) {
+            return new ValuesLanguageView(value, this);
         }
 
         private static final class BlockNode extends Node {
@@ -431,6 +369,11 @@ public class ValueLanguageTest extends AbstractDebugTest {
             }
 
             public Object execute(VirtualFrame frame) {
+                return doExec(frame.materialize());
+            }
+
+            @CompilerDirectives.TruffleBoundary
+            private Object doExec(MaterializedFrame frame) {
                 for (VarNode ch : children) {
                     ch.execute(frame);
                 }
@@ -447,24 +390,25 @@ public class ValueLanguageTest extends AbstractDebugTest {
         public static class VarNode extends Node implements InstrumentableNode {
 
             private final SourceSection sourceSection;
+            private final ValuesLanguage language;
             private final String name;
             protected final Object value;
-            protected final ContextReference<Context> contextReference;
-            @Child private Node writeNode = Message.WRITE.createNode();
-            @CompilerDirectives.CompilationFinal protected FrameSlot slot;
+            @CompilationFinal private ContextReference<Context> contextReference;
+            @Child private InteropLibrary interop = InteropLibrary.getFactory().createDispatched(5);
+            @CompilationFinal protected FrameSlot slot;
 
-            VarNode(String name, Object value, SourceSection sourceSection, ContextReference<Context> contextReference) {
+            VarNode(ValuesLanguage language, String name, Object value, SourceSection sourceSection) {
+                this.language = language;
                 this.name = name;
                 this.value = value;
                 this.sourceSection = sourceSection;
-                this.contextReference = contextReference;
             }
 
             public VarNode(VarNode node) {
+                this.language = node.language;
                 this.name = node.name;
                 this.value = node.value;
                 this.sourceSection = node.sourceSection;
-                this.contextReference = node.contextReference;
             }
 
             public WrapperNode createWrapper(ProbeNode probe) {
@@ -496,13 +440,21 @@ public class ValueLanguageTest extends AbstractDebugTest {
                     frame.setObject(slot, value);
                 }
                 try {
-                    ForeignAccess.sendWrite(writeNode, (TruffleObject) contextReference.get().getEnv().getPolyglotBindings(), name, value);
+                    interop.writeMember(getContextReference().get().getEnv().getPolyglotBindings(), name, value);
                 } catch (UnknownIdentifierException | UnsupportedTypeException | UnsupportedMessageException e) {
                     CompilerDirectives.transferToInterpreter();
                     // should not happen for polyglot bindings.
                     throw new AssertionError(e);
                 }
                 return value;
+            }
+
+            protected final ContextReference<Context> getContextReference() {
+                if (contextReference == null) {
+                    CompilerDirectives.transferToInterpreterAndInvalidate();
+                    this.contextReference = lookupContextReference(language.getClass());
+                }
+                return this.contextReference;
             }
 
             @Override
@@ -516,10 +468,10 @@ public class ValueLanguageTest extends AbstractDebugTest {
 
             private final String var;
             private final String prop;
-            @Child private Node readNode = Message.READ.createNode();
+            @Child private InteropLibrary interop = InteropLibrary.getFactory().createDispatched(5);
 
-            PropNode(String var, String prop, Object value, SourceSection sourceSection, ContextReference<Context> contextReference) {
-                super(null, value, sourceSection, contextReference);
+            PropNode(ValuesLanguage language, String var, String prop, Object value, SourceSection sourceSection) {
+                super(language, null, value, sourceSection);
                 this.var = var;
                 this.prop = prop;
             }
@@ -556,7 +508,7 @@ public class ValueLanguageTest extends AbstractDebugTest {
                     slot = frame.getFrameDescriptor().findFrameSlot(var);
                     if (slot == null) {
                         try {
-                            varObj = ForeignAccess.sendRead(readNode, (TruffleObject) contextReference.get().getEnv().getPolyglotBindings(), var);
+                            varObj = interop.readMember(getContextReference().get().getEnv().getPolyglotBindings(), var);
                         } catch (UnknownIdentifierException e) {
                             varObj = null;
                         } catch (UnsupportedMessageException e) {
@@ -579,82 +531,270 @@ public class ValueLanguageTest extends AbstractDebugTest {
             }
         }
 
+        @ExportLibrary(InteropLibrary.class)
+        static final class ValuesMetaObject implements TruffleObject {
+
+            private final ValuesLanguage language;
+            private final Object original;
+            private final String name;
+
+            ValuesMetaObject(ValuesLanguage language, Object original, String name) {
+                this.language = language;
+                this.original = original;
+                this.name = name;
+            }
+
+            @ExportMessage
+            boolean isMetaObject() {
+                return true;
+            }
+
+            @ExportMessage
+            boolean hasLanguage() {
+                return true;
+            }
+
+            @ExportMessage
+            Class<? extends TruffleLanguage<?>> getLanguage() {
+                return language.getClass();
+            }
+
+            @ExportMessage
+            Object getMetaQualifiedName() {
+                return name;
+            }
+
+            @ExportMessage
+            Object getMetaSimpleName() {
+                return name;
+            }
+
+            @ExportMessage
+            @TruffleBoundary
+            boolean isMetaInstance(Object instance) {
+                return instance.equals(original);
+            }
+
+            @ExportMessage
+            @TruffleBoundary
+            Object toDisplayString(@SuppressWarnings("unused") boolean config) {
+                return name;
+            }
+
+        }
+
+        /**
+         * Default implementation for the instrumentation view in {@link TruffleLanguage}. Should be
+         * removed with deprecated methods in {@link TruffleLanguage}.
+         */
+        @ExportLibrary(value = InteropLibrary.class, delegateTo = "delegate")
+        @SuppressWarnings("static-method")
+        static final class ValuesLanguageView implements TruffleObject {
+
+            protected final ValuesLanguage language;
+            protected final Object delegate;
+
+            ValuesLanguageView(Object delegate, ValuesLanguage language) {
+                this.delegate = delegate;
+                this.language = language;
+            }
+
+            @ExportMessage
+            boolean hasLanguage() {
+                return true;
+            }
+
+            @ExportMessage
+            Class<? extends TruffleLanguage<?>> getLanguage() {
+                return language.getClass();
+            }
+
+            @ExportMessage
+            boolean hasSourceLocation() {
+                return false;
+            }
+
+            /*
+             * The test expects that language views never propagate source locations.
+             */
+            @ExportMessage
+            SourceSection getSourceLocation() throws UnsupportedMessageException {
+                throw UnsupportedMessageException.create();
+            }
+
+            @ExportMessage
+            @TruffleBoundary
+            Object toDisplayString(@SuppressWarnings("unused") boolean config) {
+                if (delegate instanceof Number) {
+                    return "L" + language.id + ":" + ((Number) delegate).toString();
+                }
+                if (delegate instanceof String) {
+                    return "L" + language.id + ":" + delegate.toString();
+                }
+                if (InteropLibrary.getFactory().getUncached().isNull(delegate)) {
+                    return "null";
+                }
+                return "Object";
+            }
+
+            @ExportMessage
+            boolean hasMetaObject() {
+                return true;
+            }
+
+            private String getTypeName() {
+                if (delegate instanceof Number) {
+                    return "L" + language.id + ":Number";
+                }
+                if (delegate instanceof String) {
+                    return "L" + language.id + ":String";
+                }
+                if (InteropLibrary.getFactory().getUncached().isNull(delegate)) {
+                    return "Null";
+                }
+                return "L" + language.id + ":Object";
+            }
+
+            @ExportMessage
+            @TruffleBoundary
+            Object getMetaObject() {
+                return new ValuesMetaObject(language, this, getTypeName());
+            }
+
+        }
+
+        @ExportLibrary(InteropLibrary.class)
         static final class PropertiesMapObject implements TruffleObject {
 
             private final Map<String, Object> map = new LinkedHashMap<>();
-            private final String languageId;
+            protected final ValuesLanguage language;
             private final SourceSection sourceSection;
 
-            private PropertiesMapObject(String languageId, SourceSection sourceSection) {
-                this.languageId = languageId;
+            private PropertiesMapObject(ValuesLanguage language, SourceSection sourceSection) {
+                this.language = language;
                 this.sourceSection = sourceSection;
             }
 
-            public String getLanguageId() {
-                return languageId;
-            }
-
-            public SourceSection getSourceSection() {
+            SourceSection getSourceSection() {
                 return sourceSection;
             }
 
-            @Override
-            public ForeignAccess getForeignAccess() {
-                return PropertiesMapMessageResolutionForeign.ACCESS;
+            @ExportMessage
+            boolean hasSourceLocation() {
+                return true;
             }
 
-            public static boolean isInstance(TruffleObject obj) {
-                return obj instanceof PropertiesMapObject;
+            @ExportMessage
+            SourceSection getSourceLocation() {
+                return this.sourceSection;
             }
 
-            @MessageResolution(receiverType = PropertiesMapObject.class)
-            static class PropertiesMapMessageResolution {
+            @ExportMessage
+            boolean hasMetaObject() {
+                return true;
+            }
 
-                @Resolve(message = "HAS_KEYS")
-                abstract static class PropsMapHasKeysNode extends Node {
+            @ExportMessage
+            @TruffleBoundary
+            Object getMetaObject() {
+                return new ValuesMetaObject(language, this, "L" + language.id + ":Map");
+            }
 
-                    @SuppressWarnings("unused")
-                    public Object access(PropertiesMapObject varMap) {
-                        return true;
-                    }
+            @SuppressWarnings("static-method")
+            @ExportMessage
+            boolean hasLanguage() {
+                return true;
+            }
+
+            String getLanguageId() {
+                return language.id;
+            }
+
+            @ExportMessage
+            Class<? extends TruffleLanguage<?>> getLanguage() {
+                return language.getClass();
+            }
+
+            @ExportMessage
+            @TruffleBoundary
+            Object toDisplayString(boolean allowSideEffects) {
+                Iterator<Map.Entry<String, Object>> i = map.entrySet().iterator();
+                if (!i.hasNext()) {
+                    return "{}";
                 }
-
-                @Resolve(message = "KEYS")
-                abstract static class PropsMapKeysNode extends Node {
-
-                    @CompilerDirectives.TruffleBoundary
-                    public Object access(PropertiesMapObject varMap) {
-                        return new PropertyNamesObject(varMap.map.keySet());
-                    }
-                }
-
-                @Resolve(message = "READ")
-                abstract static class PropsMapReadNode extends Node {
-
-                    @CompilerDirectives.TruffleBoundary
-                    public Object access(PropertiesMapObject varMap, String name) {
-                        Object object = varMap.map.get(name);
-                        if (object == null) {
-                            throw UnknownIdentifierException.raise(name);
+                StringBuilder sb = new StringBuilder();
+                sb.append('{');
+                for (;;) {
+                    Map.Entry<String, Object> e = i.next();
+                    String key = e.getKey();
+                    Object value = e.getValue();
+                    if (value instanceof PropertiesMapObject) {
+                        if (value == this) {
+                            value = "(this Map)";
                         } else {
-                            return object;
+                            value = ((PropertiesMapObject) value).toDisplayString(allowSideEffects);
                         }
                     }
-                }
-
-                @Resolve(message = "WRITE")
-                abstract static class PropsMapWriteNode extends Node {
-
-                    @CompilerDirectives.TruffleBoundary
-                    public Object access(PropertiesMapObject varMap, String name, Object value) {
-                        varMap.map.put(name, value);
-                        return value;
+                    sb.append(key);
+                    sb.append('=');
+                    sb.append(value);
+                    if (!i.hasNext()) {
+                        return sb.append('}').toString();
                     }
+                    sb.append(',').append(' ');
                 }
-
             }
+
+            @SuppressWarnings("static-method")
+            @ExportMessage
+            boolean hasMembers() {
+                return true;
+            }
+
+            @ExportMessage
+            @TruffleBoundary
+            Object getMembers(@SuppressWarnings("unused") boolean internal) {
+                return new PropertyNamesObject(map.keySet());
+            }
+
+            @ExportMessage
+            @TruffleBoundary
+            boolean isMemberReadable(String member) {
+                return map.containsKey(member);
+            }
+
+            @ExportMessage
+            @TruffleBoundary
+            boolean isMemberModifiable(String member) {
+                return map.containsKey(member);
+            }
+
+            @ExportMessage
+            @TruffleBoundary
+            boolean isMemberInsertable(String member) {
+                return !map.containsKey(member);
+            }
+
+            @ExportMessage
+            @TruffleBoundary
+            void writeMember(String member, Object value) {
+                map.put(member, value);
+            }
+
+            @ExportMessage
+            @TruffleBoundary
+            Object readMember(String member) throws UnknownIdentifierException {
+                Object object = map.get(member);
+                if (object == null) {
+                    throw UnknownIdentifierException.create(member);
+                } else {
+                    return object;
+                }
+            }
+
         }
 
+        @ExportLibrary(InteropLibrary.class)
         static final class PropertyNamesObject implements TruffleObject {
 
             private final Set<String> names;
@@ -663,76 +803,46 @@ public class ValueLanguageTest extends AbstractDebugTest {
                 this.names = names;
             }
 
-            @Override
-            public ForeignAccess getForeignAccess() {
-                return PropertyNamesMessageResolutionForeign.ACCESS;
+            @ExportMessage
+            boolean hasArrayElements() {
+                return true;
             }
 
-            public static boolean isInstance(TruffleObject obj) {
-                return obj instanceof PropertyNamesObject;
+            @ExportMessage
+            @TruffleBoundary
+            Object readArrayElement(long index) throws InvalidArrayIndexException {
+                if (index >= names.size()) {
+                    throw InvalidArrayIndexException.create(index);
+                }
+                Iterator<String> iterator = names.iterator();
+                long i = index;
+                while (i-- > 0) {
+                    iterator.next();
+                }
+                return iterator.next();
             }
 
-            @MessageResolution(receiverType = PropertyNamesObject.class)
-            static final class PropertyNamesMessageResolution {
-
-                @Resolve(message = "HAS_SIZE")
-                abstract static class PropNamesHasSizeNode extends Node {
-
-                    @SuppressWarnings("unused")
-                    public Object access(PropertyNamesObject varNames) {
-                        return true;
-                    }
-                }
-
-                @Resolve(message = "GET_SIZE")
-                abstract static class PropNamesGetSizeNode extends Node {
-
-                    public Object access(PropertyNamesObject varNames) {
-                        return varNames.names.size();
-                    }
-                }
-
-                @Resolve(message = "READ")
-                abstract static class PropNamesReadNode extends Node {
-
-                    @CompilerDirectives.TruffleBoundary
-                    public Object access(PropertyNamesObject varNames, int index) {
-                        if (index >= varNames.names.size()) {
-                            throw UnknownIdentifierException.raise(Integer.toString(index));
-                        }
-                        Iterator<String> iterator = varNames.names.iterator();
-                        int i = index;
-                        while (i-- > 0) {
-                            iterator.next();
-                        }
-                        return iterator.next();
-                    }
-                }
-
+            @ExportMessage
+            @TruffleBoundary
+            long getArraySize() {
+                return names.size();
             }
+
+            @ExportMessage
+            boolean isArrayElementReadable(long index) {
+                return index >= 0 && index < getArraySize();
+            }
+
         }
 
     }
 
-    @MessageResolution(receiverType = NullObject.class)
+    @ExportLibrary(InteropLibrary.class)
     static final class NullObject implements TruffleObject {
 
-        @Override
-        public ForeignAccess getForeignAccess() {
-            return NullObjectForeign.ACCESS;
-        }
-
-        public static boolean isInstance(TruffleObject obj) {
-            return obj instanceof NullObject;
-        }
-
-        @Resolve(message = "IS_NULL")
-        abstract static class PropertyKeysHasSizeNode extends Node {
-
-            @SuppressWarnings("unused")
-            public boolean access(NullObject ato) {
-                return true;
-            }
+        @ExportMessage
+        boolean isNull() {
+            return true;
         }
 
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -56,14 +56,16 @@ import com.oracle.truffle.api.TruffleLanguage.ContextPolicy;
 import com.oracle.truffle.api.debug.DebuggerTags;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.frame.Frame;
+import com.oracle.truffle.api.instrumentation.AllocationReporter;
 import com.oracle.truffle.api.instrumentation.ProvidedTags;
 import com.oracle.truffle.api.instrumentation.StandardTags;
-import com.oracle.truffle.api.interop.TruffleObject;
+import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.object.DynamicObject;
+import com.oracle.truffle.api.object.DynamicObjectLibrary;
+import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.source.Source;
-import com.oracle.truffle.api.source.SourceSection;
 import com.oracle.truffle.sl.builtins.SLBuiltinNode;
 import com.oracle.truffle.sl.builtins.SLDefineFunctionBuiltin;
 import com.oracle.truffle.sl.builtins.SLNanoTimeBuiltin;
@@ -72,12 +74,6 @@ import com.oracle.truffle.sl.builtins.SLReadlnBuiltin;
 import com.oracle.truffle.sl.builtins.SLStackTraceBuiltin;
 import com.oracle.truffle.sl.nodes.SLEvalRootNode;
 import com.oracle.truffle.sl.nodes.SLTypes;
-import com.oracle.truffle.sl.nodes.access.SLReadPropertyCacheNode;
-import com.oracle.truffle.sl.nodes.access.SLReadPropertyNode;
-import com.oracle.truffle.sl.nodes.access.SLWritePropertyCacheNode;
-import com.oracle.truffle.sl.nodes.access.SLWritePropertyNode;
-import com.oracle.truffle.sl.nodes.call.SLDispatchNode;
-import com.oracle.truffle.sl.nodes.call.SLInvokeNode;
 import com.oracle.truffle.sl.nodes.controlflow.SLBlockNode;
 import com.oracle.truffle.sl.nodes.controlflow.SLBreakNode;
 import com.oracle.truffle.sl.nodes.controlflow.SLContinueNode;
@@ -90,13 +86,16 @@ import com.oracle.truffle.sl.nodes.expression.SLBigIntegerLiteralNode;
 import com.oracle.truffle.sl.nodes.expression.SLDivNode;
 import com.oracle.truffle.sl.nodes.expression.SLEqualNode;
 import com.oracle.truffle.sl.nodes.expression.SLFunctionLiteralNode;
+import com.oracle.truffle.sl.nodes.expression.SLInvokeNode;
 import com.oracle.truffle.sl.nodes.expression.SLLessOrEqualNode;
 import com.oracle.truffle.sl.nodes.expression.SLLessThanNode;
 import com.oracle.truffle.sl.nodes.expression.SLLogicalAndNode;
 import com.oracle.truffle.sl.nodes.expression.SLLogicalOrNode;
 import com.oracle.truffle.sl.nodes.expression.SLMulNode;
+import com.oracle.truffle.sl.nodes.expression.SLReadPropertyNode;
 import com.oracle.truffle.sl.nodes.expression.SLStringLiteralNode;
 import com.oracle.truffle.sl.nodes.expression.SLSubNode;
+import com.oracle.truffle.sl.nodes.expression.SLWritePropertyNode;
 import com.oracle.truffle.sl.nodes.local.SLLexicalScope;
 import com.oracle.truffle.sl.nodes.local.SLReadLocalVariableNode;
 import com.oracle.truffle.sl.nodes.local.SLWriteLocalVariableNode;
@@ -107,7 +106,9 @@ import com.oracle.truffle.sl.runtime.SLBigNumber;
 import com.oracle.truffle.sl.runtime.SLContext;
 import com.oracle.truffle.sl.runtime.SLFunction;
 import com.oracle.truffle.sl.runtime.SLFunctionRegistry;
+import com.oracle.truffle.sl.runtime.SLLanguageView;
 import com.oracle.truffle.sl.runtime.SLNull;
+import com.oracle.truffle.sl.runtime.SLObject;
 
 /**
  * SL is a simple language to demonstrate and showcase features of Truffle. The implementation is as
@@ -157,9 +158,9 @@ import com.oracle.truffle.sl.runtime.SLNull;
  * {@link DebuggerTags#AlwaysHalt} tag to halt the execution when run under the debugger.
  * <li>Function calls: {@link SLInvokeNode invocations} are efficiently implemented with
  * {@link SLDispatchNode polymorphic inline caches}.
- * <li>Object access: {@link SLReadPropertyNode} uses {@link SLReadPropertyCacheNode} as the
- * polymorphic inline cache for property reads. {@link SLWritePropertyNode} uses
- * {@link SLWritePropertyCacheNode} as the polymorphic inline cache for property writes.
+ * <li>Object access: {@link SLReadPropertyNode} and {@link SLWritePropertyNode} use a cached
+ * {@link DynamicObjectLibrary} as the polymorphic inline cache for property reads and writes,
+ * respectively.
  * </ul>
  *
  * <p>
@@ -190,16 +191,20 @@ import com.oracle.truffle.sl.runtime.SLNull;
  * variables.
  * </ul>
  */
-@TruffleLanguage.Registration(id = SLLanguage.ID, name = "SL", defaultMimeType = SLLanguage.MIME_TYPE, characterMimeTypes = SLLanguage.MIME_TYPE, contextPolicy = ContextPolicy.SHARED)
-@ProvidedTags({StandardTags.CallTag.class, StandardTags.StatementTag.class, StandardTags.RootTag.class, StandardTags.ExpressionTag.class, DebuggerTags.AlwaysHalt.class})
+@TruffleLanguage.Registration(id = SLLanguage.ID, name = "SL", defaultMimeType = SLLanguage.MIME_TYPE, characterMimeTypes = SLLanguage.MIME_TYPE, contextPolicy = ContextPolicy.SHARED, fileTypeDetectors = SLFileDetector.class)
+@ProvidedTags({StandardTags.CallTag.class, StandardTags.StatementTag.class, StandardTags.RootTag.class, StandardTags.RootBodyTag.class, StandardTags.ExpressionTag.class, DebuggerTags.AlwaysHalt.class,
+                StandardTags.ReadVariableTag.class, StandardTags.WriteVariableTag.class})
 public final class SLLanguage extends TruffleLanguage<SLContext> {
     public static volatile int counter;
 
     public static final String ID = "sl";
     public static final String MIME_TYPE = "application/x-sl";
 
+    private final Shape rootShape;
+
     public SLLanguage() {
         counter++;
+        this.rootShape = Shape.newBuilder().layout(SLObject.class).build();
     }
 
     @Override
@@ -218,7 +223,6 @@ public final class SLLanguage extends TruffleLanguage<SLContext> {
         if (request.getArgumentNames().isEmpty()) {
             functions = SimpleLanguageParser.parseSL(this, source);
         } else {
-            Source requestedSource = request.getSource();
             StringBuilder sb = new StringBuilder();
             sb.append("function main(");
             String sep = "";
@@ -228,10 +232,10 @@ public final class SLLanguage extends TruffleLanguage<SLContext> {
                 sep = ",";
             }
             sb.append(") { return ");
-            sb.append(request.getSource().getCharacters());
+            sb.append(source.getCharacters());
             sb.append(";}");
-            String language = requestedSource.getLanguage() == null ? ID : requestedSource.getLanguage();
-            Source decoratedSource = Source.newBuilder(language, sb.toString(), request.getSource().getName()).build();
+            String language = source.getLanguage() == null ? ID : source.getLanguage();
+            Source decoratedSource = Source.newBuilder(language, sb.toString(), source.getName()).build();
             functions = SimpleLanguageParser.parseSL(this, decoratedSource);
         }
 
@@ -255,6 +259,11 @@ public final class SLLanguage extends TruffleLanguage<SLContext> {
         return Truffle.getRuntime().createCallTarget(evalMain);
     }
 
+    @Override
+    protected Object getLanguageView(SLContext context, Object value) {
+        return SLLanguageView.create(value);
+    }
+
     /*
      * Still necessary for the old SL TCK to pass. We should remove with the old TCK. New language
      * should not override this.
@@ -267,59 +276,7 @@ public final class SLLanguage extends TruffleLanguage<SLContext> {
 
     @Override
     protected boolean isVisible(SLContext context, Object value) {
-        return value != SLNull.SINGLETON;
-    }
-
-    @Override
-    protected boolean isObjectOfLanguage(Object object) {
-        if (!(object instanceof TruffleObject)) {
-            return false;
-        }
-        TruffleObject truffleObject = (TruffleObject) object;
-        return truffleObject instanceof SLFunction || truffleObject instanceof SLBigNumber || SLContext.isSLObject(truffleObject);
-    }
-
-    @Override
-    protected String toString(SLContext context, Object value) {
-        if (value == SLNull.SINGLETON) {
-            return "NULL";
-        }
-        if (value instanceof SLBigNumber) {
-            return super.toString(context, ((SLBigNumber) value).getValue());
-        }
-        if (value instanceof Long) {
-            return Long.toString((Long) value);
-        }
-        return super.toString(context, value);
-    }
-
-    @Override
-    protected Object findMetaObject(SLContext context, Object value) {
-        if (value instanceof Number || value instanceof SLBigNumber) {
-            return "Number";
-        }
-        if (value instanceof Boolean) {
-            return "Boolean";
-        }
-        if (value instanceof String) {
-            return "String";
-        }
-        if (value == SLNull.SINGLETON) {
-            return "Null";
-        }
-        if (value instanceof SLFunction) {
-            return "Function";
-        }
-        return "Object";
-    }
-
-    @Override
-    protected SourceSection findSourceLocation(SLContext context, Object value) {
-        if (value instanceof SLFunction) {
-            SLFunction f = (SLFunction) value;
-            return f.getCallTarget().getRootNode().getSourceSection();
-        }
-        return null;
+        return !InteropLibrary.getFactory().getUncached(value).isNull(value);
     }
 
     @Override
@@ -345,10 +302,17 @@ public final class SLLanguage extends TruffleLanguage<SLContext> {
                         if (!hasNext()) {
                             throw new NoSuchElementException();
                         }
-                        Scope vscope = Scope.newBuilder(nextScope.getName(), nextScope.getVariables(frame)).node(nextScope.getNode()).arguments(nextScope.getArguments(frame)).build();
+                        Object functionObject = findFunctionObject();
+                        Scope vscope = Scope.newBuilder(nextScope.getName(), nextScope.getVariables(frame)).node(nextScope.getNode()).arguments(nextScope.getArguments(frame)).rootInstance(
+                                        functionObject).build();
                         previousScope = nextScope;
                         nextScope = null;
                         return vscope;
+                    }
+
+                    private Object findFunctionObject() {
+                        String name = node.getRootNode().getName();
+                        return context.getFunctionRegistry().getFunction(name);
                     }
                 };
             }
@@ -358,6 +322,21 @@ public final class SLLanguage extends TruffleLanguage<SLContext> {
     @Override
     protected Iterable<Scope> findTopScopes(SLContext context) {
         return context.getTopScopes();
+    }
+
+    public Shape getRootShape() {
+        return rootShape;
+    }
+
+    /**
+     * Allocate an empty object. All new objects initially have no properties. Properties are added
+     * when they are first stored, i.e., the store triggers a shape change of the object.
+     */
+    public SLObject createObject(AllocationReporter reporter) {
+        reporter.onEnter(null, 0, AllocationReporter.SIZE_UNKNOWN);
+        SLObject object = new SLObject(rootShape);
+        reporter.onReturnValue(object, 0, AllocationReporter.SIZE_UNKNOWN);
+        return object;
     }
 
     public static SLContext getCurrentContext() {

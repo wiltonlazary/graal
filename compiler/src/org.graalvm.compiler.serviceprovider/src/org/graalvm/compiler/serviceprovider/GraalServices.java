@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 
+import jdk.vm.ci.code.VirtualObject;
+import jdk.vm.ci.meta.ConstantPool;
+import jdk.vm.ci.meta.JavaType;
+import jdk.vm.ci.meta.ResolvedJavaType;
+import jdk.vm.ci.meta.SpeculationLog.SpeculationReason;
 import jdk.vm.ci.services.JVMCIPermission;
 
 /**
@@ -35,26 +40,11 @@ import jdk.vm.ci.services.JVMCIPermission;
  */
 public final class GraalServices {
 
-    private static int getJavaSpecificationVersion() {
-        throw shouldNotReachHere();
-    }
-
-    /**
-     * The integer value corresponding to the value of the {@code java.specification.version} system
-     * property after any leading {@code "1."} has been stripped.
-     */
-    public static final int JAVA_SPECIFICATION_VERSION = getJavaSpecificationVersion();
-
-    /**
-     * Determines if the Java runtime is version 8 or earlier.
-     */
-    public static final boolean Java8OrEarlier = JAVA_SPECIFICATION_VERSION <= 8;
-
     private GraalServices() {
     }
 
     private static InternalError shouldNotReachHere() {
-        throw new InternalError("JDK specific overlay missing");
+        throw new InternalError("JDK specific overlay for " + GraalServices.class.getName() + " missing");
     }
 
     /**
@@ -101,6 +91,17 @@ public final class GraalServices {
      * @param c
      */
     public static boolean isToStringTrusted(Class<?> c) {
+        throw shouldNotReachHere();
+    }
+
+    /**
+     * Creates an encoding of the context objects representing a speculation reason.
+     *
+     * @param groupId
+     * @param groupName
+     * @param context the objects forming a key for the speculation
+     */
+    static SpeculationReason createSpeculationReason(int groupId, String groupName, Object... context) {
         throw shouldNotReachHere();
     }
 
@@ -203,6 +204,75 @@ public final class GraalServices {
      * @return the input arguments to the JVM or {@code null} if they are unavailable
      */
     public static List<String> getInputArguments() {
+        throw shouldNotReachHere();
+    }
+
+    /**
+     * Returns the fused multiply add of the three arguments; that is, returns the exact product of
+     * the first two arguments summed with the third argument and then rounded once to the nearest
+     * {@code float}.
+     */
+    @SuppressWarnings("unused")
+    public static float fma(float a, float b, float c) {
+        throw shouldNotReachHere();
+    }
+
+    /**
+     * Returns the fused multiply add of the three arguments; that is, returns the exact product of
+     * the first two arguments summed with the third argument and then rounded once to the nearest
+     * {@code double}.
+     */
+    @SuppressWarnings("unused")
+    public static double fma(double a, double b, double c) {
+        throw shouldNotReachHere();
+    }
+
+    /**
+     * Creates a new {@link VirtualObject} based on a given existing object, with the given
+     * contents. If {@code type} is an instance class then {@link VirtualObject#getValues} provides
+     * the values for the fields returned by {@link ResolvedJavaType#getInstanceFields(boolean)
+     * getInstanceFields(true)}. If {@code type} is an array then the length of
+     * {@link VirtualObject#getValues} determines the array length.
+     *
+     * @param type the type of the object whose allocation was removed during compilation. This can
+     *            be either an instance or an array type.
+     * @param id a unique id that identifies the object within the debug information for one
+     *            position in the compiled code.
+     * @param isAutoBox a flag that tells the runtime that the object may be a boxed primitive that
+     *            needs to be obtained from the box cache instead of creating a new instance.
+     * @return a new {@link VirtualObject} instance.
+     */
+    @SuppressWarnings("unused")
+    public static VirtualObject createVirtualObject(ResolvedJavaType type, int id, boolean isAutoBox) {
+        throw shouldNotReachHere();
+    }
+
+    /**
+     * Gets the update-release counter for the current Java runtime.
+     *
+     * @see "https://download.java.net/java/GA/jdk14/docs/api/java.base/java/lang/Runtime.Version.html"
+     */
+    public static int getJavaUpdateVersion() {
+        throw shouldNotReachHere();
+    }
+
+    /**
+     * Looks up the type referenced by the constant pool entry at {@code cpi} as referenced by the
+     * {@code opcode} bytecode instruction.
+     *
+     * @param cpi the index of a constant pool entry that references a type
+     * @param opcode the opcode of the instruction with {@code cpi} as an operand
+     * @return a reference to the compiler interface type
+     */
+    @SuppressWarnings("unused")
+    public static JavaType lookupReferencedType(ConstantPool constantPool, int cpi, int opcode) {
+        throw shouldNotReachHere();
+    }
+
+    /**
+     * Returns true if JVMCI supports {@code ConstantPool.lookupReferencedType} API.
+     */
+    public static boolean hasLookupReferencedType() {
         throw shouldNotReachHere();
     }
 }

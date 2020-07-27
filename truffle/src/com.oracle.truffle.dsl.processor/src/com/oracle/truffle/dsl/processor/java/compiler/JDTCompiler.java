@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2012, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.dsl.processor.java.compiler;
 
@@ -38,6 +54,11 @@ import javax.lang.model.element.Element;
 import javax.lang.model.element.TypeElement;
 
 import com.oracle.truffle.dsl.processor.java.ElementUtils;
+import java.lang.reflect.Field;
+import javax.lang.model.element.AnnotationMirror;
+import javax.lang.model.element.AnnotationValue;
+import javax.lang.model.element.ElementKind;
+import javax.tools.Diagnostic.Kind;
 
 public class JDTCompiler extends AbstractCompiler {
 
@@ -62,6 +83,11 @@ public class JDTCompiler extends AbstractCompiler {
     @Override
     public List<? extends Element> getAllMembersInDeclarationOrder(ProcessingEnvironment environment, TypeElement type) {
         return sortBySourceOrder(newElementList(environment.getElementUtils().getAllMembers(type)));
+    }
+
+    @Override
+    public List<? extends Element> getEnclosedElementsInDeclarationOrder(TypeElement type) {
+        return sortBySourceOrder(newElementList(type.getEnclosedElements()));
     }
 
     private static List<? extends Element> sortBySourceOrder(List<Element> elements) {
@@ -262,6 +288,64 @@ public class JDTCompiler extends AbstractCompiler {
                 Integer declarationSourceStart = (Integer) field(declarations[i], "declarationSourceStart");
                 orderedBindings.put(declarationSourceStart, field(declarations[i], "binding"));
             }
+        }
+    }
+
+    @Override
+    protected boolean emitDeprecationWarningImpl(ProcessingEnvironment environment, Element element) {
+        try {
+            Object binding = field(element, "_binding");
+            if (binding == null) {
+                return false;
+            }
+            Object astNode = getASTNode(element);
+            if (astNode == null) {
+                return false;
+            }
+            Object problemReporter = field(method(environment, "getCompiler"), "problemReporter");
+            Object prev = useSource(problemReporter, astNode);
+            try {
+                return reportProblem(problemReporter, element.getKind(), binding, astNode);
+            } finally {
+                useSource(problemReporter, prev);
+            }
+        } catch (ReflectiveOperationException e) {
+            return false;
+        }
+    }
+
+    private static Object getASTNode(Element element) throws ReflectiveOperationException {
+        Class<?> baseMessagerImplClass = Class.forName("org.eclipse.jdt.internal.compiler.apt.dispatch.BaseMessagerImpl", false, element.getClass().getClassLoader());
+        Object problem = staticMethod(baseMessagerImplClass, "createProblem",
+                        new Class<?>[]{Kind.class, CharSequence.class, Element.class, AnnotationMirror.class, AnnotationValue.class},
+                        Kind.WARNING, "", element, null, null);
+        return field(problem, "_referenceContext");
+    }
+
+    private static Object useSource(Object problemReporter, Object astNode) throws ReflectiveOperationException {
+        Field referenceContextField = problemReporter.getClass().getField("referenceContext");
+        Object res = referenceContextField.get(problemReporter);
+        referenceContextField.set(problemReporter, astNode);
+        return res;
+    }
+
+    private static boolean reportProblem(Object problemReporter, ElementKind kind, Object binding, Object astNode) throws ReflectiveOperationException {
+        ClassLoader cl = binding.getClass().getClassLoader();
+        Class<?> astNodeClass = Class.forName("org.eclipse.jdt.internal.compiler.ast.ASTNode", false, cl);
+        if (kind.isClass() || kind.isInterface()) {
+            Class<?> typeBindingClass = Class.forName("org.eclipse.jdt.internal.compiler.lookup.TypeBinding", false, cl);
+            method(problemReporter, "deprecatedType", new Class<?>[]{typeBindingClass, astNodeClass}, binding, astNode);
+            return true;
+        } else if (kind.isField()) {
+            Class<?> fieldBindingClass = Class.forName("org.eclipse.jdt.internal.compiler.lookup.FieldBinding", false, cl);
+            method(problemReporter, "deprecatedField", new Class<?>[]{fieldBindingClass, astNodeClass}, binding, astNode);
+            return true;
+        } else if (kind == ElementKind.METHOD || kind == ElementKind.CONSTRUCTOR) {
+            Class<?> methodBindingClass = Class.forName("org.eclipse.jdt.internal.compiler.lookup.MethodBinding", false, cl);
+            method(problemReporter, "deprecatedMethod", new Class<?>[]{methodBindingClass, astNodeClass}, binding, astNode);
+            return true;
+        } else {
+            return false;
         }
     }
 }

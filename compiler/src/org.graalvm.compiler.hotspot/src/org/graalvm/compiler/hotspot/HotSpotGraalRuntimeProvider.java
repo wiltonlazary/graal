@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
  */
 package org.graalvm.compiler.hotspot;
 
+import java.io.PrintStream;
 import java.util.Map;
 
 import org.graalvm.compiler.api.runtime.GraalRuntime;
@@ -57,6 +58,8 @@ public interface HotSpotGraalRuntimeProvider extends GraalRuntime, RuntimeProvid
         return getClass().getSimpleName();
     }
 
+    HotSpotGraalRuntime.HotSpotGC getGarbageCollector();
+
     @Override
     HotSpotBackend getHostBackend();
 
@@ -69,8 +72,9 @@ public interface HotSpotGraalRuntimeProvider extends GraalRuntime, RuntimeProvid
      * @param compilationOptions the options used to configure the compilation debug context
      * @param compilationId a system wide unique compilation id
      * @param compilable the input to the compilation
+     * @param logStream the log stream to use in this context
      */
-    DebugContext openDebugContext(OptionValues compilationOptions, CompilationIdentifier compilationId, Object compilable, Iterable<DebugHandlersFactory> factories);
+    DebugContext openDebugContext(OptionValues compilationOptions, CompilationIdentifier compilationId, Object compilable, Iterable<DebugHandlersFactory> factories, PrintStream logStream);
 
     /**
      * Gets the option values associated with this runtime.
@@ -93,7 +97,8 @@ public interface HotSpotGraalRuntimeProvider extends GraalRuntime, RuntimeProvid
     DiagnosticsOutputDirectory getOutputDirectory();
 
     /**
-     * Gets the map used to count compilation problems at each {@link ExceptionAction} level.
+     * Gets the map used to count compilation problems at each {@link ExceptionAction} level. All
+     * updates and queries to the map should be synchronized.
      */
     Map<ExceptionAction, Integer> getCompilationProblemsPerAction();
 
@@ -102,4 +107,9 @@ public interface HotSpotGraalRuntimeProvider extends GraalRuntime, RuntimeProvid
      * which configuration is in use.
      */
     String getCompilerConfigurationName();
+
+    /**
+     * Returns the instance holding the instrumentation data structures.
+     */
+    Instrumentation getInstrumentation();
 }

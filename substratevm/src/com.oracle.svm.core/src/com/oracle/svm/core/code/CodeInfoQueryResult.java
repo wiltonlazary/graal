@@ -26,8 +26,9 @@ package com.oracle.svm.core.code;
 
 import org.graalvm.nativeimage.c.function.CodePointer;
 
-import com.oracle.svm.core.heap.ReferenceMapDecoder;
-import com.oracle.svm.core.heap.ReferenceMapEncoder;
+import com.oracle.svm.core.annotate.Uninterruptible;
+import com.oracle.svm.core.heap.CodeReferenceMapDecoder;
+import com.oracle.svm.core.heap.CodeReferenceMapEncoder;
 
 /**
  * Information about an instruction pointer (IP), created and returned by methods in
@@ -60,11 +61,9 @@ public class CodeInfoQueryResult {
      */
     protected static final FrameInfoQueryResult NO_FRAME_INFO = null;
 
-    protected AbstractCodeInfo data;
     protected CodePointer ip;
-    protected long totalFrameSize;
+    protected long encodedFrameSize;
     protected long exceptionOffset;
-    protected byte[] referenceMapEncoding;
     protected long referenceMapIndex;
     protected FrameInfoQueryResult frameInfo;
 
@@ -75,11 +74,44 @@ public class CodeInfoQueryResult {
         return ip;
     }
 
+    public long getEncodedFrameSize() {
+        return encodedFrameSize;
+    }
+
     /**
      * Returns the frame size of the method containing the IP.
      */
     public long getTotalFrameSize() {
-        return totalFrameSize;
+        return getTotalFrameSize(encodedFrameSize);
+    }
+
+    @Uninterruptible(reason = "called from uninterruptible code", mayBeInlined = true)
+    public static long getTotalFrameSize(long encodedFrameSize) {
+        return CodeInfoDecoder.decodeTotalFrameSize(encodedFrameSize);
+    }
+
+    /**
+     * Returns true if the method containing the IP is an entry point method.
+     */
+    public boolean isEntryPoint() {
+        return isEntryPoint(encodedFrameSize);
+    }
+
+    @Uninterruptible(reason = "called from uninterruptible code", mayBeInlined = true)
+    public static boolean isEntryPoint(long encodedFrameSize) {
+        return CodeInfoDecoder.decodeIsEntryPoint(encodedFrameSize);
+    }
+
+    /**
+     * Returns true if the method containing the IP has callee-saved registers.
+     */
+    public boolean hasCalleeSavedRegisters() {
+        return hasCalleeSavedRegisters(encodedFrameSize);
+    }
+
+    @Uninterruptible(reason = "called from uninterruptible code", mayBeInlined = true)
+    public static boolean hasCalleeSavedRegisters(long encodedFrameSize) {
+        return CodeInfoDecoder.decodeHasCalleeSavedRegisters(encodedFrameSize);
     }
 
     /**
@@ -91,16 +123,9 @@ public class CodeInfoQueryResult {
     }
 
     /**
-     * Returns the encoded reference map information, to be used together with
-     * {@link #getReferenceMapIndex()}. Encoding is handled by {@link ReferenceMapEncoder}, decoding
-     * is handled by {@link ReferenceMapDecoder}.
-     */
-    public byte[] getReferenceMapEncoding() {
-        return referenceMapEncoding;
-    }
-
-    /**
-     * Index into the {@link #getReferenceMapEncoding() encoded reference map} for the IP.
+     * Index into the {@link CodeInfoAccess#getReferenceMapEncoding(CodeInfo)} encoded reference
+     * map} for the code. Encoding is handled by {@link CodeReferenceMapEncoder}, decoding is
+     * handled by {@link CodeReferenceMapDecoder}.
      */
     public long getReferenceMapIndex() {
         return referenceMapIndex;

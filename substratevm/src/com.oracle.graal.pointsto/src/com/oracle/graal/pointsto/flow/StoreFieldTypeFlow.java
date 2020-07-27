@@ -25,31 +25,31 @@
 package com.oracle.graal.pointsto.flow;
 
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
+
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.flow.context.object.AnalysisObject;
-import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.typestate.TypeState;
 
 /**
  * Implements a field store operation type flow.
  */
-public abstract class StoreFieldTypeFlow extends TypeFlow<StoreFieldNode> {
+public abstract class StoreFieldTypeFlow extends AccessFieldTypeFlow {
 
-    /** The field that this flow stores into. */
-    protected final AnalysisField field;
-
-    public StoreFieldTypeFlow(StoreFieldNode node) {
-        super(node, null);
-        this.field = (AnalysisField) node.field();
+    protected StoreFieldTypeFlow(StoreFieldNode node) {
+        super(node);
     }
 
-    public StoreFieldTypeFlow(StoreFieldTypeFlow original, MethodFlowsGraph methodFlows) {
+    protected StoreFieldTypeFlow(StoreFieldTypeFlow original, MethodFlowsGraph methodFlows) {
         super(original, methodFlows);
-        this.field = original.field;
     }
 
-    public AnalysisField field() {
-        return field;
+    @Override
+    public TypeState filter(BigBang bb, TypeState newState) {
+        /*
+         * If the type flow constraints are relaxed filter the stored value using the field's
+         * declared type.
+         */
+        return declaredTypeFilter(bb, newState);
     }
 
     public static class StoreStaticFieldTypeFlow extends StoreFieldTypeFlow {
@@ -84,13 +84,6 @@ public abstract class StoreFieldTypeFlow extends TypeFlow<StoreFieldNode> {
         }
 
         @Override
-        public boolean addState(BigBang bb, TypeState add) {
-            /* Only a clone should be updated */
-            assert this.isClone();
-            return super.addState(bb, add);
-        }
-
-        @Override
         public String toString() {
             return "StoreStaticFieldTypeFlow<" + getState() + ">";
         }
@@ -112,7 +105,7 @@ public abstract class StoreFieldTypeFlow extends TypeFlow<StoreFieldNode> {
         private final TypeFlow<?> valueFlow;
 
         /** The flow of the store operation receiver object. */
-        private final TypeFlow<?> objectFlow;
+        private TypeFlow<?> objectFlow;
 
         StoreInstanceFieldTypeFlow(StoreFieldNode node, TypeFlow<?> valueFlow, TypeFlow<?> objectFlow) {
             super(node);
@@ -132,10 +125,13 @@ public abstract class StoreFieldTypeFlow extends TypeFlow<StoreFieldNode> {
         }
 
         @Override
-        public boolean addState(BigBang bb, TypeState add) {
-            /* Only a clone should be updated */
-            assert this.isClone();
-            return super.addState(bb, add);
+        public TypeFlow<?> receiver() {
+            return objectFlow;
+        }
+
+        @Override
+        public void setObserved(TypeFlow<?> newObjectFlow) {
+            this.objectFlow = newObjectFlow;
         }
 
         @Override
@@ -153,24 +149,21 @@ public abstract class StoreFieldTypeFlow extends TypeFlow<StoreFieldNode> {
                 bb.reportIllegalUnknownUse(graphRef.getMethod(), source, "Illegal: Storing into UnknownTypeState objects. Field: " + field);
                 return;
             }
-
+            objectState = filterObjectState(bb, objectState);
             /* Iterate over the receiver objects. */
             for (AnalysisObject receiver : objectState.objects()) {
                 /* Get the field flow corresponding to the receiver object. */
-                FieldTypeFlow fieldFlow = receiver.getInstanceFieldFlow(bb, field, true);
+                FieldTypeFlow fieldFlow = receiver.getInstanceFieldFlow(bb, this.method(), field, true);
                 /* Register the field flow as a use, if not already registered. */
                 this.addUse(bb, fieldFlow);
             }
         }
 
         @Override
-        public TypeFlow<?> receiver() {
-            return objectFlow;
-        }
-
-        /** Return the state of the receiver object. */
-        public TypeState getObjectState() {
-            return objectFlow.getState();
+        public void onObservedSaturated(BigBang bb, TypeFlow<?> observed) {
+            assert this.isClone();
+            /* When receiver flow saturates start observing the flow of the field declaring type. */
+            replaceObservedWith(bb, field.getDeclaringClass());
         }
 
         @Override

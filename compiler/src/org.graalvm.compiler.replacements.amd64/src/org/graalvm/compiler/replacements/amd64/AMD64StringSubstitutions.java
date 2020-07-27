@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,19 +24,25 @@
  */
 package org.graalvm.compiler.replacements.amd64;
 
+import static org.graalvm.compiler.api.directives.GraalDirectives.LIKELY_PROBABILITY;
+import static org.graalvm.compiler.api.directives.GraalDirectives.UNLIKELY_PROBABILITY;
+import static org.graalvm.compiler.api.directives.GraalDirectives.injectBranchProbability;
+import static org.graalvm.compiler.replacements.ReplacementsUtil.charArrayBaseOffset;
+import static org.graalvm.compiler.replacements.ReplacementsUtil.charArrayIndexScale;
+
 import org.graalvm.compiler.api.replacements.ClassSubstitution;
-import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.compiler.api.replacements.Fold.InjectedParameter;
 import org.graalvm.compiler.api.replacements.MethodSubstitution;
 import org.graalvm.compiler.core.common.SuppressFBWarnings;
-import org.graalvm.compiler.core.common.spi.ArrayOffsetProvider;
 import org.graalvm.compiler.graph.Node.ConstantNodeParameter;
 import org.graalvm.compiler.replacements.StringSubstitutions;
 import org.graalvm.compiler.replacements.nodes.ArrayCompareToNode;
+import org.graalvm.compiler.replacements.nodes.ArrayRegionEqualsNode;
 import org.graalvm.compiler.word.Word;
 import org.graalvm.word.Pointer;
 
 import jdk.vm.ci.meta.JavaKind;
+import jdk.vm.ci.meta.MetaAccessProvider;
 
 // JaCoCo Exclude
 
@@ -46,18 +52,8 @@ import jdk.vm.ci.meta.JavaKind;
 @ClassSubstitution(String.class)
 public class AMD64StringSubstitutions {
 
-    @Fold
-    static int charArrayBaseOffset(@InjectedParameter ArrayOffsetProvider arrayOffsetProvider) {
-        return arrayOffsetProvider.arrayBaseOffset(JavaKind.Char);
-    }
-
-    @Fold
-    static int charArrayIndexScale(@InjectedParameter ArrayOffsetProvider arrayOffsetProvider) {
-        return arrayOffsetProvider.arrayScalingFactor(JavaKind.Char);
-    }
-
     /** Marker value for the {@link InjectedParameter} injected parameter. */
-    static final ArrayOffsetProvider INJECTED = null;
+    static final MetaAccessProvider INJECTED = null;
 
     // Only exists in JDK <= 8
     @MethodSubstitution(isStatic = true, optional = true)
@@ -65,31 +61,46 @@ public class AMD64StringSubstitutions {
                     @ConstantNodeParameter char[] target, int targetOffset, int targetCount,
                     int origFromIndex) {
         int fromIndex = origFromIndex;
-        if (fromIndex >= sourceCount) {
+        if (injectBranchProbability(UNLIKELY_PROBABILITY, fromIndex >= sourceCount)) {
             return (targetCount == 0 ? sourceCount : -1);
         }
-        if (fromIndex < 0) {
+        if (injectBranchProbability(UNLIKELY_PROBABILITY, fromIndex < 0)) {
             fromIndex = 0;
         }
-        if (targetCount == 0) {
+        if (injectBranchProbability(UNLIKELY_PROBABILITY, targetCount == 0)) {
             // The empty string is in every string.
             return fromIndex;
         }
 
         int totalOffset = sourceOffset + fromIndex;
-        if (sourceCount - fromIndex < targetCount) {
+        if (injectBranchProbability(UNLIKELY_PROBABILITY, sourceCount - fromIndex < targetCount)) {
             // The empty string contains nothing except the empty string.
             return -1;
         }
-        assert sourceCount - fromIndex > 0 && targetCount > 0;
 
-        Pointer sourcePointer = Word.objectToTrackedPointer(source).add(charArrayBaseOffset(INJECTED)).add(totalOffset * charArrayIndexScale(INJECTED));
-        Pointer targetPointer = Word.objectToTrackedPointer(target).add(charArrayBaseOffset(INJECTED)).add(targetOffset * charArrayIndexScale(INJECTED));
-        int result = AMD64StringIndexOfNode.optimizedStringIndexPointer(sourcePointer, sourceCount - fromIndex, targetPointer, targetCount);
-        if (result >= 0) {
-            return result + totalOffset;
+        if (injectBranchProbability(UNLIKELY_PROBABILITY, targetCount == 1)) {
+            return AMD64ArrayIndexOf.indexOf1Char(source, sourceCount, totalOffset, target[targetOffset]);
+        } else {
+            int haystackLength = sourceCount - (targetCount - 2);
+            while (injectBranchProbability(LIKELY_PROBABILITY, totalOffset < haystackLength)) {
+                int indexOfResult = AMD64ArrayIndexOf.indexOfTwoConsecutiveChars(source, haystackLength, totalOffset, target[targetOffset], target[targetOffset + 1]);
+                if (injectBranchProbability(UNLIKELY_PROBABILITY, indexOfResult < 0)) {
+                    return -1;
+                }
+                totalOffset = indexOfResult;
+                if (injectBranchProbability(UNLIKELY_PROBABILITY, targetCount == 2)) {
+                    return totalOffset;
+                } else {
+                    Pointer cmpSourcePointer = Word.objectToTrackedPointer(source).add(charArrayBaseOffset(INJECTED)).add(totalOffset * charArrayIndexScale(INJECTED));
+                    Pointer targetPointer = Word.objectToTrackedPointer(target).add(charArrayBaseOffset(INJECTED)).add(targetOffset * charArrayIndexScale(INJECTED));
+                    if (injectBranchProbability(UNLIKELY_PROBABILITY, ArrayRegionEqualsNode.regionEquals(cmpSourcePointer, targetPointer, targetCount, JavaKind.Char))) {
+                        return totalOffset;
+                    }
+                }
+                totalOffset++;
+            }
+            return -1;
         }
-        return result;
     }
 
     // Only exists in JDK <= 8
@@ -97,23 +108,17 @@ public class AMD64StringSubstitutions {
     public static int indexOf(String source, int ch, int origFromIndex) {
         int fromIndex = origFromIndex;
         final int sourceCount = source.length();
-        if (fromIndex >= sourceCount) {
+        if (injectBranchProbability(UNLIKELY_PROBABILITY, fromIndex >= sourceCount)) {
             // Note: fromIndex might be near -1>>>1.
             return -1;
         }
-        if (fromIndex < 0) {
+        if (injectBranchProbability(UNLIKELY_PROBABILITY, fromIndex < 0)) {
             fromIndex = 0;
         }
 
-        if (ch < Character.MIN_SUPPLEMENTARY_CODE_POINT) {
+        if (injectBranchProbability(LIKELY_PROBABILITY, ch < Character.MIN_SUPPLEMENTARY_CODE_POINT)) {
             char[] sourceArray = StringSubstitutions.getValue(source);
-
-            Pointer sourcePointer = Word.objectToTrackedPointer(sourceArray).add(charArrayBaseOffset(INJECTED)).add(fromIndex * charArrayIndexScale(INJECTED));
-            int result = AMD64ArrayIndexOfNode.optimizedArrayIndexOf(sourcePointer, sourceCount - fromIndex, (char) ch, JavaKind.Char);
-            if (result != -1) {
-                return result + fromIndex;
-            }
-            return result;
+            return AMD64ArrayIndexOf.indexOf1Char(sourceArray, sourceCount, fromIndex, (char) ch);
         } else {
             return indexOf(source, ch, origFromIndex);
         }

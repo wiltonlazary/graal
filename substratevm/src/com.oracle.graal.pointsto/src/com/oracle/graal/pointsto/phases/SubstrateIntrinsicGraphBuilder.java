@@ -29,26 +29,23 @@ import java.util.Arrays;
 import java.util.List;
 
 import org.graalvm.compiler.bytecode.Bytecode;
-import org.graalvm.compiler.core.common.spi.ConstantFieldProvider;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.nodes.FrameState;
 import org.graalvm.compiler.nodes.StateSplit;
 import org.graalvm.compiler.nodes.StructuredGraph.AllowAssumptions;
 import org.graalvm.compiler.nodes.ValueNode;
-import org.graalvm.compiler.nodes.spi.StampProvider;
+import org.graalvm.compiler.nodes.graphbuilderconf.GeneratedInvocationPlugin;
+import org.graalvm.compiler.nodes.java.ExceptionObjectNode;
+import org.graalvm.compiler.nodes.spi.CoreProviders;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.replacements.IntrinsicGraphBuilder;
-
-import jdk.vm.ci.meta.ConstantReflectionProvider;
-import jdk.vm.ci.meta.MetaAccessProvider;
 
 public class SubstrateIntrinsicGraphBuilder extends IntrinsicGraphBuilder {
 
     private int bci;
 
-    public SubstrateIntrinsicGraphBuilder(OptionValues options, DebugContext debug, MetaAccessProvider metaAccess, ConstantReflectionProvider constantReflection,
-                    ConstantFieldProvider constantFieldProvider, StampProvider stampProvider, Bytecode code) {
-        super(options, debug, metaAccess, constantReflection, constantFieldProvider, stampProvider, code, -1, AllowAssumptions.NO);
+    public SubstrateIntrinsicGraphBuilder(OptionValues options, DebugContext debug, CoreProviders providers, Bytecode code) {
+        super(options, debug, providers, code, -1, AllowAssumptions.NO);
         setStateAfter(getGraph().start());
     }
 
@@ -72,7 +69,23 @@ public class SubstrateIntrinsicGraphBuilder extends IntrinsicGraphBuilder {
     }
 
     @Override
+    protected void setExceptionState(ExceptionObjectNode exceptionObject) {
+        List<ValueNode> values = new ArrayList<>(Arrays.asList(arguments));
+        values.add(exceptionObject);
+        int stackSize = 1;
+
+        FrameState stateAfter = getGraph().add(new FrameState(null, code, bci, values, arguments.length, stackSize, true, false, null, null));
+        exceptionObject.setStateAfter(stateAfter);
+        bci++;
+    }
+
+    @Override
     public int bci() {
         return bci;
+    }
+
+    @Override
+    public boolean canDeferPlugin(GeneratedInvocationPlugin plugin) {
+        return plugin.isGeneratedFromFoldOrNodeIntrinsic();
     }
 }

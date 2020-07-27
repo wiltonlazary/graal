@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,20 +26,26 @@ package com.oracle.svm.truffle.api;
 
 import org.graalvm.compiler.truffle.common.CompilableTruffleAST;
 import org.graalvm.compiler.truffle.common.OptimizedAssumptionDependency;
+import org.graalvm.compiler.truffle.common.TruffleCompiler;
 import org.graalvm.compiler.truffle.runtime.OptimizedCallTarget;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
 import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.annotate.InvokeJavaFunctionPointer;
+import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.code.CodeInfoTable;
+import com.oracle.svm.core.code.UntetheredCodeInfo;
+import com.oracle.svm.core.code.UntetheredCodeInfoAccess;
 import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.deopt.SubstrateSpeculationLog;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.truffle.api.nodes.RootNode;
 
+import jdk.vm.ci.code.InstalledCode;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.vm.ci.meta.SpeculationLog;
 
-public class SubstrateOptimizedCallTarget extends OptimizedCallTarget implements SubstrateInstalledCode, OptimizedAssumptionDependency {
+public class SubstrateOptimizedCallTarget extends OptimizedCallTarget implements SubstrateCompilableTruffleAST, SubstrateInstalledCode, OptimizedAssumptionDependency {
 
     protected long address;
 
@@ -54,6 +60,11 @@ public class SubstrateOptimizedCallTarget extends OptimizedCallTarget implements
     }
 
     @Override
+    public SpeculationLog getCompilationSpeculationLog() {
+        return getSpeculationLog();
+    }
+
+    @Override
     public void invalidate() {
         invalidate(null, null);
     }
@@ -64,13 +75,38 @@ public class SubstrateOptimizedCallTarget extends OptimizedCallTarget implements
     }
 
     @Override
-    protected void invalidateCode() {
+    public SubstrateInstalledCode getSubstrateInstalledCode() {
+        return this;
+    }
+
+    @Override
+    public OptimizedAssumptionDependency getDependency() {
+        return this;
+    }
+
+    @Override
+    public void invalidateCode() {
         CodeInfoTable.invalidateInstalledCode(this);
     }
 
     @Override
     public boolean isValid() {
         return address != 0;
+    }
+
+    @Override
+    public boolean isValidLastTier() {
+        long address0 = getAddress();
+        return (address0 != 0) && isValidLastTier0(address0);
+    }
+
+    @Uninterruptible(reason = "Prevent the GC from freeing the CodeInfo object.")
+    private static boolean isValidLastTier0(long address0) {
+        UntetheredCodeInfo info = CodeInfoTable.lookupCodeInfo(WordFactory.pointer(address0));
+        if (info.isNonNull() && info.notEqual(CodeInfoTable.getImageCodeInfo())) {
+            return UntetheredCodeInfoAccess.getTier(info) == TruffleCompiler.LAST_TIER_INDEX;
+        }
+        return false;
     }
 
     @Override
@@ -83,9 +119,6 @@ public class SubstrateOptimizedCallTarget extends OptimizedCallTarget implements
         return getAddress();
     }
 
-    /**
-     * @param method
-     */
     @Override
     public void setAddress(long address, ResolvedJavaMethod method) {
         this.address = address;
@@ -105,12 +138,26 @@ public class SubstrateOptimizedCallTarget extends OptimizedCallTarget implements
          * that no longer contains executable code.
          */
         long start = address;
+        // The call below is not a safepoint as it is intrinsified in TruffleGraphBuilderPlugins.
         if (start != 0) {
             CallBoundaryFunctionPointer target = WordFactory.pointer(start);
             return KnownIntrinsics.convertUnknownValue(target.invoke(this, args), Object.class);
         } else {
             return callBoundary(args);
         }
+    }
+
+    @Override
+    public boolean cancelCompilation(CharSequence reason) {
+        if (SubstateTruffleOptions.isMultiThreaded()) {
+            return super.cancelCompilation(reason);
+        }
+        return false;
+    }
+
+    @Override
+    public InstalledCode createInstalledCode() {
+        return new SubstrateTruffleInstalledCodeBridge(this);
     }
 
     interface CallBoundaryFunctionPointer extends CFunctionPointer {

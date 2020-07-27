@@ -27,8 +27,10 @@ package com.oracle.graal.pointsto.meta;
 import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
 import org.graalvm.compiler.core.common.spi.ConstantFieldProvider;
 import org.graalvm.compiler.core.common.spi.ForeignCallsProvider;
+import org.graalvm.compiler.core.common.spi.MetaAccessExtensionProvider;
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
 import org.graalvm.compiler.nodes.spi.LoweringProvider;
+import org.graalvm.compiler.nodes.spi.PlatformConfigurationProvider;
 import org.graalvm.compiler.nodes.spi.Replacements;
 import org.graalvm.compiler.nodes.spi.StampProvider;
 import org.graalvm.compiler.phases.util.Providers;
@@ -40,31 +42,41 @@ import jdk.vm.ci.meta.MetaAccessProvider;
 
 public class HostedProviders extends Providers {
 
-    private final WordTypes wordTypes;
     private GraphBuilderConfiguration.Plugins graphBuilderPlugins;
-    private final SnippetReflectionProvider snippetReflection;
 
     public HostedProviders(MetaAccessProvider metaAccess, CodeCacheProvider codeCache, ConstantReflectionProvider constantReflection, ConstantFieldProvider constantFieldProvider,
                     ForeignCallsProvider foreignCalls, LoweringProvider lowerer, Replacements replacements, StampProvider stampProvider, SnippetReflectionProvider snippetReflection,
-                    WordTypes wordTypes) {
-        super(metaAccess, codeCache, constantReflection, constantFieldProvider, foreignCalls, lowerer, replacements, stampProvider);
-        this.snippetReflection = snippetReflection;
-        this.wordTypes = wordTypes;
-    }
-
-    public WordTypes getWordTypes() {
-        return wordTypes;
+                    WordTypes wordTypes, PlatformConfigurationProvider platformConfigurationProvider, MetaAccessExtensionProvider metaAccessExtensionProvider) {
+        super(metaAccess, codeCache, constantReflection, constantFieldProvider, foreignCalls, lowerer, replacements, stampProvider, platformConfigurationProvider, metaAccessExtensionProvider,
+                        snippetReflection, wordTypes);
     }
 
     public GraphBuilderConfiguration.Plugins getGraphBuilderPlugins() {
         return graphBuilderPlugins;
     }
 
-    public SnippetReflectionProvider getSnippetReflection() {
-        return snippetReflection;
-    }
-
     public void setGraphBuilderPlugins(GraphBuilderConfiguration.Plugins graphBuilderPlugins) {
         this.graphBuilderPlugins = graphBuilderPlugins;
+    }
+
+    @Override
+    public Providers copyWith(ConstantReflectionProvider substitution) {
+        assert this.getClass() == HostedProviders.class : "must override in " + getClass();
+        return new HostedProviders(getMetaAccess(), getCodeCache(), substitution, getConstantFieldProvider(), getForeignCalls(), getLowerer(), getReplacements(), getStampProvider(),
+                        getSnippetReflection(), getWordTypes(), getPlatformConfigurationProvider(), getMetaAccessExtensionProvider());
+    }
+
+    @Override
+    public Providers copyWith(ConstantFieldProvider substitution) {
+        assert this.getClass() == HostedProviders.class : "must override in " + getClass();
+        return new HostedProviders(getMetaAccess(), getCodeCache(), getConstantReflection(), substitution, getForeignCalls(), getLowerer(), getReplacements(), getStampProvider(),
+                        getSnippetReflection(), getWordTypes(), getPlatformConfigurationProvider(), getMetaAccessExtensionProvider());
+    }
+
+    @Override
+    public Providers copyWith(Replacements substitution) {
+        assert this.getClass() == HostedProviders.class : "must override in " + getClass();
+        return new HostedProviders(getMetaAccess(), getCodeCache(), getConstantReflection(), getConstantFieldProvider(), getForeignCalls(), getLowerer(), substitution, getStampProvider(),
+                        getSnippetReflection(), getWordTypes(), getPlatformConfigurationProvider(), getMetaAccessExtensionProvider());
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,20 +27,22 @@ package org.graalvm.compiler.debug.test;
 import static org.graalvm.compiler.debug.DebugContext.NO_DESCRIPTION;
 import static org.graalvm.compiler.debug.DebugContext.NO_GLOBAL_METRIC_VALUES;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
-import java.io.DataInputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Formatter;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.compiler.debug.Assertions;
 import org.graalvm.compiler.debug.CounterKey;
 import org.graalvm.compiler.debug.DebugCloseable;
 import org.graalvm.compiler.debug.DebugContext;
+import org.graalvm.compiler.debug.DebugContext.Builder;
 import org.graalvm.compiler.debug.DebugContext.Scope;
 import org.graalvm.compiler.debug.DebugDumpHandler;
 import org.graalvm.compiler.debug.DebugHandler;
@@ -78,7 +80,7 @@ public class DebugContextTest {
         };
 
         DebugContext openDebugContext(OptionValues options) {
-            return DebugContext.create(options, NO_DESCRIPTION, NO_GLOBAL_METRIC_VALUES, new PrintStream(logOutput), Collections.singletonList(handlers));
+            return new Builder(options, handlers).logStream(new PrintStream(logOutput)).build();
 
         }
     }
@@ -158,14 +160,13 @@ public class DebugContextTest {
                 }
             }
         }
-        DataInputStream in = new DataInputStream(getClass().getResourceAsStream(getClass().getSimpleName() + ".testLogging.input"));
-        byte[] buf = new byte[in.available()];
-        in.readFully(buf);
-        String threadLabel = "[thread:" + Thread.currentThread().getId() + "]";
-        String expect = new String(buf).replace("[thread:1]", threadLabel);
-
-        String log = setup.logOutput.toString();
-        Assert.assertEquals(expect, log);
+        String expected;
+        try (BufferedReader input = new BufferedReader(new InputStreamReader(getClass().getResourceAsStream(getClass().getSimpleName() + ".testLogging.input")))) {
+            String threadLabel = "[thread:" + Thread.currentThread().getId() + "]";
+            expected = input.lines().collect(Collectors.joining(System.lineSeparator(), "", System.lineSeparator())).replace("[thread:1]", threadLabel);
+        }
+        String logged = setup.logOutput.toString();
+        Assert.assertEquals(expected, logged);
     }
 
     @Test
@@ -196,12 +197,13 @@ public class DebugContextTest {
 
     @Test
     public void testEnabledSandbox() {
+        TimerKeyTest.assumeManagementLibraryIsLoadable();
         EconomicMap<OptionKey<?>, Object> map = EconomicMap.create();
         // Configure with an option that enables scopes
         map.put(DebugOptions.DumpOnError, true);
         OptionValues options = new OptionValues(map);
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        DebugContext debug = DebugContext.create(options, NO_DESCRIPTION, NO_GLOBAL_METRIC_VALUES, new PrintStream(baos), DebugHandlersFactory.LOADER);
+        DebugContext debug = new Builder(options).globalMetrics(NO_GLOBAL_METRIC_VALUES).description(NO_DESCRIPTION).logStream(new PrintStream(baos)).build();
         Exception e = new Exception("testEnabledSandbox");
         String scopeName = "";
         try {
@@ -225,12 +227,13 @@ public class DebugContextTest {
 
     @Test
     public void testDisabledSandbox() {
+        TimerKeyTest.assumeManagementLibraryIsLoadable();
         EconomicMap<OptionKey<?>, Object> map = EconomicMap.create();
         // Configure with an option that enables scopes
         map.put(DebugOptions.DumpOnError, true);
         OptionValues options = new OptionValues(map);
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        DebugContext debug = DebugContext.create(options, NO_DESCRIPTION, NO_GLOBAL_METRIC_VALUES, new PrintStream(baos), DebugHandlersFactory.LOADER);
+        DebugContext debug = new Builder(options).globalMetrics(NO_GLOBAL_METRIC_VALUES).description(NO_DESCRIPTION).logStream(new PrintStream(baos)).build();
         Exception e = new Exception("testDisabledSandbox");
         try {
             // Test a disabled sandbox scope
@@ -260,7 +263,7 @@ public class DebugContextTest {
         // Configure with an option that enables counters
         map.put(DebugOptions.Counters, "");
         OptionValues options = new OptionValues(map);
-        DebugContext debug = DebugContext.create(options, DebugHandlersFactory.LOADER);
+        DebugContext debug = new Builder(options).build();
         CounterKey counter = DebugContext.counter("DebugContextTestCounter");
         AssertionError[] result = {null};
         Thread thread = new Thread() {
@@ -282,12 +285,13 @@ public class DebugContextTest {
 
     @Test
     public void testDisableIntercept() {
+        TimerKeyTest.assumeManagementLibraryIsLoadable();
         EconomicMap<OptionKey<?>, Object> map = EconomicMap.create();
         // Configure with an option that enables scopes
         map.put(DebugOptions.DumpOnError, true);
         OptionValues options = new OptionValues(map);
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        DebugContext debug = DebugContext.create(options, NO_DESCRIPTION, NO_GLOBAL_METRIC_VALUES, new PrintStream(baos), DebugHandlersFactory.LOADER);
+        DebugContext debug = new Builder(options).globalMetrics(NO_GLOBAL_METRIC_VALUES).description(NO_DESCRIPTION).logStream(new PrintStream(baos)).build();
         Exception e = new Exception();
         try {
             try (DebugCloseable disabled = debug.disableIntercept(); Scope s1 = debug.scope("ScopeWithDisabledIntercept")) {

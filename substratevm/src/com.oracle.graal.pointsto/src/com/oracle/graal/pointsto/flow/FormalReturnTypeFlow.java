@@ -25,15 +25,22 @@
 package com.oracle.graal.pointsto.flow;
 
 import org.graalvm.compiler.nodes.ValueNode;
+
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 
-public class FormalReturnTypeFlow extends TypeFlow<ValueNode> {
+import jdk.vm.ci.code.BytecodePosition;
+
+public class FormalReturnTypeFlow extends TypeFlow<BytecodePosition> {
 
     protected final AnalysisMethod method;
 
     public FormalReturnTypeFlow(ValueNode source, AnalysisType declaredType, AnalysisMethod method) {
+        this(source.getNodeSourcePosition(), declaredType, method);
+    }
+
+    public FormalReturnTypeFlow(BytecodePosition source, AnalysisType declaredType, AnalysisMethod method) {
         super(source, declaredType);
         this.method = method;
     }
@@ -44,10 +51,11 @@ public class FormalReturnTypeFlow extends TypeFlow<ValueNode> {
     }
 
     @Override
-    public TypeFlow<ValueNode> copy(BigBang bb, MethodFlowsGraph methodFlows) {
+    public TypeFlow<BytecodePosition> copy(BigBang bb, MethodFlowsGraph methodFlows) {
         return new FormalReturnTypeFlow(this, methodFlows);
     }
 
+    @Override
     public AnalysisMethod method() {
         return method;
     }

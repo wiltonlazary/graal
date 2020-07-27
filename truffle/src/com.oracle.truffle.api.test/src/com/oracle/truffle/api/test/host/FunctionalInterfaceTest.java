@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2018, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.test.host;
 
@@ -35,21 +51,20 @@ import java.util.function.Supplier;
 import org.graalvm.polyglot.Value;
 import org.junit.Test;
 
-import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleLanguage;
-import com.oracle.truffle.api.interop.ForeignAccess;
 import com.oracle.truffle.api.interop.InteropException;
-import com.oracle.truffle.api.interop.KeyInfo;
-import com.oracle.truffle.api.interop.Message;
-import com.oracle.truffle.api.interop.MessageResolution;
-import com.oracle.truffle.api.interop.Resolve;
+import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
+import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.interop.UnsupportedTypeException;
-import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.library.ExportLibrary;
+import com.oracle.truffle.api.library.ExportMessage;
 
 public class FunctionalInterfaceTest extends ProxyLanguageEnvTest {
-    private static final String EXPECTED_RESULT = "narf";
+    private static final InteropLibrary INTEROP = InteropLibrary.getFactory().getUncached();
+
+    static final String EXPECTED_RESULT = "narf";
 
     @SuppressWarnings({"static-method", "unused"})
     public static final class HttpServer {
@@ -73,21 +88,21 @@ public class FunctionalInterfaceTest extends ProxyLanguageEnvTest {
     @Test
     public void testFunctionalInterface() throws InteropException {
         TruffleObject server = (TruffleObject) env.asGuestValue(new HttpServer());
-        Object result = ForeignAccess.sendInvoke(Message.INVOKE.createNode(), server, "requestHandler", new TestExecutable());
+        Object result = INTEROP.invokeMember(server, "requestHandler", new TestExecutable());
         assertEquals(EXPECTED_RESULT, result);
     }
 
     @Test
     public void testLegacyFunctionalInterface() throws InteropException {
         TruffleObject server = (TruffleObject) env.asGuestValue(new HttpServer());
-        Object result = ForeignAccess.sendInvoke(Message.INVOKE.createNode(), server, "requestHandler2", new TestExecutable());
+        Object result = INTEROP.invokeMember(server, "requestHandler2", new TestExecutable());
         assertEquals(EXPECTED_RESULT, result);
     }
 
     @Test
     public void testThread() throws InteropException {
         TruffleObject threadClass = (TruffleObject) env.lookupHostSymbol("java.lang.Thread");
-        Object result = ForeignAccess.sendNew(Message.NEW.createNode(), threadClass, new TestExecutable());
+        Object result = INTEROP.instantiate(threadClass, new TestExecutable());
         assertTrue(env.isHostObject(result));
         Object thread = env.asHostObject(result);
         assertTrue(thread instanceof Thread);
@@ -96,7 +111,7 @@ public class FunctionalInterfaceTest extends ProxyLanguageEnvTest {
     @Test(expected = UnsupportedTypeException.class)
     public void testNonFunctionalInterface() throws InteropException {
         TruffleObject server = (TruffleObject) env.asGuestValue(new HttpServer());
-        ForeignAccess.sendInvoke(Message.INVOKE.createNode(), server, "unsupported", new TestExecutable());
+        INTEROP.invokeMember(server, "unsupported", new TestExecutable());
     }
 
     @Test
@@ -161,7 +176,7 @@ public class FunctionalInterfaceTest extends ProxyLanguageEnvTest {
         }
     }
 
-    @MessageResolution(receiverType = TestExecutable.class)
+    @ExportLibrary(InteropLibrary.class)
     static final class TestExecutable implements TruffleObject {
         final String result;
 
@@ -177,20 +192,20 @@ public class FunctionalInterfaceTest extends ProxyLanguageEnvTest {
             return obj instanceof TestExecutable;
         }
 
-        @Override
-        public ForeignAccess getForeignAccess() {
-            return TestExecutableForeign.ACCESS;
+        @SuppressWarnings("static-method")
+        @ExportMessage
+        boolean isExecutable() {
+            return true;
         }
 
-        @Resolve(message = "EXECUTE")
-        abstract static class Execute extends Node {
-            String access(TestExecutable obj, @SuppressWarnings("unused") Object[] args) {
-                return obj.result;
-            }
+        @ExportMessage
+        Object execute(@SuppressWarnings("unused") Object[] arguments) {
+            return result;
         }
     }
 
-    @MessageResolution(receiverType = TestRunnable.class)
+    @ExportLibrary(InteropLibrary.class)
+    @SuppressWarnings({"unused", "static-method"})
     static final class TestRunnable implements TruffleObject {
         final TruffleLanguage.Env env;
 
@@ -198,50 +213,37 @@ public class FunctionalInterfaceTest extends ProxyLanguageEnvTest {
             this.env = env;
         }
 
-        static boolean isInstance(TruffleObject obj) {
-            return obj instanceof TestRunnable;
+        @ExportMessage
+        boolean isExecutable() {
+            return true;
         }
 
-        @Override
-        public ForeignAccess getForeignAccess() {
-            return TestRunnableForeign.ACCESS;
+        @ExportMessage
+        Object execute(Object[] arguments) {
+            return "EXECUTE";
         }
 
-        @Resolve(message = "EXECUTE")
-        abstract static class Execute extends Node {
-            @SuppressWarnings("unused")
-            String access(TestRunnable obj, Object[] args) {
-                return "EXECUTE";
+        @ExportMessage
+        boolean hasMembers() {
+            return true;
+        }
+
+        @ExportMessage
+        boolean isMemberReadable(String member) {
+            return member.equals("get");
+        }
+
+        @ExportMessage
+        Object getMembers(boolean includeInternal) throws UnsupportedMessageException {
+            return env.asGuestValue(Collections.singletonList("get"));
+        }
+
+        @ExportMessage
+        Object readMember(String member) throws UnsupportedMessageException, UnknownIdentifierException {
+            if (member.equals("get")) {
+                return new TestExecutable("READ+EXECUTE");
             }
-        }
-
-        @Resolve(message = "KEYS")
-        abstract static class Keys extends Node {
-            @TruffleBoundary
-            Object access(TestRunnable obj) {
-                return obj.env.asGuestValue(Collections.singletonList("get"));
-            }
-        }
-
-        @SuppressWarnings("unused")
-        @Resolve(message = "READ")
-        abstract static class Read extends Node {
-            @TruffleBoundary
-            Object access(TestRunnable obj, String name) {
-                if (name.equals("get")) {
-                    return new TestExecutable("READ+EXECUTE");
-                }
-                throw UnknownIdentifierException.raise(name);
-            }
-        }
-
-        @SuppressWarnings("unused")
-        @Resolve(message = "KEY_INFO")
-        abstract static class KeyI extends Node {
-            @TruffleBoundary
-            Object access(TestRunnable obj, String name) {
-                return name.equals("get") ? KeyInfo.READABLE : KeyInfo.NONE;
-            }
+            throw UnknownIdentifierException.create(member);
         }
     }
 }

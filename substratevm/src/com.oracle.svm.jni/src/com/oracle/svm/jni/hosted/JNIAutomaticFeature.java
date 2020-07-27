@@ -27,10 +27,11 @@ package com.oracle.svm.jni.hosted;
 import java.util.Collections;
 import java.util.List;
 
-import org.graalvm.nativeimage.Feature;
+import org.graalvm.nativeimage.hosted.Feature;
 
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.AutomaticFeature;
-import com.oracle.svm.jni.hosted.JNIFeature.Options;
+import com.oracle.svm.core.configure.ConfigurationFiles;
 
 /**
  * Automatically enables {@link JNIFeature} when specific options are set.
@@ -39,7 +40,8 @@ import com.oracle.svm.jni.hosted.JNIFeature.Options;
 public class JNIAutomaticFeature implements Feature {
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
-        return Options.JNI.getValue() || !Options.JNIConfigurationFiles.getValue().isEmpty() || !Options.JNIConfigurationResources.getValue().isEmpty();
+        return SubstrateOptions.JNI.getValue() || ConfigurationFiles.Options.JNIConfigurationFiles.getValue() != null ||
+                        ConfigurationFiles.Options.JNIConfigurationResources.getValue() != null;
     }
 
     @Override

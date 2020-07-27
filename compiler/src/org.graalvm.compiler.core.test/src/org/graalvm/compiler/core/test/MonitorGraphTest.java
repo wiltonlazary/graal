@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,9 +27,6 @@ package org.graalvm.compiler.core.test;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.junit.Assert;
-import org.junit.Test;
-
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
 import org.graalvm.compiler.nodes.ConstantNode;
@@ -39,10 +36,10 @@ import org.graalvm.compiler.nodes.ParameterNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.StructuredGraph.AllowAssumptions;
 import org.graalvm.compiler.nodes.java.MonitorExitNode;
-import org.graalvm.compiler.phases.common.CanonicalizerPhase;
 import org.graalvm.compiler.phases.common.DeadCodeEliminationPhase;
-import org.graalvm.compiler.phases.common.inlining.InliningPhase;
 import org.graalvm.compiler.phases.tiers.HighTierContext;
+import org.junit.Assert;
+import org.junit.Test;
 
 /**
  * In the following tests, the usages of local variable "a" are replaced with the integer constant
@@ -105,8 +102,8 @@ public class MonitorGraphTest extends GraalCompilerTest {
             hints.put(invoke, 1000d);
         }
         HighTierContext context = getDefaultHighTierContext();
-        new InliningPhase(hints, new CanonicalizerPhase()).apply(graph, context);
-        new CanonicalizerPhase().apply(graph, context);
+        createInliningPhase(hints, createCanonicalizerPhase()).apply(graph, context);
+        createCanonicalizerPhase().apply(graph, context);
         new DeadCodeEliminationPhase().apply(graph);
         return graph;
     }

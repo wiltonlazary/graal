@@ -1,47 +1,78 @@
 /*
- * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.instrumentation.test;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 
+import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.Instrument;
+import org.graalvm.polyglot.PolyglotException;
+import org.graalvm.polyglot.Source;
+import org.graalvm.polyglot.SourceSection;
 import org.junit.Assert;
 import org.junit.Test;
 
+import com.oracle.truffle.api.CallTarget;
+import com.oracle.truffle.api.Truffle;
+import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.instrumentation.EventContext;
+import com.oracle.truffle.api.instrumentation.ExecutionEventListener;
+import com.oracle.truffle.api.instrumentation.GenerateWrapper;
+import com.oracle.truffle.api.instrumentation.InstrumentableNode;
 import com.oracle.truffle.api.instrumentation.Instrumenter;
 import com.oracle.truffle.api.instrumentation.LoadSourceSectionEvent;
 import com.oracle.truffle.api.instrumentation.LoadSourceSectionListener;
+import com.oracle.truffle.api.instrumentation.ProbeNode;
+import com.oracle.truffle.api.instrumentation.SourceFilter;
 import com.oracle.truffle.api.instrumentation.SourceSectionFilter;
 import com.oracle.truffle.api.instrumentation.StandardTags;
+import com.oracle.truffle.api.instrumentation.Tag;
 import com.oracle.truffle.api.instrumentation.TruffleInstrument;
 import com.oracle.truffle.api.instrumentation.TruffleInstrument.Registration;
-
-import org.graalvm.polyglot.Instrument;
-import org.graalvm.polyglot.Source;
-import org.graalvm.polyglot.SourceSection;
+import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.api.test.polyglot.ProxyLanguage;
 
 public class SourceSectionListenerTest extends AbstractInstrumentationTest {
 
@@ -241,9 +272,103 @@ public class SourceSectionListenerTest extends AbstractInstrumentationTest {
     @Test
     public void testLoadSourceSectionException() throws IOException {
         assureEnabled(engine.getInstruments().get("testLoadSourceSectionException"));
-        run("STATEMENT");
-        Assert.assertTrue(getErr().contains("TestLoadSourceSectionExceptionClass"));
+        try {
+            run("STATEMENT");
+            Assert.fail("No exception was thrown.");
+        } catch (PolyglotException ex) {
+            Assert.assertTrue(ex.getMessage(), ex.getMessage().contains("TestLoadSourceSectionExceptionClass"));
+        }
     }
+
+    @Test
+    public void testNoDeadlock() throws InterruptedException {
+        setupEnv(Context.create(), new SingleSourceSectionLanguage());
+        String code1 = "one";
+        String code2 = "two";
+        StringBuilder sourceSectionNotifications = new StringBuilder();
+        context.eval(Source.create(ProxyLanguage.ID, code1));
+        context.eval(Source.create(ProxyLanguage.ID, code2));
+        CountDownLatch mainThreadLatch = new CountDownLatch(1);
+        CountDownLatch secondThreadLatch = new CountDownLatch(1);
+        Thread secondInstrumentationThread = new Thread(() -> instrumentEnv.getInstrumenter().attachLoadSourceSectionListener(SourceSectionFilter.ANY, sse -> {
+            if (code2.contentEquals(sse.getSourceSection().getCharacters())) {
+                mainThreadLatch.countDown();
+                try {
+                    secondThreadLatch.await();
+                } catch (InterruptedException ie) {
+                }
+                instrumentEnv.getInstrumenter().attachExecutionEventListener(SourceSectionFilter.ANY, EMPTY_EXECUTION_EVENT_LISTENER);
+            }
+        }, true));
+        secondInstrumentationThread.start();
+        mainThreadLatch.await();
+        instrumentEnv.getInstrumenter().attachLoadSourceSectionListener(SourceSectionFilter.ANY, sse -> {
+            if (code1.contentEquals(sse.getSourceSection().getCharacters())) {
+                secondThreadLatch.countDown();
+                instrumentEnv.getInstrumenter().attachExecutionEventListener(SourceSectionFilter.ANY, EMPTY_EXECUTION_EVENT_LISTENER);
+            }
+            sourceSectionNotifications.append(sse.getSourceSection().getCharacters());
+        }, true);
+        secondInstrumentationThread.join();
+        Assert.assertEquals(code1 + code2, sourceSectionNotifications.toString());
+    }
+
+    @Test
+    public void testNoDeadlock2() throws InterruptedException {
+        setupEnv(Context.create(), new SingleSourceSectionLanguage());
+        String code = "one";
+        StringBuilder loadedCode = new StringBuilder();
+        context.eval(Source.create(ProxyLanguage.ID, code));
+        CountDownLatch mainThreadLatch = new CountDownLatch(1);
+        CountDownLatch secondThreadLatch = new CountDownLatch(1);
+        Thread secondInstrumentationThread = new Thread(() -> instrumentEnv.getInstrumenter().attachLoadSourceSectionListener(SourceSectionFilter.ANY, sse -> {
+            mainThreadLatch.countDown();
+            try {
+                secondThreadLatch.await();
+            } catch (InterruptedException ie) {
+            }
+            instrumentEnv.getInstrumenter().attachExecutionEventListener(SourceSectionFilter.ANY, EMPTY_EXECUTION_EVENT_LISTENER);
+        }, true));
+        secondInstrumentationThread.start();
+        mainThreadLatch.await();
+        CountDownLatch mainThreadLatch2 = new CountDownLatch(1);
+        Thread thirdInstrumentationThread = new Thread(() -> {
+            mainThreadLatch2.countDown();
+            instrumentEnv.getInstrumenter().attachLoadSourceListener(SourceFilter.ANY, se -> {
+                secondThreadLatch.countDown();
+                loadedCode.append(se.getSource().getCharacters());
+            }, true);
+        });
+        thirdInstrumentationThread.start();
+        mainThreadLatch2.await();
+        /*
+         * Wait for the third thread to stop on trying to acquire the AST lock. This should be
+         * fairly reliable because mainThreadLatch2 guarantees the the third thread is already
+         * running.
+         */
+        Thread.sleep(1000);
+        secondThreadLatch.countDown();
+        secondInstrumentationThread.join();
+        thirdInstrumentationThread.join();
+        Assert.assertEquals(code, loadedCode.toString());
+    }
+
+    static final ExecutionEventListener EMPTY_EXECUTION_EVENT_LISTENER = new ExecutionEventListener() {
+        @Override
+        public void onEnter(EventContext c, VirtualFrame frame) {
+
+        }
+
+        @Override
+        public void onReturnValue(EventContext c, VirtualFrame frame, Object result) {
+
+        }
+
+        @Override
+        public void onReturnExceptional(EventContext c, VirtualFrame frame, Throwable exception) {
+
+        }
+    };
 
     private static class TestLoadSourceSectionExceptionClass extends RuntimeException {
 
@@ -263,6 +388,68 @@ public class SourceSectionListenerTest extends AbstractInstrumentationTest {
             }, true);
         }
 
+    }
+
+    static class SingleSourceSectionLanguage extends ProxyLanguage {
+        @Override
+        protected CallTarget parse(ParsingRequest request) throws Exception {
+            com.oracle.truffle.api.source.Source source = request.getSource();
+            return Truffle.getRuntime().createCallTarget(new RootNode(languageInstance) {
+                @Node.Child private SingleSourceSectionNode onlyChild = new SingleSourceSectionNode(source);
+
+                @Override
+                public Object execute(VirtualFrame frame) {
+                    return onlyChild.execute(frame);
+                }
+
+                @Override
+                public com.oracle.truffle.api.source.SourceSection getSourceSection() {
+                    return source.createSection(1);
+                }
+            });
+        }
+
+        @GenerateWrapper
+        static class SingleSourceSectionNode extends Node implements InstrumentableNode {
+            @Node.Child private SingleSourceSectionNode noChild = null;
+            com.oracle.truffle.api.source.Source source;
+
+            SingleSourceSectionNode(com.oracle.truffle.api.source.Source source) {
+                this.source = source;
+            }
+
+            SingleSourceSectionNode(SingleSourceSectionNode copy) {
+                this.source = copy.source;
+                this.noChild = copy.noChild;
+            }
+
+            @Override
+            public boolean isInstrumentable() {
+                return true;
+            }
+
+            @Override
+            public boolean hasTag(Class<? extends Tag> tag) {
+                return StandardTags.StatementTag.class.equals(tag);
+            }
+
+            @Override
+            public WrapperNode createWrapper(ProbeNode probe) {
+                return new SingleSourceSectionNodeWrapper(this, this, probe);
+            }
+
+            @Override
+            public com.oracle.truffle.api.source.SourceSection getSourceSection() {
+                return source.createSection(1);
+            }
+
+            public Object execute(VirtualFrame frame) {
+                if (noChild != null) {
+                    return noChild.execute(frame);
+                }
+                return true;
+            }
+        }
     }
 
 }

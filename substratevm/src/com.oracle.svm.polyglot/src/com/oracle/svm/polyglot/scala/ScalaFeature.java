@@ -32,15 +32,15 @@ import java.util.Arrays;
 import java.util.function.BooleanSupplier;
 
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration.Plugins;
+import org.graalvm.compiler.phases.util.Providers;
 import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.RuntimeReflection;
+import org.graalvm.nativeimage.hosted.RuntimeClassInitialization;
+import org.graalvm.nativeimage.hosted.RuntimeReflection;
 
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.graal.GraalFeature;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
-
-import jdk.vm.ci.meta.MetaAccessProvider;
 
 // Checkstyle: resume
 @AutomaticFeature
@@ -63,10 +63,11 @@ public class ScalaFeature implements GraalFeature {
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess access) {
         initializeScalaEnumerations(access);
+        RuntimeClassInitialization.initializeAtBuildTime("scala.Symbol");
     }
 
     @Override
-    public void registerNodePlugins(MetaAccessProvider metaAccess, Plugins plugins, boolean analysis, boolean hosted) {
+    public void registerGraphBuilderPlugins(Providers providers, Plugins plugins, boolean analysis, boolean hosted) {
         if (hosted && analysis) {
             plugins.appendNodePlugin(new ScalaAnalysisPlugin());
         }

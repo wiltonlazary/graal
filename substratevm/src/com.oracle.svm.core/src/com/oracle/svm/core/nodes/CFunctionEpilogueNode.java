@@ -24,36 +24,83 @@
  */
 package com.oracle.svm.core.nodes;
 
+import static org.graalvm.compiler.nodeinfo.InputType.Memory;
+import static org.graalvm.compiler.nodeinfo.InputType.State;
 import static org.graalvm.compiler.nodeinfo.NodeCycles.CYCLES_8;
 import static org.graalvm.compiler.nodeinfo.NodeSize.SIZE_8;
 
 import org.graalvm.compiler.core.common.type.StampFactory;
+import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
-import org.graalvm.compiler.nodes.FixedWithNextNode;
-import org.graalvm.compiler.nodes.memory.MemoryCheckpoint;
+import org.graalvm.compiler.nodes.AbstractStateSplit;
+import org.graalvm.compiler.nodes.DeoptimizingNode.DeoptBefore;
+import org.graalvm.compiler.nodes.FrameState;
+import org.graalvm.compiler.nodes.debug.ControlFlowAnchored;
+import org.graalvm.compiler.nodes.memory.SingleMemoryKill;
 import org.graalvm.compiler.nodes.spi.Lowerable;
-import org.graalvm.compiler.nodes.spi.LoweringTool;
 import org.graalvm.word.LocationIdentity;
 
-@NodeInfo(cycles = CYCLES_8, size = SIZE_8)
-public final class CFunctionEpilogueNode extends FixedWithNextNode implements Lowerable, MemoryCheckpoint.Single {
+/**
+ * See comments in {@link CFunctionPrologueNode} for details.
+ */
+@NodeInfo(cycles = CYCLES_8, size = SIZE_8, allowedUsageTypes = {Memory})
+public final class CFunctionEpilogueNode extends AbstractStateSplit implements Lowerable, SingleMemoryKill, ControlFlowAnchored, DeoptBefore {
     public static final NodeClass<CFunctionEpilogueNode> TYPE = NodeClass.create(CFunctionEpilogueNode.class);
 
-    public CFunctionEpilogueNode() {
+    private final int oldThreadStatus;
+    /** See comment in {@link CFunctionPrologueNode}. */
+    private CFunctionEpilogueMarker marker;
+
+    public CFunctionEpilogueNode(int oldThreadStatus) {
         super(TYPE, StampFactory.forVoid());
+        this.oldThreadStatus = oldThreadStatus;
+        marker = new CFunctionEpilogueMarker();
     }
 
     @Override
-    public void lower(LoweringTool tool) {
-        tool.getLowerer().lower(this, tool);
+    protected void afterClone(Node other) {
+        super.afterClone(other);
+        marker = new CFunctionEpilogueMarker();
+    }
+
+    public CFunctionEpilogueMarker getMarker() {
+        return marker;
     }
 
     @Override
-    public LocationIdentity getLocationIdentity() {
+    public LocationIdentity getKilledLocationIdentity() {
         return LocationIdentity.any();
     }
 
+    public int getOldThreadStatus() {
+        return oldThreadStatus;
+    }
+
     @NodeIntrinsic
-    public static native void cFunctionEpilogue();
+    public static native void cFunctionEpilogue(@ConstantNodeParameter int oldThreadStatus);
+
+    @OptionalInput(State) protected FrameState stateBefore;
+
+    @Override
+    public boolean canDeoptimize() {
+        return true;
+    }
+
+    @Override
+    public void setStateBefore(FrameState state) {
+        updateUsages(this.stateBefore, state);
+        this.stateBefore = state;
+    }
+
+    @Override
+    public FrameState stateBefore() {
+        return stateBefore;
+    }
+
+    @Override
+    public boolean canUseAsStateDuring() {
+        return true;
+    }
+
 }

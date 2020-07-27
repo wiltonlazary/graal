@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,9 +29,8 @@ import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeSourcePosition;
 import org.graalvm.compiler.nodes.IfNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
-import org.graalvm.compiler.options.OptionValues;
-import org.graalvm.compiler.phases.tiers.PhaseContext;
-import org.graalvm.compiler.truffle.common.TruffleCompilerOptions;
+import org.graalvm.compiler.nodes.spi.CoreProviders;
+import org.graalvm.options.OptionValues;
 
 import jdk.vm.ci.meta.JavaConstant;
 
@@ -46,13 +45,6 @@ import jdk.vm.ci.meta.JavaConstant;
  * -Dgraal.TruffleInstrumentBranches
  * </pre>
  *
- * The phase can be configured to only instrument the {@link IfNode}s in specific methods, by
- * providing the following method filter flag:
- *
- * <pre>
- * -Dgraal.TruffleInstrumentBranchesFilter
- * </pre>
- *
  * The flag:
  *
  * <pre>
@@ -64,12 +56,15 @@ import jdk.vm.ci.meta.JavaConstant;
  */
 public class InstrumentBranchesPhase extends InstrumentPhase {
 
-    public InstrumentBranchesPhase(OptionValues options, SnippetReflectionProvider snippetReflection, Instrumentation instrumentation) {
+    private final boolean isInstrumentPerInlineSite;
+
+    public InstrumentBranchesPhase(OptionValues options, SnippetReflectionProvider snippetReflection, Instrumentation instrumentation, boolean instrumentPerInlineSite) {
         super(options, snippetReflection, instrumentation);
+        isInstrumentPerInlineSite = instrumentPerInlineSite;
     }
 
     @Override
-    protected void instrumentGraph(StructuredGraph graph, PhaseContext context, JavaConstant tableConstant) {
+    protected void instrumentGraph(StructuredGraph graph, CoreProviders context, JavaConstant tableConstant) {
         for (IfNode n : graph.getNodes().filter(IfNode.class)) {
             Point p = getOrCreatePoint(n);
             if (p != null) {
@@ -85,8 +80,8 @@ public class InstrumentBranchesPhase extends InstrumentPhase {
     }
 
     @Override
-    protected boolean instrumentPerInlineSite(OptionValues options) {
-        return TruffleCompilerOptions.TruffleInstrumentBranchesPerInlineSite.getValue(options);
+    protected boolean instrumentPerInlineSite() {
+        return isInstrumentPerInlineSite;
     }
 
     @Override
@@ -124,8 +119,8 @@ public class InstrumentBranchesPhase extends InstrumentPhase {
         }
 
         @Override
-        public boolean isPrettified(OptionValues options) {
-            return TruffleCompilerOptions.TruffleInstrumentBranchesPerInlineSite.getValue(options);
+        public boolean isPrettified() {
+            return isInstrumentPerInlineSite;
         }
 
         public long ifVisits() {

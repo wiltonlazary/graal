@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,7 +37,6 @@ import org.graalvm.collections.Equivalence;
 import org.graalvm.collections.MapCursor;
 import org.graalvm.collections.Pair;
 import org.graalvm.compiler.core.common.cfg.Loop;
-import org.graalvm.compiler.core.common.spi.ConstantFieldProvider;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.nodes.AbstractBeginNode;
 import org.graalvm.compiler.nodes.FieldLocationIdentity;
@@ -61,8 +60,9 @@ import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.java.LoadIndexedNode;
 import org.graalvm.compiler.nodes.java.StoreFieldNode;
 import org.graalvm.compiler.nodes.java.StoreIndexedNode;
-import org.graalvm.compiler.nodes.memory.MemoryCheckpoint;
-import org.graalvm.compiler.nodes.spi.LoweringProvider;
+import org.graalvm.compiler.nodes.memory.MultiMemoryKill;
+import org.graalvm.compiler.nodes.memory.SingleMemoryKill;
+import org.graalvm.compiler.nodes.spi.CoreProviders;
 import org.graalvm.compiler.nodes.type.StampTool;
 import org.graalvm.compiler.nodes.util.GraphUtil;
 import org.graalvm.compiler.nodes.virtual.VirtualArrayNode;
@@ -70,10 +70,8 @@ import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.virtual.phases.ea.PEReadEliminationBlockState.ReadCacheEntry;
 import org.graalvm.word.LocationIdentity;
 
-import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
-import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 public final class PEReadEliminationClosure extends PartialEscapeClosure<PEReadEliminationBlockState> {
@@ -87,9 +85,8 @@ public final class PEReadEliminationClosure extends PartialEscapeClosure<PEReadE
         }
     }
 
-    public PEReadEliminationClosure(ScheduleResult schedule, MetaAccessProvider metaAccess, ConstantReflectionProvider constantReflection, ConstantFieldProvider constantFieldProvider,
-                    LoweringProvider loweringProvider) {
-        super(schedule, metaAccess, constantReflection, constantFieldProvider, loweringProvider);
+    public PEReadEliminationClosure(ScheduleResult schedule, CoreProviders providers) {
+        super(schedule, providers);
     }
 
     @Override
@@ -119,13 +116,13 @@ public final class PEReadEliminationClosure extends PartialEscapeClosure<PEReadE
             return processUnsafeLoad((RawLoadNode) node, state, effects);
         } else if (node instanceof RawStoreNode) {
             return processUnsafeStore((RawStoreNode) node, state, effects);
-        } else if (node instanceof MemoryCheckpoint.Single) {
+        } else if (node instanceof SingleMemoryKill) {
             COUNTER_MEMORYCHECKPOINT.increment(node.getDebug());
-            LocationIdentity identity = ((MemoryCheckpoint.Single) node).getLocationIdentity();
+            LocationIdentity identity = ((SingleMemoryKill) node).getKilledLocationIdentity();
             processIdentity(state, identity);
-        } else if (node instanceof MemoryCheckpoint.Multi) {
+        } else if (node instanceof MultiMemoryKill) {
             COUNTER_MEMORYCHECKPOINT.increment(node.getDebug());
-            for (LocationIdentity identity : ((MemoryCheckpoint.Multi) node).getLocationIdentities()) {
+            for (LocationIdentity identity : ((MultiMemoryKill) node).getKilledLocationIdentities()) {
                 processIdentity(state, identity);
             }
         }
@@ -182,23 +179,29 @@ public final class PEReadEliminationClosure extends PartialEscapeClosure<PEReadE
     }
 
     private boolean processUnsafeLoad(RawLoadNode load, PEReadEliminationBlockState state, GraphEffectList effects) {
+        if (load.isVolatile()) {
+            state.killReadCache();
+            return false;
+        }
         if (load.offset().isConstant()) {
             ResolvedJavaType type = StampTool.typeOrNull(load.object());
             if (type != null && type.isArray()) {
                 JavaKind accessKind = load.accessKind();
                 JavaKind componentKind = type.getComponentType().getJavaKind();
                 long offset = load.offset().asJavaConstant().asLong();
-                int index = VirtualArrayNode.entryIndexForOffset(tool.getArrayOffsetProvider(), offset, accessKind, type.getComponentType(), Integer.MAX_VALUE);
-                ValueNode object = GraphUtil.unproxify(load.object());
-                LocationIdentity location = NamedLocationIdentity.getArrayLocation(componentKind);
-                ValueNode cachedValue = state.getReadCache(object, location, index, accessKind, this);
-                assert cachedValue == null || load.stamp(NodeView.DEFAULT).isCompatible(cachedValue.stamp(NodeView.DEFAULT)) : "The RawLoadNode's stamp is not compatible with the cached value.";
-                if (cachedValue != null) {
-                    effects.replaceAtUsages(load, cachedValue, load);
-                    addScalarAlias(load, cachedValue);
-                    return true;
-                } else {
-                    state.addReadCache(object, location, index, accessKind, isOverflowAccess(accessKind, componentKind), load, this);
+                int index = VirtualArrayNode.entryIndexForOffset(tool.getMetaAccess(), offset, accessKind, type.getComponentType(), Integer.MAX_VALUE);
+                if (index >= 0) {
+                    ValueNode object = GraphUtil.unproxify(load.object());
+                    LocationIdentity location = NamedLocationIdentity.getArrayLocation(componentKind);
+                    ValueNode cachedValue = state.getReadCache(object, location, index, accessKind, this);
+                    assert cachedValue == null || load.stamp(NodeView.DEFAULT).isCompatible(cachedValue.stamp(NodeView.DEFAULT)) : "The RawLoadNode's stamp is not compatible with the cached value.";
+                    if (cachedValue != null) {
+                        effects.replaceAtUsages(load, cachedValue, load);
+                        addScalarAlias(load, cachedValue);
+                        return true;
+                    } else {
+                        state.addReadCache(object, location, index, accessKind, isOverflowAccess(accessKind, componentKind), load, this);
+                    }
                 }
             }
         }
@@ -206,6 +209,10 @@ public final class PEReadEliminationClosure extends PartialEscapeClosure<PEReadE
     }
 
     private boolean processUnsafeStore(RawStoreNode store, PEReadEliminationBlockState state, GraphEffectList effects) {
+        if (store.isVolatile()) {
+            state.killReadCache();
+            return false;
+        }
         ResolvedJavaType type = StampTool.typeOrNull(store.object());
         if (type != null && type.isArray()) {
             JavaKind accessKind = store.accessKind();
@@ -214,8 +221,12 @@ public final class PEReadEliminationClosure extends PartialEscapeClosure<PEReadE
             if (store.offset().isConstant()) {
                 long offset = store.offset().asJavaConstant().asLong();
                 boolean overflowAccess = isOverflowAccess(accessKind, componentKind);
-                int index = overflowAccess ? -1 : VirtualArrayNode.entryIndexForOffset(tool.getArrayOffsetProvider(), offset, accessKind, type.getComponentType(), Integer.MAX_VALUE);
-                return processStore(store, store.object(), location, index, accessKind, overflowAccess, store.value(), state, effects);
+                int index = overflowAccess ? -1 : VirtualArrayNode.entryIndexForOffset(tool.getMetaAccess(), offset, accessKind, type.getComponentType(), Integer.MAX_VALUE);
+                if (index != -1) {
+                    return processStore(store, store.object(), location, index, accessKind, overflowAccess, store.value(), state, effects);
+                } else {
+                    state.killReadCache(location, index);
+                }
             } else {
                 processIdentity(state, location);
             }

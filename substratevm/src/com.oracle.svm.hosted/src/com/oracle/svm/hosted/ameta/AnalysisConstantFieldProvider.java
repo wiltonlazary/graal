@@ -32,6 +32,7 @@ import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.svm.core.meta.ReadableJavaField;
 import com.oracle.svm.hosted.SVMHost;
+import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
 
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.MetaAccessProvider;
@@ -40,10 +41,15 @@ import jdk.vm.ci.meta.ResolvedJavaField;
 @Platforms(Platform.HOSTED_ONLY.class)
 public class AnalysisConstantFieldProvider extends JavaConstantFieldProvider {
     private final AnalysisUniverse universe;
+    private final AnalysisConstantReflectionProvider constantReflection;
+    private final ClassInitializationSupport classInitializationSupport;
 
-    public AnalysisConstantFieldProvider(AnalysisUniverse universe, MetaAccessProvider metaAccess) {
+    public AnalysisConstantFieldProvider(AnalysisUniverse universe, MetaAccessProvider metaAccess, AnalysisConstantReflectionProvider constantReflection,
+                    ClassInitializationSupport classInitializationSupport) {
         super(metaAccess);
         this.universe = universe;
+        this.constantReflection = constantReflection;
+        this.classInitializationSupport = classInitializationSupport;
     }
 
     @Override
@@ -57,12 +63,20 @@ public class AnalysisConstantFieldProvider extends JavaConstantFieldProvider {
             if (readableField.allowConstantFolding()) {
                 JavaConstant fieldValue = readableField.readValue(universe.toHosted(analysisTool.getReceiver()));
                 if (fieldValue != null) {
-                    return analysisTool.foldConstant(universe.lookup(fieldValue));
+                    return analysisTool.foldConstant(constantReflection.interceptValue(f, universe.lookup(fieldValue)));
                 }
             }
             return null;
         }
 
         return super.readConstantField(field, analysisTool);
+    }
+
+    @Override
+    protected boolean isFinalField(ResolvedJavaField field, ConstantFieldTool<?> tool) {
+        if (classInitializationSupport.shouldInitializeAtRuntime(field.getDeclaringClass())) {
+            return false;
+        }
+        return super.isFinalField(field, tool);
     }
 }

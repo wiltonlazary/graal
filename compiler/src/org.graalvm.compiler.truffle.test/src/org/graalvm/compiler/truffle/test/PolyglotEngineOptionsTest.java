@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,53 +24,81 @@
  */
 package org.graalvm.compiler.truffle.test;
 
-import org.graalvm.compiler.truffle.common.TruffleCompilerOptions;
+import org.graalvm.compiler.truffle.options.PolyglotCompilerOptions;
 import org.graalvm.compiler.truffle.runtime.OptimizedCallTarget;
 import org.graalvm.options.OptionDescriptor;
+import org.graalvm.options.OptionStability;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
 import org.junit.Assert;
 import org.junit.Test;
 
+import com.oracle.truffle.api.Truffle;
+import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.sl.SLLanguage;
-import com.oracle.truffle.sl.nodes.call.SLDispatchNode;
 import com.oracle.truffle.sl.runtime.SLFunction;
 
 public class PolyglotEngineOptionsTest extends TestWithSynchronousCompiling {
 
-    private static final String COMPILATION_THRESHOLD_OPTION = "compiler.CompilationThreshold";
-
     @Test
     public void testVisibleOptions() {
         Engine engine = Engine.create();
-        OptionDescriptor compilationThreshold = engine.getOptions().get(COMPILATION_THRESHOLD_OPTION);
-        OptionDescriptor queueTimeThreshold = engine.getOptions().get("compiler.QueueTimeThreshold");
+        OptionDescriptor compilationThreshold = engine.getOptions().get("engine.CompilationThreshold");
         Assert.assertNotNull(compilationThreshold);
-        Assert.assertNotNull(queueTimeThreshold);
         engine.close();
     }
 
     @Test
     public void testCompilationThreshold() {
         // does not work with a different inline cache size.
-        Assert.assertEquals(2, SLDispatchNode.INLINE_CACHE_SIZE);
+        Assert.assertEquals(2, SLFunction.INLINE_CACHE_SIZE);
 
         // doWhile must run isolated and should not affect other compilation thresholds
+        OptimizedCallTarget target = (OptimizedCallTarget) Truffle.getRuntime().createCallTarget(RootNode.createConstantNode(42));
         Runnable doWhile = () -> testCompilationThreshold(50, "50", null);
         testCompilationThreshold(42, "42", doWhile); // test default value
-        testCompilationThreshold(TruffleCompilerOptions.TruffleCompilationThreshold.getValue(TruffleCompilerOptions.getOptions()), null, doWhile);
+        testCompilationThreshold(target.getOptionValue(PolyglotCompilerOptions.CompilationThreshold), null, doWhile);
         testCompilationThreshold(2, "2", doWhile); // test default value
     }
 
-    private static void testCompilationThreshold(int iterations, String compilationThresholdOption, Runnable doWhile) {
-        Context.Builder builder = Context.newBuilder("sl");
-        if (compilationThresholdOption != null) {
-            builder.option(COMPILATION_THRESHOLD_OPTION, compilationThresholdOption);
-        }
-        Context context = builder.build();
-        context.enter();
+    @Test
+    public void testPolyglotCompilerOptionsAreUsed() {
+        setupContext("engine.CompilationThreshold", "27", //
+                        "engine.TraceCompilation", "true", //
+                        "engine.TraceCompilationDetails", "true", //
+                        "engine.Inlining", "false", //
+                        "engine.Splitting", "false", //
+                        "engine.Mode", "latency");
+        OptimizedCallTarget target = (OptimizedCallTarget) Truffle.getRuntime().createCallTarget(RootNode.createConstantNode(42));
+        Assert.assertEquals(27, (int) target.getOptionValue(PolyglotCompilerOptions.CompilationThreshold));
+        Assert.assertEquals(true, target.getOptionValue(PolyglotCompilerOptions.TraceCompilation));
+        Assert.assertEquals(true, target.getOptionValue(PolyglotCompilerOptions.TraceCompilationDetails));
+        Assert.assertEquals(false, target.getOptionValue(PolyglotCompilerOptions.Inlining));
+        Assert.assertEquals(false, target.getOptionValue(PolyglotCompilerOptions.Splitting));
+        Assert.assertEquals(PolyglotCompilerOptions.EngineModeEnum.LATENCY, target.getOptionValue(PolyglotCompilerOptions.Mode));
+    }
 
-        context.eval("sl", "function test() {}");
+    @Test
+    public void testEngineModeLatency() {
+        Assert.assertEquals(OptionStability.STABLE, Engine.create().getOptions().get("engine.Mode").getStability());
+
+        setupContext("engine.Mode", "latency");
+        OptimizedCallTarget target = (OptimizedCallTarget) Truffle.getRuntime().createCallTarget(RootNode.createConstantNode(42));
+        Assert.assertEquals(PolyglotCompilerOptions.EngineModeEnum.LATENCY, target.getOptionValue(PolyglotCompilerOptions.Mode));
+        Assert.assertEquals(false, target.engine.inlining);
+        Assert.assertEquals(false, target.engine.splitting);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testParseUnknownMode() {
+        Context.newBuilder() //
+                        .allowExperimentalOptions(true) //
+                        .option("engine.Mode", "anUnknownMode").build();
+    }
+
+    private void testCompilationThreshold(int iterations, String compilationThresholdOption, Runnable doWhile) {
+        Context ctx = setupContext(compilationThresholdOption == null ? new String[0] : new String[]{"engine.CompilationThreshold", compilationThresholdOption});
+        ctx.eval("sl", "function test() {}");
         SLFunction test = SLLanguage.getCurrentContext().getFunctionRegistry().getFunction("test");
 
         Assert.assertFalse(isExecuteCompiled(test));
@@ -86,9 +114,6 @@ public class PolyglotEngineOptionsTest extends TestWithSynchronousCompiling {
         Assert.assertTrue(isExecuteCompiled(test));
         test.getCallTarget().call();
         Assert.assertTrue(isExecuteCompiled(test));
-
-        context.leave();
-        context.close();
     }
 
     private static boolean isExecuteCompiled(SLFunction value) {

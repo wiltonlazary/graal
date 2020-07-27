@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.nodes;
 
@@ -38,6 +54,7 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 
 import com.oracle.truffle.api.CompilerAsserts;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleOptions;
 import com.oracle.truffle.api.source.SourceSection;
 
@@ -47,12 +64,8 @@ import com.oracle.truffle.api.source.SourceSection;
  * @since 0.8 or earlier
  */
 public final class NodeUtil {
-    /**
-     * @deprecated accidentally public - don't use
-     * @since 0.8 or earlier
-     */
-    @Deprecated
-    public NodeUtil() {
+
+    private NodeUtil() {
     }
 
     static Iterator<Node> makeIterator(Node node) {
@@ -141,7 +154,7 @@ public final class NodeUtil {
 
         clone.setParent(null);
 
-        for (Object field : nodeClass.getNodeFields()) {
+        for (Object field : nodeClass.getNodeFieldArray()) {
             if (nodeClass.isChildField(field)) {
                 Node child = (Node) nodeClass.getFieldObject(field, orig);
                 if (child != null) {
@@ -152,13 +165,18 @@ public final class NodeUtil {
             } else if (nodeClass.isChildrenField(field)) {
                 Object[] children = (Object[]) nodeClass.getFieldObject(field, orig);
                 if (children != null) {
-                    Object[] clonedChildren = (Object[]) Array.newInstance(children.getClass().getComponentType(), children.length);
-                    for (int i = 0; i < children.length; i++) {
-                        if (children[i] != null) {
-                            Node clonedChild = ((Node) children[i]).deepCopy();
-                            clonedChild.setParent(clone);
-                            clonedChildren[i] = clonedChild;
+                    Object[] clonedChildren;
+                    if (children.length > 0) {
+                        clonedChildren = (Object[]) Array.newInstance(children.getClass().getComponentType(), children.length);
+                        for (int i = 0; i < children.length; i++) {
+                            if (children[i] != null) {
+                                Node clonedChild = ((Node) children[i]).deepCopy();
+                                clonedChild.setParent(clone);
+                                clonedChildren[i] = clonedChild;
+                            }
                         }
+                    } else {
+                        clonedChildren = children;
                     }
                     nodeClass.putFieldObject(field, clone, clonedChildren);
                 }
@@ -180,7 +198,7 @@ public final class NodeUtil {
         List<Node> nodes = new ArrayList<>();
         NodeClass nodeClass = node.getNodeClass();
 
-        for (Object nodeField : nodeClass.getNodeFields()) {
+        for (Object nodeField : nodeClass.getNodeFieldArray()) {
             if (nodeClass.isChildField(nodeField)) {
                 Object child = nodeClass.getFieldObject(nodeField, node);
                 if (child != null) {
@@ -213,12 +231,45 @@ public final class NodeUtil {
         return replaceChild(parent, oldChild, newChild, false);
     }
 
+    /**
+     * @since 19.0
+     * @deprecated in 20.2 use EncapsulatingNode.{@link EncapsulatingNodeReference#getCurrent()
+     *             getCurrent()}.get() instead.
+     */
+    @Deprecated
+    @TruffleBoundary
+    public static Node getCurrentEncapsulatingNode() {
+        return EncapsulatingNodeReference.getCurrent().get();
+    }
+
+    /**
+     * @since 19.0
+     * @deprecated in 20.2 use EncapsulatingNode.{@link EncapsulatingNodeReference#getCurrent()
+     *             getCurrent()}.set(node) instead.
+     */
+    @Deprecated
+    @TruffleBoundary
+    public static Node pushEncapsulatingNode(Node node) {
+        return EncapsulatingNodeReference.getCurrent().set(node);
+    }
+
+    /**
+     * @since 19.0
+     * @deprecated in 20.2 use EncapsulatingNode.{@link EncapsulatingNodeReference#getCurrent()
+     *             getCurrent()}.set(prev) instead.
+     */
+    @Deprecated
+    @TruffleBoundary
+    public static void popEncapsulatingNode(Node prev) {
+        EncapsulatingNodeReference.getCurrent().set(prev);
+    }
+
     /*
      * Fast version of child adoption.
      */
     static void adoptChildrenHelper(Node currentNode) {
         NodeClass clazz = currentNode.getNodeClass();
-        for (Object field : clazz.getNodeFields()) {
+        for (Object field : clazz.getNodeFieldArray()) {
             if (clazz.isChildField(field)) {
                 Object child = clazz.getFieldObject(field, currentNode);
                 if (child != null) {
@@ -256,7 +307,7 @@ public final class NodeUtil {
     static int adoptChildrenAndCountHelper(Node currentNode) {
         int count = 0;
         NodeClass clazz = currentNode.getNodeClass();
-        for (Object field : clazz.getNodeFields()) {
+        for (Object field : clazz.getNodeFieldArray()) {
             if (clazz.isChildField(field)) {
                 Object child = clazz.getFieldObject(field, currentNode);
                 if (child != null) {
@@ -287,7 +338,7 @@ public final class NodeUtil {
         CompilerAsserts.neverPartOfCompilation("do not replace Node child from compiled code");
         NodeClass nodeClass = parent.getNodeClass();
 
-        for (Object nodeField : nodeClass.getNodeFields()) {
+        for (Object nodeField : nodeClass.getNodeFieldArray()) {
             if (nodeClass.isChildField(nodeField)) {
                 if (nodeClass.getFieldObject(nodeField, parent) == oldChild) {
                     if (adopt) {
@@ -364,10 +415,12 @@ public final class NodeUtil {
      * @since 0.8 or earlier
      */
     public static boolean isReplacementSafe(Node parent, Node oldChild, Node newChild) {
-        Objects.requireNonNull(oldChild);
         if (parent != null) {
+            if (!parent.isAdoptable()) {
+                return false;
+            }
             NodeClass nodeClass = parent.getNodeClass();
-            for (Object field : nodeClass.getNodeFields()) {
+            for (Object field : nodeClass.getNodeFieldArray()) {
                 if (nodeClass.isChildField(field)) {
                     if (nodeClass.getFieldObject(field, parent) == oldChild) {
                         return nodeClass.getFieldType(field).isAssignableFrom(newChild.getClass());
@@ -386,9 +439,10 @@ public final class NodeUtil {
                     break;
                 }
             }
+            return true;
         }
         // if a child was not found the replacement can be considered safe.
-        return true;
+        return false;
     }
 
     /**
@@ -402,7 +456,7 @@ public final class NodeUtil {
         Objects.requireNonNull(visitor);
         NodeClass nodeClass = parent.getNodeClass();
 
-        for (Object field : nodeClass.getNodeFields()) {
+        for (Object field : nodeClass.getNodeFieldArray()) {
             if (nodeClass.isChildField(field)) {
                 Object child = nodeClass.getFieldObject(field, parent);
                 if (child != null) {
@@ -434,7 +488,7 @@ public final class NodeUtil {
     static boolean forEachChildRecursive(Node parent, NodeVisitor visitor) {
         NodeClass nodeClass = parent.getNodeClass();
 
-        for (Object field : nodeClass.getNodeFields()) {
+        for (Object field : nodeClass.getNodeFieldArray()) {
             if (nodeClass.isChildField(field)) {
                 if (!visitChild((Node) nodeClass.getFieldObject(field, parent), visitor)) {
                     return false;
@@ -700,18 +754,21 @@ public final class NodeUtil {
 
     private static String getNodeFieldName(Node parent, Node node, String defaultName) {
         NodeClass nodeClass = parent.getNodeClass();
-        for (Object field : nodeClass.getNodeFields()) {
+        for (Object field : nodeClass.getNodeFieldArray()) {
             if (nodeClass.isChildField(field)) {
                 if (nodeClass.getFieldObject(field, parent) == node) {
                     return nodeClass.getFieldName(field);
                 }
             } else if (nodeClass.isChildrenField(field)) {
-                int index = 0;
-                for (Object arrayNode : (Object[]) nodeClass.getFieldObject(field, parent)) {
-                    if (arrayNode == node) {
-                        return nodeClass.getFieldName(field) + "[" + index + "]";
+                Object[] arrayNodes = (Object[]) nodeClass.getFieldObject(field, parent);
+                if (arrayNodes != null) {
+                    int index = 0;
+                    for (Object arrayNode : arrayNodes) {
+                        if (arrayNode == node) {
+                            return nodeClass.getFieldName(field) + "[" + index + "]";
+                        }
+                        index++;
                     }
-                    index++;
                 }
             } else if (nodeClass.nodeFieldsOrderedByKind()) {
                 break;
@@ -770,7 +827,7 @@ public final class NodeUtil {
         String sep = "";
         p.print("(");
         NodeClass nodeClass = NodeClass.get(node);
-        for (Object field : nodeClass.getNodeFields()) {
+        for (Object field : nodeClass.getNodeFieldArray()) {
             if (nodeClass.isChildField(field) || nodeClass.isChildrenField(field)) {
                 childFields.add(field);
             } else {
@@ -786,7 +843,7 @@ public final class NodeUtil {
 
         if (childFields.size() != 0) {
             p.print(" {");
-            for (Object field : nodeClass.getNodeFields()) {
+            for (Object field : nodeClass.getNodeFieldArray()) {
                 printNewLine(p, level);
                 p.print(nodeClass.getFieldName(field));
 

@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.polyglot;
 
@@ -35,12 +51,13 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.Type;
 import java.util.StringJoiner;
 
+import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleOptions;
-import com.oracle.truffle.api.interop.UnsupportedTypeException;
+import com.oracle.truffle.api.nodes.Node;
 
 abstract class HostMethodDesc {
 
@@ -100,6 +117,8 @@ abstract class HostMethodDesc {
 
         public abstract Object invoke(Object receiver, Object[] arguments) throws Throwable;
 
+        public abstract Object invokeGuestToHost(Object receiver, Object[] arguments, PolyglotEngineImpl engine, PolyglotLanguageContext context, Node node);
+
         @Override
         public boolean isMethod() {
             return getReflectionMethod() instanceof Method;
@@ -149,7 +168,29 @@ abstract class HostMethodDesc {
             return "Method[" + getReflectionMethod().toString() + "]";
         }
 
-        private static final class MethodReflectImpl extends SingleMethod {
+        abstract static class ReflectBase extends SingleMethod {
+
+            @CompilationFinal private CallTarget doInvokeTarget;
+
+            ReflectBase(Executable executable) {
+                super(executable);
+            }
+
+            @Override
+            public Object invokeGuestToHost(Object receiver, Object[] arguments, PolyglotEngineImpl engine, PolyglotLanguageContext languageContext, Node node) {
+                CallTarget target = this.doInvokeTarget;
+                if (target == null) {
+                    CompilerDirectives.transferToInterpreterAndInvalidate();
+                    doInvokeTarget = target = languageContext.context.engine.getHostToGuestCodeCache().reflectionHostInvoke;
+                }
+                assert target == languageContext.context.engine.getHostToGuestCodeCache().reflectionHostInvoke;
+
+                return GuestToHostRootNode.guestToHostCall(node, target, languageContext, receiver, this, arguments);
+            }
+
+        }
+
+        private static final class MethodReflectImpl extends ReflectBase {
             private final Method reflectionMethod;
 
             MethodReflectImpl(Method reflectionMethod) {
@@ -168,7 +209,7 @@ abstract class HostMethodDesc {
                 try {
                     return reflectInvoke(reflectionMethod, receiver, arguments);
                 } catch (IllegalArgumentException | IllegalAccessException ex) {
-                    throw UnsupportedTypeException.raise(ex, arguments);
+                    throw HostInteropErrors.unsupportedTypeException(arguments, ex);
                 } catch (InvocationTargetException e) {
                     throw e.getCause();
                 }
@@ -191,7 +232,7 @@ abstract class HostMethodDesc {
             }
         }
 
-        private static final class ConstructorReflectImpl extends SingleMethod {
+        private static final class ConstructorReflectImpl extends ReflectBase {
             private final Constructor<?> reflectionConstructor;
 
             ConstructorReflectImpl(Constructor<?> reflectionConstructor) {
@@ -210,7 +251,7 @@ abstract class HostMethodDesc {
                 try {
                     return reflectNewInstance(reflectionConstructor, arguments);
                 } catch (IllegalArgumentException | IllegalAccessException | InstantiationException ex) {
-                    throw UnsupportedTypeException.raise(ex, arguments);
+                    throw HostInteropErrors.unsupportedTypeException(arguments, ex);
                 } catch (InvocationTargetException e) {
                     throw e.getCause();
                 }
@@ -228,7 +269,7 @@ abstract class HostMethodDesc {
             }
         }
 
-        private abstract static class MHBase extends SingleMethod {
+        abstract static class MHBase extends SingleMethod {
             @CompilationFinal private MethodHandle methodHandle;
 
             MHBase(Executable executable) {
@@ -237,19 +278,17 @@ abstract class HostMethodDesc {
 
             @Override
             public final Object invoke(Object receiver, Object[] arguments) throws Throwable {
-                if (methodHandle == null) {
+                MethodHandle handle = methodHandle;
+                if (handle == null) {
                     CompilerDirectives.transferToInterpreterAndInvalidate();
-                    methodHandle = makeMethodHandle();
+                    handle = makeMethodHandle();
+                    methodHandle = handle;
                 }
-                try {
-                    return invokeHandle(methodHandle, receiver, arguments);
-                } catch (ClassCastException ex) {
-                    throw UnsupportedTypeException.raise(ex, arguments);
-                }
+                return invokeHandle(handle, receiver, arguments);
             }
 
             @TruffleBoundary(allowInlining = true)
-            private static Object invokeHandle(MethodHandle invokeHandle, Object receiver, Object[] arguments) throws Throwable {
+            static Object invokeHandle(MethodHandle invokeHandle, Object receiver, Object[] arguments) throws Throwable {
                 return invokeHandle.invokeExact(receiver, arguments);
             }
 
@@ -266,6 +305,20 @@ abstract class HostMethodDesc {
                 adaptedHandle = adaptedHandle.asSpreader(Object[].class, parameterCount);
                 return adaptedHandle;
             }
+
+            @Override
+            public Object invokeGuestToHost(Object receiver, Object[] arguments, PolyglotEngineImpl engine, PolyglotLanguageContext languageContext, Node node) {
+                MethodHandle handle = methodHandle;
+                if (handle == null) {
+                    CompilerDirectives.transferToInterpreterAndInvalidate();
+                    handle = makeMethodHandle();
+                    methodHandle = handle;
+                }
+                CallTarget target = engine.getHostToGuestCodeCache().methodHandleHostInvoke;
+                CompilerAsserts.partialEvaluationConstant(target);
+                return GuestToHostRootNode.guestToHostCall(node, target, languageContext, receiver, handle, arguments);
+            }
+
         }
 
         private static final class MethodMHImpl extends MHBase {
@@ -296,8 +349,9 @@ abstract class HostMethodDesc {
             protected MethodHandle makeMethodHandle() {
                 CompilerAsserts.neverPartOfCompilation();
                 try {
-                    final MethodHandle methodHandle = MethodHandles.publicLookup().unreflect(reflectionMethod);
-                    return adaptSignature(methodHandle, Modifier.isStatic(reflectionMethod.getModifiers()), reflectionMethod.getParameterCount());
+                    Method m = reflectionMethod;
+                    final MethodHandle methodHandle = MethodHandles.publicLookup().unreflect(m);
+                    return adaptSignature(methodHandle, Modifier.isStatic(m.getModifiers()), m.getParameterCount());
                 } catch (IllegalAccessException e) {
                     throw new IllegalStateException(e);
                 }

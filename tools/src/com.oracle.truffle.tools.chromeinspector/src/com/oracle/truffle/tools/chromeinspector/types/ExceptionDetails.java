@@ -24,15 +24,19 @@
  */
 package com.oracle.truffle.tools.chromeinspector.types;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.oracle.truffle.tools.utils.json.JSONObject;
 
 import com.oracle.truffle.api.debug.DebugException;
+import com.oracle.truffle.api.debug.DebugStackTraceElement;
 import com.oracle.truffle.api.debug.DebugValue;
 import com.oracle.truffle.api.source.SourceSection;
+import com.oracle.truffle.tools.chromeinspector.InspectorExecutionContext;
 import com.oracle.truffle.tools.chromeinspector.ScriptsHandler;
-import com.oracle.truffle.tools.chromeinspector.TruffleExecutionContext;
 
 public final class ExceptionDetails {
 
@@ -54,7 +58,7 @@ public final class ExceptionDetails {
         this.exceptionId = LAST_ID.incrementAndGet();
     }
 
-    public JSONObject createJSON(TruffleExecutionContext context) {
+    public JSONObject createJSON(InspectorExecutionContext context, boolean generatePreview) {
         JSONObject json = new JSONObject();
         json.put("exceptionId", exceptionId);
         if (debugException == null || debugException.getCatchLocation() != null) {
@@ -76,16 +80,31 @@ public final class ExceptionDetails {
             if (scriptId >= 0) {
                 json.put("scriptId", Integer.toString(scriptId));
             } else {
-                json.put("url", ScriptsHandler.getNiceStringFromURI(throwLocation.getSource().getURI()));
+                ScriptsHandler scriptsHandler = context.acquireScriptsHandler();
+                try {
+                    json.put("url", scriptsHandler.getSourceURL(throwLocation.getSource()));
+                } finally {
+                    context.releaseScriptsHandler();
+                }
             }
         }
         if (debugException != null) {
-            StackTrace stackTrace = new StackTrace(context, debugException.getDebugStackTrace());
+            List<DebugStackTraceElement> stack = debugException.getDebugStackTrace();
+            List<List<DebugStackTraceElement>> asyncStacks = debugException.getDebugAsynchronousStacks();
+            List<List<DebugStackTraceElement>> stacks;
+            if (asyncStacks.isEmpty()) {
+                stacks = Collections.singletonList(stack);
+            } else {
+                stacks = new ArrayList<>();
+                stacks.add(stack);
+                stacks.addAll(asyncStacks);
+            }
+            StackTrace stackTrace = new StackTrace(context, stacks);
             json.put("stackTrace", stackTrace.toJSON());
         }
         DebugValue exceptionObject = (debugException != null) ? debugException.getExceptionObject() : null;
         if (exceptionObject != null) {
-            RemoteObject ro = context.createAndRegister(exceptionObject);
+            RemoteObject ro = context.createAndRegister(exceptionObject, generatePreview);
             json.put("exception", ro.toJSON());
         } else {
             JSONObject ex = new JSONObject();

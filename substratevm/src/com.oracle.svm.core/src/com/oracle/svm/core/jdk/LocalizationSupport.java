@@ -29,72 +29,41 @@ import java.nio.charset.Charset;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.MissingResourceException;
 import java.util.ResourceBundle;
+import java.util.spi.LocaleServiceProvider;
 
-import org.graalvm.compiler.options.Option;
-import org.graalvm.compiler.options.OptionType;
-import org.graalvm.compiler.serviceprovider.GraalServices;
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
-
-import com.oracle.svm.core.option.HostedOptionKey;
 import com.oracle.svm.core.option.SubstrateOptionsParser;
-import com.oracle.svm.core.util.VMError;
 
+//Checkstyle: stop
+import sun.util.locale.provider.LocaleProviderAdapter;
+//Checkstyle: resume
+
+/**
+ * Holder for localization information that is computed during image generation and used at run
+ * time.
+ */
 public final class LocalizationSupport {
-    protected final Map<String, Charset> charsets;
-    protected final Map<String, ResourceBundle> cache;
 
-    public static class Options {
-        @Option(help = "Comma separated list of bundles to be included into the image.", type = OptionType.User)//
-        public static final HostedOptionKey<String> IncludeResourceBundles = new HostedOptionKey<>("");
-    }
+    final Map<String, Charset> charsets = new HashMap<>();
+    final Map<Class<? extends LocaleServiceProvider>, LocaleProviderAdapter> adaptersByClass = new HashMap<>();
+    final Map<LocaleProviderAdapter.Type, LocaleProviderAdapter> adaptersByType = new HashMap<>();
+    final Map<Class<? extends LocaleServiceProvider>, Object> providerPools = new HashMap<>();
+    final Map<String, ResourceBundle> resourceBundles = new HashMap<>();
 
-    @Platforms(Platform.HOSTED_ONLY.class)
-    public LocalizationSupport() {
-        charsets = new HashMap<>();
-        cache = new HashMap<>();
-        if (GraalServices.Java8OrEarlier) {
-            /* For JDK-8, add these resource bundles to the cache. */
-            addToCache("sun.util.resources.CalendarData");
-            addToCache("sun.util.resources.CurrencyNames");
-            addToCache("sun.util.resources.LocaleNames");
-            addToCache("sun.util.resources.TimeZoneNames");
-            addToCache("sun.text.resources.CollationData");
-            addToCache("sun.text.resources.FormatData");
-            addToCache("sun.util.logging.resources.logging");
-        }
-
-        String[] bundles = Options.IncludeResourceBundles.getValue().split(",");
-        for (String bundle : bundles) {
-            addToCache(bundle);
-        }
-    }
-
-    public void addToCache(String bundleName) {
-        if (bundleName.isEmpty()) {
-            return;
-        }
-        ResourceBundle bundle = ResourceBundle.getBundle(bundleName, Locale.getDefault(), Thread.currentThread().getContextClassLoader());
-        // Ensure the bundle contents is loaded.
-        bundle.getKeys();
-
-        cache.put(bundleName, bundle);
-    }
-
-    private final String includeResourceBundlesOption = SubstrateOptionsParser.commandArgument(Options.IncludeResourceBundles, "");
+    private final String includeResourceBundlesOption = SubstrateOptionsParser.commandArgument(LocalizationFeature.Options.IncludeResourceBundles, "");
 
     /**
      * Get cached resource bundle.
      *
      * @param locale this parameter is not currently used.
      */
-    public ResourceBundle getCached(String baseName, Locale locale) {
-        ResourceBundle result = cache.get(baseName);
+    public ResourceBundle getCached(String baseName, Locale locale) throws MissingResourceException {
+        ResourceBundle result = resourceBundles.get(baseName);
         if (result == null) {
             String errorMessage = "Resource bundle not found " + baseName + ". " +
                             "Register the resource bundle using the option " + includeResourceBundlesOption + baseName + ".";
-            throw VMError.unsupportedFeature(errorMessage);
+            throw new MissingResourceException(errorMessage, this.getClass().getName(), baseName);
         }
         return result;
     }

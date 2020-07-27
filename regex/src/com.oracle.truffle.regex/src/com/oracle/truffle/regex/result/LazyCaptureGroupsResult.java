@@ -1,73 +1,82 @@
 /*
- * Copyright (c) 2016, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.regex.result;
 
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.regex.RegexObject;
-import com.oracle.truffle.regex.tregex.nodes.TRegexLazyCaptureGroupsRootNode;
-import com.oracle.truffle.regex.tregex.nodes.TRegexLazyFindStartRootNode;
+import com.oracle.truffle.regex.tregex.nodes.dfa.TRegexLazyCaptureGroupsRootNode;
+import com.oracle.truffle.regex.tregex.nodes.dfa.TRegexLazyFindStartRootNode;
 import com.oracle.truffle.regex.tregex.util.json.Json;
 import com.oracle.truffle.regex.tregex.util.json.JsonConvertible;
-import com.oracle.truffle.regex.tregex.util.json.JsonValue;
+import com.oracle.truffle.regex.tregex.util.json.JsonObject;
 
-import java.util.Arrays;
+public final class LazyCaptureGroupsResult extends LazyResult implements JsonConvertible {
 
-public final class LazyCaptureGroupsResult extends RegexResult implements JsonConvertible {
-
-    private final int fromIndex;
-    private final int end;
     private int[] result = null;
     private final CallTarget findStartCallTarget;
     private final CallTarget captureGroupCallTarget;
 
-    public LazyCaptureGroupsResult(RegexObject regex,
-                    Object input,
+    public LazyCaptureGroupsResult(Object input,
                     int fromIndex,
                     int end,
-                    int numberOfCaptureGroups,
                     CallTarget findStartCallTarget,
                     CallTarget captureGroupCallTarget) {
-        super(regex, input, numberOfCaptureGroups);
-        this.fromIndex = fromIndex;
-        this.end = end;
+        super(input, fromIndex, end);
         this.findStartCallTarget = findStartCallTarget;
         this.captureGroupCallTarget = captureGroupCallTarget;
     }
 
-    public LazyCaptureGroupsResult(RegexObject regex, Object input, int[] result) {
-        this(regex, input, -1, -1, result.length / 2, null, null);
+    public LazyCaptureGroupsResult(Object input, int[] result) {
+        this(input, -1, -1, null, null);
         this.result = result;
     }
 
-    public int getFromIndex() {
-        return fromIndex;
+    @Override
+    public int getStart(int groupNumber) {
+        return result[groupNumber * 2];
     }
 
-    public int getEnd() {
-        return end;
+    @Override
+    public int getEnd(int groupNumber) {
+        return result[groupNumber * 2 + 1];
     }
 
     public void setResult(int[] result) {
@@ -88,32 +97,32 @@ public final class LazyCaptureGroupsResult extends RegexResult implements JsonCo
 
     /**
      * Creates an arguments array suitable for the lazy calculation of this result's starting index.
-     * 
+     *
      * @return an arguments array suitable for calling the {@link TRegexLazyFindStartRootNode}
      *         contained in {@link #getFindStartCallTarget()}.
      */
     public Object[] createArgsFindStart() {
-        return new Object[]{getInput(), getEnd() - 1, getFromIndex()};
+        return new Object[]{getInput(), getFromIndex(), getEnd()};
     }
 
     /**
      * Creates an arguments array suitable for the lazy calculation of this result's capture group
      * boundaries.
-     * 
+     *
      * @param start The value returned by the call to the {@link TRegexLazyFindStartRootNode}
      *            contained in {@link #getFindStartCallTarget()}.
      * @return an arguments array suitable for calling the {@link TRegexLazyCaptureGroupsRootNode}
      *         contained in {@link #getCaptureGroupCallTarget()}.
      */
     public Object[] createArgsCG(int start) {
-        return new Object[]{this, start + 1, getEnd()};
+        return new Object[]{this, start, getEnd()};
     }
 
     /**
      * Creates an arguments array suitable for the lazy calculation of this result's capture group
      * boundaries if there is no find-start call target (this is the case when the expression is
      * sticky or starts with "^").
-     * 
+     *
      * @return an arguments array suitable for calling the {@link TRegexLazyCaptureGroupsRootNode}
      *         contained in {@link #getCaptureGroupCallTarget()}.
      */
@@ -127,11 +136,14 @@ public final class LazyCaptureGroupsResult extends RegexResult implements JsonCo
      * {@link com.oracle.truffle.regex.runtime.nodes.LazyCaptureGroupGetResultNode} instead!
      */
     @TruffleBoundary
+    @Override
     public void debugForceEvaluation() {
-        if (getFindStartCallTarget() == null) {
-            getCaptureGroupCallTarget().call(createArgsCGNoFindStart());
-        } else {
-            getCaptureGroupCallTarget().call(createArgsCG((int) getFindStartCallTarget().call(createArgsFindStart())));
+        if (result == null) {
+            if (getFindStartCallTarget() == null) {
+                getCaptureGroupCallTarget().call(createArgsCGNoFindStart());
+            } else {
+                getCaptureGroupCallTarget().call(createArgsCG((int) getFindStartCallTarget().call(createArgsFindStart())));
+            }
         }
     }
 
@@ -141,15 +153,16 @@ public final class LazyCaptureGroupsResult extends RegexResult implements JsonCo
         if (result == null) {
             debugForceEvaluation();
         }
-        return Arrays.toString(result);
+        StringBuilder sb = new StringBuilder("[").append(result[0]);
+        for (int i = 1; i < result.length; i++) {
+            sb.append(", ").append(result[i]);
+        }
+        return sb.append("]").toString();
     }
 
     @TruffleBoundary
     @Override
-    public JsonValue toJson() {
-        return Json.obj(Json.prop("input", getInput().toString()),
-                        Json.prop("fromIndex", fromIndex),
-                        Json.prop("end", end),
-                        Json.prop("result", Json.array(result)));
+    public JsonObject toJson() {
+        return super.toJson().append(Json.prop("result", Json.array(result)));
     }
 }

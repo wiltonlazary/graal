@@ -24,20 +24,20 @@
  */
 package org.graalvm.component.installer;
 
+import org.graalvm.component.installer.remote.RemoteComponentParam;
+import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.nio.file.Path;
 import java.util.Iterator;
-import org.graalvm.component.installer.CatalogIterable.RemoteComponentParam;
+import org.graalvm.component.installer.FileIterable.FileComponent;
+import org.graalvm.component.installer.model.ComponentInfo;
+import org.graalvm.component.installer.persist.MetadataLoader;
 
-public class DownloadURLIterable implements ComponentIterable {
-    private final Feedback feedback;
-    private final CommandInput input;
-    private boolean verifyJars;
+public class DownloadURLIterable extends AbstractIterable {
 
     public DownloadURLIterable(Feedback feedback, CommandInput input) {
-        this.feedback = feedback;
-        this.input = input;
-        this.verifyJars = false;
+        super(input, feedback);
     }
 
     @Override
@@ -46,8 +46,13 @@ public class DownloadURLIterable implements ComponentIterable {
     }
 
     @Override
-    public void setVerifyJars(boolean verify) {
-        throw new UnsupportedOperationException("Not supported yet.");
+    public ComponentIterable matchVersion(Version.Match m) {
+        return this;
+    }
+
+    @Override
+    public ComponentIterable allowIncompatible() {
+        return this;
     }
 
     class It implements Iterator<ComponentParam> {
@@ -67,9 +72,28 @@ public class DownloadURLIterable implements ComponentIterable {
                 throw feedback.failure("URL_InvalidDownloadURL", ex, s, ex.getLocalizedMessage());
             }
             boolean progress = input.optValue(Commands.OPTION_NO_DOWNLOAD_PROGRESS) == null;
-            RemoteComponentParam p = new RemoteComponentParam(u, s, s, feedback, progress);
-            p.setVerifyJars(verifyJars);
+            RemoteComponentParam p = new DownloadURLParam(u, s, s, feedback, progress);
+            p.setVerifyJars(isVerifyJars());
             return p;
+        }
+    }
+
+    static class DownloadURLParam extends RemoteComponentParam {
+
+        DownloadURLParam(URL remoteURL, String dispName, String spec, Feedback feedback, boolean progress) {
+            super(remoteURL, dispName, spec, feedback, progress);
+        }
+
+        @Override
+        protected MetadataLoader metadataFromLocal(Path localFile) throws IOException {
+            FileComponent fc = new FileComponent(localFile.toFile(), isVerifyJars(),
+                            SystemUtils.fingerPrint(getDownloader().getReceivedDigest(), false), getFeedback());
+            return fc.createFileLoader();
+        }
+
+        @Override
+        public ComponentInfo completeMetadata() throws IOException {
+            return createFileLoader().completeMetadata();
         }
     }
 

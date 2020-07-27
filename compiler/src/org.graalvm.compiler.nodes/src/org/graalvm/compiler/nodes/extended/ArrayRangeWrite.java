@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,8 +25,10 @@
 package org.graalvm.compiler.nodes.extended;
 
 import org.graalvm.compiler.graph.NodeInterface;
+import org.graalvm.compiler.nodes.FixedNode;
 import org.graalvm.compiler.nodes.FixedWithNextNode;
 import org.graalvm.compiler.nodes.ValueNode;
+import org.graalvm.compiler.nodes.memory.FixedAccessNode;
 import org.graalvm.compiler.nodes.memory.address.AddressNode;
 
 public interface ArrayRangeWrite extends NodeInterface {
@@ -52,5 +54,17 @@ public interface ArrayRangeWrite extends NodeInterface {
     int getElementStride();
 
     @Override
-    FixedWithNextNode asNode();
+    FixedAccessNode asNode();
+
+    /**
+     * Returns the place where a pre-write barrier should be inserted if one is necessary for this
+     * node. The barrier should be added before the node returned by this method.
+     */
+    FixedNode preBarrierInsertionPosition();
+
+    /**
+     * Returns the place where a post-write barrier should be inserted if one is necessary for this
+     * node. The barrier should be added after the node returned by this method.
+     */
+    FixedWithNextNode postBarrierInsertionPosition();
 }

@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.api.test.host;
 
@@ -30,17 +46,20 @@ import java.math.BigInteger;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import org.junit.Before;
 import org.junit.Test;
 
-import com.oracle.truffle.api.interop.ForeignAccess;
 import com.oracle.truffle.api.interop.InteropException;
-import com.oracle.truffle.api.interop.Message;
+import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.TruffleObject;
-import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.interop.UnsupportedMessageException;
 
 public class OverloadedTest extends ProxyLanguageEnvTest {
+
+    private static final InteropLibrary INTEROP = InteropLibrary.getFactory().getUncached();
+
     public static final class Data {
         public int x;
 
@@ -93,7 +112,7 @@ public class OverloadedTest extends ProxyLanguageEnvTest {
         }
     }
 
-    private TruffleObject obj;
+    private Object obj;
     private Data data;
 
     @Before
@@ -103,67 +122,65 @@ public class OverloadedTest extends ProxyLanguageEnvTest {
     }
 
     @Test
-    public void threeProperties() {
-        TruffleObject ret = HostInteropTest.sendKeys(obj);
+    public void threeProperties() throws UnsupportedMessageException {
+        Object ret = INTEROP.getMembers(obj);
         List<?> list = context.asValue(ret).as(List.class);
         assertEquals("Just one (overloaded) property: " + list, 1, list.size());
         assertEquals("x", list.get(0));
     }
 
     @Test
-    public void readAndWriteField() {
+    public void readAndWriteField() throws InteropException {
         data.x = 11;
-        assertEquals(11, HostInteropTest.message(Message.READ, obj, "x"));
+        assertEquals(11, INTEROP.readMember(obj, "x"));
 
-        HostInteropTest.message(Message.WRITE, obj, "x", 12);
+        INTEROP.writeMember(obj, "x", 12);
         assertEquals(12, data.x);
 
-        HostInteropTest.message(Message.WRITE, obj, "x", new UnboxableToInt(13));
+        INTEROP.writeMember(obj, "x", new UnboxableToInt(13));
         assertEquals(13, data.x);
     }
 
     @Test
-    public void callGetterAndSetter() {
+    public void callGetterAndSetter() throws InteropException {
         data.x = 11;
-        assertEquals(22.0, HostInteropTest.message(Message.INVOKE, obj, "x"));
+        assertEquals(22.0, INTEROP.invokeMember(obj, "x"));
 
-        HostInteropTest.message(Message.INVOKE, obj, "x", 10);
+        INTEROP.invokeMember(obj, "x", 10);
         assertEquals(20, data.x);
 
-        HostInteropTest.message(Message.INVOKE, obj, "x", new UnboxableToInt(21));
+        INTEROP.invokeMember(obj, "x", new UnboxableToInt(21));
         assertEquals(42, data.x);
     }
 
     @Test
     public void testOverloadingTruffleObjectArg() throws InteropException {
-        Node n = Message.INVOKE.createNode();
-        ForeignAccess.sendInvoke(n, obj, "x", new UnboxableToInt(21));
+        INTEROP.invokeMember(obj, "x", new UnboxableToInt(21));
         assertEquals(42, data.x);
-        ForeignAccess.sendInvoke(n, obj, "x", env.asBoxedGuestValue(10));
+        INTEROP.invokeMember(obj, "x", env.asBoxedGuestValue(10));
         assertEquals(20, data.x);
-        ForeignAccess.sendInvoke(n, obj, "x", 10);
+        INTEROP.invokeMember(obj, "x", 10);
         assertEquals(20, data.x);
     }
 
     @Test
     public void testOverloadingNumber() throws InteropException {
-        Node n = Message.INVOKE.createNode();
         Num num = new Num();
         TruffleObject numobj = asTruffleObject(num);
-        ForeignAccess.sendInvoke(n, numobj, "x", new UnboxableToInt(21));
+        INTEROP.invokeMember(numobj, "x", new UnboxableToInt(21));
         assertEquals("int", num.parameter);
-        ForeignAccess.sendInvoke(n, numobj, "x", asTruffleObject(new AtomicInteger(22)));
+        INTEROP.invokeMember(numobj, "x", asTruffleObject(new AtomicInteger(22)));
         assertEquals("Number", num.parameter);
-        ForeignAccess.sendInvoke(n, numobj, "x", asTruffleObject(BigInteger.TEN));
+        INTEROP.invokeMember(numobj, "x", asTruffleObject(BigInteger.TEN));
         assertEquals("BigInteger", num.parameter);
     }
 
     @Test
     public void testVarArgs() throws InteropException {
         TruffleObject stringClass = asTruffleHostSymbol(String.class);
-        assertEquals("bla", ForeignAccess.sendInvoke(Message.INVOKE.createNode(), stringClass, "format", "bla"));
-        assertEquals("42", ForeignAccess.sendInvoke(Message.INVOKE.createNode(), stringClass, "format", "%d", 42));
-        assertEquals("1337", ForeignAccess.sendInvoke(Message.INVOKE.createNode(), stringClass, "format", "%d%d", 13, 37));
+        assertEquals("bla", INTEROP.invokeMember(stringClass, "format", "bla"));
+        assertEquals("42", INTEROP.invokeMember(stringClass, "format", "%d", 42));
+        assertEquals("1337", INTEROP.invokeMember(stringClass, "format", "%d%d", 13, 37));
     }
 
     public interface Identity<T> {
@@ -187,57 +204,54 @@ public class OverloadedTest extends ProxyLanguageEnvTest {
     @Test
     public void testGenericReturnTypeBridgeMethod() throws InteropException {
         TruffleObject thing = asTruffleObject(new ActualRealThingWithIdentity());
-        assertEquals(42, ForeignAccess.sendInvoke(Message.INVOKE.createNode(), thing, "getId"));
+        assertEquals(42, INTEROP.invokeMember(thing, "getId"));
     }
 
     @Test
     public void testWidening() throws InteropException {
-        Node n = Message.INVOKE.createNode();
         Num num = new Num();
         TruffleObject numobj = asTruffleObject(num);
-        ForeignAccess.sendInvoke(n, numobj, "d", (byte) 42);
+        INTEROP.invokeMember(numobj, "d", (byte) 42);
         assertEquals("int", num.parameter);
-        ForeignAccess.sendInvoke(n, numobj, "d", (short) 42);
+        INTEROP.invokeMember(numobj, "d", (short) 42);
         assertEquals("int", num.parameter);
-        ForeignAccess.sendInvoke(n, numobj, "d", 42);
-        assertEquals("int", num.parameter);
-
-        ForeignAccess.sendInvoke(n, numobj, "d", 42.1f);
-        assertEquals("double", num.parameter);
-        ForeignAccess.sendInvoke(n, numobj, "d", 42.1d);
-        assertEquals("double", num.parameter);
-        ForeignAccess.sendInvoke(n, numobj, "d", 0x8000_0000L);
-        assertEquals("double", num.parameter);
-
-        ForeignAccess.sendInvoke(n, numobj, "d", 42L);
+        INTEROP.invokeMember(numobj, "d", 42);
         assertEquals("int", num.parameter);
 
-        ForeignAccess.sendInvoke(n, numobj, "f", 42L);
+        INTEROP.invokeMember(numobj, "d", 42.1f);
+        assertEquals("double", num.parameter);
+        INTEROP.invokeMember(numobj, "d", 42.1d);
+        assertEquals("double", num.parameter);
+        INTEROP.invokeMember(numobj, "d", 0x8000_0000L);
+        assertEquals("double", num.parameter);
+
+        INTEROP.invokeMember(numobj, "d", 42L);
+        assertEquals("int", num.parameter);
+
+        INTEROP.invokeMember(numobj, "f", 42L);
         assertEquals("int", num.parameter);
     }
 
     @Test
     public void testNarrowing() throws InteropException {
-        Node n = Message.INVOKE.createNode();
         Num num = new Num();
         TruffleObject numobj = asTruffleObject(num);
-        ForeignAccess.sendInvoke(n, numobj, "f", 42.5f);
+        INTEROP.invokeMember(numobj, "f", 42.5f);
         assertEquals("float", num.parameter);
-        ForeignAccess.sendInvoke(n, numobj, "f", 42.5d);
+        INTEROP.invokeMember(numobj, "f", 42.5d);
         assertEquals("float", num.parameter);
     }
 
     @Test
     public void testPrimitive() throws InteropException {
-        Node n = Message.INVOKE.createNode();
         TruffleObject sample = asTruffleObject(new Sample());
         for (int i = 0; i < 2; i++) {
-            assertEquals("int,boolean", ForeignAccess.sendInvoke(n, sample, "m1", 42, true));
-            assertEquals("double,String", ForeignAccess.sendInvoke(n, sample, "m1", 42, "asdf"));
+            assertEquals("int,boolean", INTEROP.invokeMember(sample, "m1", 42, true));
+            assertEquals("double,String", INTEROP.invokeMember(sample, "m1", 42, "asdf"));
         }
         for (int i = 0; i < 2; i++) {
-            assertEquals("int,boolean", ForeignAccess.sendInvoke(n, sample, "m1", 42, true));
-            assertEquals("double,Object", ForeignAccess.sendInvoke(n, sample, "m1", 4.2, true));
+            assertEquals("int,boolean", INTEROP.invokeMember(sample, "m1", 42, true));
+            assertEquals("double,Object", INTEROP.invokeMember(sample, "m1", 4.2, true));
         }
     }
 
@@ -262,35 +276,32 @@ public class OverloadedTest extends ProxyLanguageEnvTest {
 
     @Test
     public void testClassVsInterface() throws InteropException {
-        Node n = Message.INVOKE.createNode();
         TruffleObject pool = asTruffleObject(new Pool());
         TruffleObject concrete = asTruffleObject(new Concrete());
         TruffleObject handler = asTruffleObject(new FunctionalInterfaceTest.TestExecutable());
-        assertEquals(Concrete.class.getName(), ForeignAccess.sendInvoke(n, pool, "prepare1", "select", concrete, handler));
-        assertEquals(Concrete.class.getName(), ForeignAccess.sendInvoke(n, pool, "prepare2", "select", handler, concrete));
+        assertEquals(Concrete.class.getName(), INTEROP.invokeMember(pool, "prepare1", "select", concrete, handler));
+        assertEquals(Concrete.class.getName(), INTEROP.invokeMember(pool, "prepare2", "select", handler, concrete));
     }
 
     @Test
     public void testClassVsInterface2() throws InteropException {
-        Node n = Message.INVOKE.createNode();
         TruffleObject pool = asTruffleObject(new Pool());
         TruffleObject thandler = asTruffleObject(new FunctionalInterfaceTest.TestExecutable());
         TruffleObject chandler = asTruffleObject(new CHander());
-        assertEquals(CHander.class.getName(), ForeignAccess.sendInvoke(n, pool, "prepare3", "select", chandler, thandler));
+        assertEquals(CHander.class.getName(), INTEROP.invokeMember(pool, "prepare3", "select", chandler, thandler));
         TruffleObject proxied = new AsCollectionsTest.MapBasedTO(Collections.singletonMap("handle", new FunctionalInterfaceTest.TestExecutable()));
-        assertEquals(IHandler.class.getName(), ForeignAccess.sendInvoke(n, pool, "prepare3", "select", proxied, thandler));
+        assertEquals(IHandler.class.getName(), INTEROP.invokeMember(pool, "prepare3", "select", proxied, thandler));
     }
 
     @Test
     public void testClassVsInterface3() throws InteropException {
-        Node n = Message.INVOKE.createNode();
         TruffleObject pool = asTruffleObject(new Pool());
         TruffleObject thandler = asTruffleObject(new FunctionalInterfaceTest.TestExecutable());
         TruffleObject chandler = asTruffleObject(new CHander());
         TruffleObject concrete = asTruffleObject(new Concrete());
-        assertEquals(IHandler.class.getName(), ForeignAccess.sendInvoke(n, pool, "prepare4", "select", chandler, 42));
-        assertEquals(IHandler.class.getName(), ForeignAccess.sendInvoke(n, pool, "prepare4", "select", thandler, 42));
-        assertEquals(Concrete.class.getName(), ForeignAccess.sendInvoke(n, pool, "prepare4", "select", concrete, 42));
+        assertEquals(IHandler.class.getName(), INTEROP.invokeMember(pool, "prepare4", "select", chandler, 42));
+        assertEquals(IHandler.class.getName(), INTEROP.invokeMember(pool, "prepare4", "select", thandler, 42));
+        assertEquals(Concrete.class.getName(), INTEROP.invokeMember(pool, "prepare4", "select", concrete, 42));
     }
 
     @FunctionalInterface
@@ -348,8 +359,35 @@ public class OverloadedTest extends ProxyLanguageEnvTest {
         }
 
         @SuppressWarnings("unused")
-        public String prepare4(String query, Concrete arg1, String arg2) {
+        public String prepare4(String query, Concrete arg1, int arg2) {
             return Concrete.class.getName();
+        }
+    }
+
+    public interface TwoMethods {
+        String one();
+
+        String two();
+    }
+
+    @SuppressWarnings("unused")
+    public static class PreferSAM {
+        public String overloaded1(Supplier<String> one) {
+            assertEquals(FunctionalInterfaceTest.EXPECTED_RESULT, one.get());
+            return "SAM";
+        }
+
+        public String overloaded1(TwoMethods two) {
+            return TwoMethods.class.getName();
+        }
+
+        public String overloaded2(FunctionalInterfaceTest.LegacyFunctionalInterface<String> one) {
+            assertEquals(FunctionalInterfaceTest.EXPECTED_RESULT, one.get());
+            return "SAM";
+        }
+
+        public String overloaded2(TwoMethods two) {
+            return TwoMethods.class.getName();
         }
     }
 }

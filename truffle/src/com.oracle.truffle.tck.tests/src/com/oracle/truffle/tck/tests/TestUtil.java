@@ -1,26 +1,42 @@
 /*
- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * The Universal Permissive License (UPL), Version 1.0
  *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or
+ * data (collectively the "Software"), free of charge and under any and all
+ * copyright rights in the Software, and any and all patent rights owned or
+ * freely licensable by each licensor hereunder covering either (i) the
+ * unmodified Software as contributed to or provided by such licensor, or (ii)
+ * the Larger Works (as defined below), to deal in both
  *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * (a) the Software, and
  *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ *
+ * The above copyright notice and either this complete permission notice or at a
+ * minimum a reference to the UPL must be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 package com.oracle.truffle.tck.tests;
 
@@ -29,11 +45,11 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -93,7 +109,7 @@ final class TestUtil {
                     final Set<? extends String> requiredValueLanguages,
                     final Function<String, ? extends Collection<? extends Snippet>> snippetsProvider,
                     final Function<String, ? extends Collection<? extends Snippet>> valuesProvider) {
-        final Collection<TestRun> testRuns = new LinkedHashSet<>();
+        final Collection<TestRun> testRuns = new TreeSet<>((a, b) -> a.toString().compareTo(b.toString()));
         for (String opLanguage : requiredLanguages) {
             for (Snippet operator : snippetsProvider.apply(opLanguage)) {
                 for (String parLanguage : requiredValueLanguages) {
@@ -121,23 +137,35 @@ final class TestUtil {
     static void validateResult(
                     final TestRun testRun,
                     final Value result,
-                    final PolyglotException exception) {
+                    final PolyglotException exception,
+                    boolean fastAssertions) {
         ResultVerifier verifier = testRun.getSnippet().getResultVerifier();
-        validateResult(verifier, testRun, result, exception);
+        validateResult(verifier, testRun, result, exception, fastAssertions);
     }
 
     static void validateResult(
                     final ResultVerifier verifier,
                     final TestRun testRun,
                     final Value result,
-                    final PolyglotException exception) {
+                    final PolyglotException exception,
+                    boolean fastAssertions) {
         if (exception == null) {
             verifier.accept(ResultVerifier.SnippetRun.create(testRun.getSnippet(), testRun.getActualParameters(), result));
-            verifyToString(testRun, result);
-            verifyMetaObject(testRun, result, 10);
-            verifyInterop(result);
+            assertValue(result, fastAssertions);
         } else {
             verifier.accept(ResultVerifier.SnippetRun.create(testRun.getSnippet(), testRun.getActualParameters(), exception));
+            Value exceptionObject = exception.getGuestObject();
+            if (exceptionObject != null) {
+                assertValue(exceptionObject, fastAssertions);
+            }
+        }
+    }
+
+    private static void assertValue(final Value result, boolean fastAssertions) {
+        if (fastAssertions) {
+            ValueAssert.assertValueFast(result);
+        } else {
+            ValueAssert.assertValue(result);
         }
     }
 
@@ -232,90 +260,6 @@ final class TestUtil {
                     final Predicate<String> predicte) {
         final Set<? extends String> installedLangs = context.getInstalledProviders().keySet();
         return predicte == null ? installedLangs : installedLangs.stream().filter(predicte).collect(Collectors.toSet());
-    }
-
-    private static void verifyToString(final TestRun testRun, final Value result) {
-        try {
-            result.toString();
-        } catch (Exception e) {
-            throw new AssertionError(
-                            String.format("The result's toString of : %s failed.", testRun),
-                            e);
-        }
-    }
-
-    private static void verifyMetaObject(final TestRun testRun, final Value result, int maxMetaCalls) {
-        Value metaObject;
-        try {
-            metaObject = result.getMetaObject();
-        } catch (Exception e) {
-            throw new AssertionError(
-                            String.format("The result's meta object of : %s failed.", testRun),
-                            e);
-        }
-        if (metaObject != null) {
-            verifyToString(testRun, metaObject);
-            if (maxMetaCalls > 0) {
-                verifyMetaObject(testRun, metaObject, maxMetaCalls - 1);
-            }
-        }
-    }
-
-    private static void verifyInterop(final Value result) {
-        if (result.isBoolean()) {
-            verifyBoolean(result);
-        }
-        if (result.isNumber()) {
-            verifyNumber(result);
-        }
-        if (result.isString()) {
-            verifyString(result);
-        }
-        if (result.hasArrayElements()) {
-            verifyArray(result);
-        }
-        if (result.hasMembers()) {
-            verifyObject(result);
-        }
-    }
-
-    private static void verifyBoolean(final Value result) {
-        result.asBoolean();
-    }
-
-    private static void verifyNumber(final Value result) {
-        if (result.fitsInByte()) {
-            result.asByte();
-        }
-        if (result.fitsInInt()) {
-            result.asInt();
-        }
-        if (result.fitsInLong()) {
-            result.asLong();
-        }
-        if (result.fitsInFloat()) {
-            result.asFloat();
-        }
-        if (result.fitsInDouble()) {
-            result.asDouble();
-        }
-    }
-
-    private static void verifyString(final Value result) {
-        result.asString();
-    }
-
-    private static void verifyArray(final Value value) {
-        final long size = value.getArraySize();
-        if (size > 0) {
-            value.getArrayElement(0);
-        }
-    }
-
-    private static void verifyObject(final Value value) {
-        for (String key : value.getMemberKeys()) {
-            value.getMember(key);
-        }
     }
 
     abstract static class CollectingMatcher<T> extends BaseMatcher<T> implements Consumer<Map.Entry<T, Boolean>> {
