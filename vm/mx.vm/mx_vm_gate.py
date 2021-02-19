@@ -28,6 +28,7 @@
 import mx
 import mx_subst
 import mx_unittest
+import mx_sdk_vm
 import mx_sdk_vm_impl
 
 import functools
@@ -63,8 +64,9 @@ class VmGateTasks:
 
 
 def gate_body(args, tasks):
-    # all mx_sdk_vm_impl gate tasks can also be run as vm gate tasks
-    mx_sdk_vm_impl.gate_body(args, tasks)
+    with Task('Vm: GraalVM dist names', tasks, tags=['names']) as t:
+        if t:
+            mx_sdk_vm.verify_graalvm_configs(suites=['vm', 'vm-enterprise'])
 
     with Task('Vm: Basic GraalVM Tests', tasks, tags=[VmGateTasks.compiler]) as t:
         if t and mx_sdk_vm_impl.has_component('GraalVM compiler'):
@@ -127,9 +129,16 @@ def gate_body(args, tasks):
             with Task('LibGraal Compiler:CTW', tasks, tags=[VmGateTasks.libgraal]) as t:
                 if t:
                     mx_compiler.ctw([
-                            '-DCompileTheWorld.Config=Inline=false CompilationFailureAction=ExitVM', '-esa', '-XX:+EnableJVMCI',
-                            '-DCompileTheWorld.MultiThreaded=true', '-Dgraal.InlineDuringParsing=false', '-Dgraal.TrackNodeSourcePosition=true',
-                            '-DCompileTheWorld.Verbose=false', '-XX:ReservedCodeCacheSize=300m',
+                            '-DCompileTheWorld.Config=Inline=false CompilationFailureAction=ExitVM',
+                            '-esa',
+                            '-XX:+EnableJVMCI',
+                            '-DCompileTheWorld.MultiThreaded=true',
+                            '-Dgraal.InlineDuringParsing=false',
+                            '-Dgraal.TrackNodeSourcePosition=true',
+                            '-DCompileTheWorld.Verbose=false',
+                            '-DCompileTheWorld.HugeMethodLimit=4000',
+                            '-DCompileTheWorld.MaxCompiles=150000',
+                            '-XX:ReservedCodeCacheSize=300m',
                         ], extra_vm_arguments)
 
             mx_compiler.compiler_gate_benchmark_runner(tasks, extra_vm_arguments, prefix='LibGraal Compiler:')
@@ -161,9 +170,8 @@ def gate_body(args, tasks):
                         "-Dpolyglot.engine.CompileImmediately=true",
                         "-Dpolyglot.engine.BackgroundCompilation=false",
                         "-Dpolyglot.engine.TraceCompilation=true",
+                        "-Dpolyglot.log.file={0}".format(compiler_log_file),
                         "-Dgraalvm.locatorDisabled=true",
-                        "-Dgraal.PrintCompilation=true",
-                        "-Dgraal.LogFile={0}".format(compiler_log_file),
                         "truffle"])
                     if exists(compiler_log_file):
                         remove(compiler_log_file)
@@ -254,7 +262,6 @@ def _svm_truffle_tck(native_image, svm_suite, language_suite, language_id):
             '-cp',
             cp,
             '--no-server',
-            '-H:+TruffleCheckBlackListedMethods',
             '-H:-FoldSecurityManagerGetter',
             '-H:TruffleTCKPermissionsReportFile={}'.format(report_file),
             '-H:Path={}'.format(svmbuild),
@@ -306,7 +313,6 @@ def gate_svm_sl_tck(tasks):
                         '--macro:truffle',
                         '--tool:all',
                         '-H:Path={}'.format(svmbuild),
-                        '-H:+TruffleCheckBlackListedMethods',
                         '-H:Class=org.junit.runner.JUnitCore',
                     ]
                     tests_image = native_image(vm_image_args + options)

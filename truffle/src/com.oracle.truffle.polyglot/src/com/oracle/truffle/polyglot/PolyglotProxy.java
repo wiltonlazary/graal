@@ -49,6 +49,7 @@ import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 
+import com.oracle.truffle.api.CompilerDirectives;
 import org.graalvm.polyglot.Value;
 import org.graalvm.polyglot.proxy.Proxy;
 import org.graalvm.polyglot.proxy.ProxyArray;
@@ -57,6 +58,8 @@ import org.graalvm.polyglot.proxy.ProxyDuration;
 import org.graalvm.polyglot.proxy.ProxyExecutable;
 import org.graalvm.polyglot.proxy.ProxyInstant;
 import org.graalvm.polyglot.proxy.ProxyInstantiable;
+import org.graalvm.polyglot.proxy.ProxyIterable;
+import org.graalvm.polyglot.proxy.ProxyIterator;
 import org.graalvm.polyglot.proxy.ProxyNativeObject;
 import org.graalvm.polyglot.proxy.ProxyObject;
 import org.graalvm.polyglot.proxy.ProxyTime;
@@ -138,7 +141,7 @@ final class PolyglotProxy implements TruffleObject {
             PolyglotLanguageContext languageContext = context.get().internalContext;
             Value[] convertedArguments = languageContext.toHostValues(arguments, 0);
             Object result = guestToHostCall(library, language.getHostToGuestCache().instantiate, languageContext, proxy, convertedArguments);
-            return languageContext.toGuestValue(result);
+            return languageContext.toGuestValue(library, result);
         }
         throw UnsupportedMessageException.create();
     }
@@ -158,7 +161,7 @@ final class PolyglotProxy implements TruffleObject {
             PolyglotLanguageContext languageContext = context.get().internalContext;
             Value[] convertedArguments = languageContext.toHostValues(arguments, 0);
             Object result = guestToHostCall(library, language.getHostToGuestCache().execute, languageContext, proxy, convertedArguments);
-            return languageContext.toGuestValue(result);
+            return languageContext.toGuestValue(library, result);
         }
         throw UnsupportedMessageException.create();
     }
@@ -194,7 +197,7 @@ final class PolyglotProxy implements TruffleObject {
         if (proxy instanceof ProxyArray) {
             PolyglotLanguageContext languageContext = context.get().internalContext;
             Object result = guestToHostCall(library, language.getHostToGuestCache().arrayGet, languageContext, proxy, index);
-            return languageContext.toGuestValue(result);
+            return languageContext.toGuestValue(library, result);
         } else {
             throw UnsupportedMessageException.create();
         }
@@ -291,10 +294,25 @@ final class PolyglotProxy implements TruffleObject {
             if (result == null) {
                 result = EMPTY;
             }
-            Object guestValue = languageContext.toGuestValue(result);
-            if (!InteropLibrary.getFactory().getUncached().hasArrayElements(guestValue)) {
+            Object guestValue = languageContext.toGuestValue(library, result);
+            InteropLibrary interop = InteropLibrary.getFactory().getUncached();
+            if (!interop.hasArrayElements(guestValue)) {
                 throw illegalProxy(languageContext, "getMemberKeys() returned invalid value %s but must return an array of member key Strings.",
                                 languageContext.asValue(guestValue).toString());
+            }
+            // Todo: Use interop to determine an array element type when the GR-5737 is resolved.
+            for (int i = 0; i < interop.getArraySize(guestValue); i++) {
+                try {
+                    Object element = interop.readArrayElement(guestValue, i);
+                    if (!interop.isString(element)) {
+                        throw illegalProxy(languageContext, "getMemberKeys() returned invalid value %s but must return an array of member key Strings.",
+                                        languageContext.asValue(guestValue).toString());
+                    }
+                } catch (UnsupportedOperationException e) {
+                    CompilerDirectives.shouldNotReachHere(e);
+                } catch (InvalidArrayIndexException e) {
+                    continue;
+                }
             }
             return guestValue;
         } else {
@@ -320,7 +338,7 @@ final class PolyglotProxy implements TruffleObject {
             }
             PolyglotLanguageContext languageContext = context.get().internalContext;
             Object result = guestToHostCall(library, language.getHostToGuestCache().getMember, languageContext, proxy, member);
-            return languageContext.toGuestValue(result);
+            return languageContext.toGuestValue(library, result);
         } else {
             throw UnsupportedMessageException.create();
         }
@@ -359,7 +377,7 @@ final class PolyglotProxy implements TruffleObject {
                 throw UnsupportedMessageException.create();
             }
             PolyglotLanguageContext languageContext = context.get().internalContext;
-            memberObject = languageContext.toGuestValue(memberObject);
+            memberObject = languageContext.toGuestValue(library, memberObject);
             if (executables.isExecutable(memberObject)) {
                 return executables.execute(memberObject, arguments);
             } else {
@@ -557,6 +575,63 @@ final class PolyglotProxy implements TruffleObject {
         Class<?> javaObject = this.proxy.getClass();
         PolyglotLanguageContext languageContext = context.get().internalContext;
         return HostObject.forClass(javaObject, languageContext);
+    }
+
+    @ExportMessage
+    boolean hasIterator() {
+        return proxy instanceof ProxyIterable;
+    }
+
+    @ExportMessage
+    @TruffleBoundary
+    Object getIterator(@CachedLibrary("this") InteropLibrary library,
+                    @CachedContext(HostLanguage.class) ContextReference<HostContext> context,
+                    @CachedLanguage HostLanguage language) throws UnsupportedMessageException {
+        if (proxy instanceof ProxyIterable) {
+            PolyglotLanguageContext languageContext = context.get().internalContext;
+            Object result = guestToHostCall(library, language.getHostToGuestCache().getIterator, languageContext, proxy);
+            Object guestValue = languageContext.toGuestValue(library, result);
+            InteropLibrary interop = InteropLibrary.getFactory().getUncached();
+            if (!interop.isIterator(guestValue)) {
+                throw illegalProxy(languageContext, "getIterator() returned an invalid value %s but must return an iterator.",
+                                languageContext.asValue(guestValue).toString());
+            }
+            return guestValue;
+        } else {
+            throw UnsupportedMessageException.create();
+        }
+    }
+
+    @ExportMessage
+    boolean isIterator() {
+        return proxy instanceof ProxyIterator;
+    }
+
+    @ExportMessage
+    @TruffleBoundary
+    boolean hasIteratorNextElement(@CachedLibrary("this") InteropLibrary library,
+                    @CachedContext(HostLanguage.class) ContextReference<HostContext> context,
+                    @CachedLanguage HostLanguage language) throws UnsupportedMessageException {
+        if (proxy instanceof ProxyIterator) {
+            PolyglotLanguageContext languageContext = context.get().internalContext;
+            return (boolean) guestToHostCall(library, language.getHostToGuestCache().hasIteratorNextElement, languageContext, proxy);
+        } else {
+            throw UnsupportedMessageException.create();
+        }
+    }
+
+    @ExportMessage
+    @TruffleBoundary
+    Object getIteratorNextElement(@CachedLibrary("this") InteropLibrary library,
+                    @CachedContext(HostLanguage.class) ContextReference<HostContext> context,
+                    @CachedLanguage HostLanguage language) throws UnsupportedMessageException {
+        if (proxy instanceof ProxyIterator) {
+            PolyglotLanguageContext languageContext = context.get().internalContext;
+            Object result = guestToHostCall(library, language.getHostToGuestCache().getIteratorNextElement, languageContext, proxy);
+            return languageContext.toGuestValue(library, result);
+        } else {
+            throw UnsupportedMessageException.create();
+        }
     }
 
     @ExportMessage

@@ -1,8 +1,14 @@
 suite = {
-  "mxversion" : "5.265.6",
+  "mxversion" : "5.281.3",
   "name": "java-benchmarks",
 
   "libraries" : {
+    "SHOPCART_0.2": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/shopcart-0.2.zip"],
+      "sha1": "a216a44f7a52b9e5d09a1cd1e4f4ffd3d86c7bd1",
+      "packedResource": True,
+    },
+
     "DACAPO" : {
       "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/dacapo-9.12-bach-patched.jar"],
       "sha1" : "e39957904b7e79caf4fa54f30e8e4ee74d4e9e37",
@@ -66,7 +72,7 @@ suite = {
       "dependencies": ["JAXB_API_2.1", "ACTIVATION_1.1.1"]
     },
     # https://github.com/smarr/are-we-fast-yet
-    "AWFY" : {
+    "AWFY_1.1" : {
       "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/awfy/awfy-770c6649.jar"],
       "sha1" : "f1bf1febd81ce7fbd83244682ddc79e74fec0076",
     },

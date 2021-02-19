@@ -173,12 +173,8 @@ public class AArch64Move {
         @Override
         public void emitCode(CompilationResultBuilder crb, AArch64MacroAssembler masm) {
             Register dst = asRegister(result);
-            if (crb.compilationResult.isImmutablePIC()) {
-                crb.recordDataReferenceInCode(data);
-                masm.addressOf(dst);
-            } else {
-                masm.loadAddress(dst, (AArch64Address) crb.recordDataReferenceInCode(data), data.getAlignment());
-            }
+            crb.recordDataReferenceInCode(data);
+            masm.adrpAdd(dst);
         }
     }
 
@@ -518,7 +514,7 @@ public class AArch64Move {
             return;
         }
         AArch64Kind kind = (AArch64Kind) input.getPlatformKind();
-        int size = kind.getSizeInBytes() * Byte.SIZE;
+        final int size = Math.max(kind.getSizeInBytes() * Byte.SIZE, 32);
         if (kind.isInteger()) {
             masm.mov(size, dst, src);
         } else {
@@ -597,7 +593,7 @@ public class AArch64Move {
                     try (ScratchRegister scr = masm.getScratchRegister()) {
                         Register scratch = scr.getRegister();
                         crb.asFloatConstRef(input);
-                        masm.addressOf(scratch);
+                        masm.adrpAdd(scratch);
                         masm.fldr(32, dst, AArch64Address.createBaseRegisterOnlyAddress(scratch));
                     }
                 }
@@ -615,7 +611,7 @@ public class AArch64Move {
                     try (ScratchRegister scr = masm.getScratchRegister()) {
                         Register scratch = scr.getRegister();
                         crb.asDoubleConstRef(input);
-                        masm.addressOf(scratch);
+                        masm.adrpAdd(scratch);
                         masm.fldr(64, dst, AArch64Address.createBaseRegisterOnlyAddress(scratch));
                     }
                 }
@@ -632,8 +628,7 @@ public class AArch64Move {
                     masm.mov(dst, 0xDEADDEADDEADDEADL, true);
                 } else {
                     crb.recordDataReferenceInCode(input, 8);
-                    AArch64Address address = AArch64Address.createScaledImmediateAddress(dst, 0x0);
-                    masm.adrpLdr(64, dst, address);
+                    masm.adrpLdr(64, dst, dst);
                 }
                 break;
             default:
@@ -678,8 +673,8 @@ public class AArch64Move {
 
     private static AArch64Address loadStackSlotAddress(CompilationResultBuilder crb, AArch64MacroAssembler masm, StackSlot slot, Register scratchReg) {
         int displacement = crb.frameMap.offsetForStackSlot(slot);
-        int transferSize = slot.getPlatformKind().getSizeInBytes();
-        return masm.makeAddress(sp, displacement, scratchReg, transferSize, /* allowOverwrite */false);
+        int size = slot.getPlatformKind().getSizeInBytes() * 8;
+        return masm.makeAddress(size, sp, displacement, scratchReg);
     }
 
     public abstract static class PointerCompressionOp extends AArch64LIRInstruction {

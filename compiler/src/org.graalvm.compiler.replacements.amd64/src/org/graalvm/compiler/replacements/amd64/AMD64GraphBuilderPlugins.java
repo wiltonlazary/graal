@@ -35,6 +35,7 @@ import static org.graalvm.compiler.replacements.nodes.UnaryMathIntrinsicNode.Una
 
 import java.util.Arrays;
 
+import org.graalvm.compiler.core.common.GraalOptions;
 import org.graalvm.compiler.lir.amd64.AMD64ArithmeticLIRGeneratorTool.RoundingMode;
 import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.NamedLocationIdentity;
@@ -53,8 +54,8 @@ import org.graalvm.compiler.nodes.java.AtomicReadAndAddNode;
 import org.graalvm.compiler.nodes.java.AtomicReadAndWriteNode;
 import org.graalvm.compiler.nodes.memory.OnHeapMemoryAccess;
 import org.graalvm.compiler.nodes.memory.address.IndexAddressNode;
-import org.graalvm.compiler.nodes.memory.address.OffsetAddressNode;
 import org.graalvm.compiler.nodes.spi.Replacements;
+import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.replacements.ArraysSubstitutions;
 import org.graalvm.compiler.replacements.StandardGraphBuilderPlugins.UnsafeAccessPlugin;
 import org.graalvm.compiler.replacements.StandardGraphBuilderPlugins.UnsafeGetPlugin;
@@ -78,14 +79,12 @@ import sun.misc.Unsafe;
 
 public class AMD64GraphBuilderPlugins implements TargetGraphBuilderPlugins {
     @Override
-    public void register(Plugins plugins, Replacements replacements, Architecture architecture, boolean explicitUnsafeNullChecks,
-                    boolean registerForeignCallMath, boolean emitJDK9StringSubstitutions, boolean useFMAIntrinsics) {
-        register(plugins, replacements, (AMD64) architecture, explicitUnsafeNullChecks, emitJDK9StringSubstitutions, useFMAIntrinsics);
+    public void register(Plugins plugins, Replacements replacements, Architecture architecture, boolean explicitUnsafeNullChecks, boolean registerForeignCallMath, boolean useFMAIntrinsics,
+                    OptionValues options) {
+        register(plugins, replacements, (AMD64) architecture, explicitUnsafeNullChecks, useFMAIntrinsics, options);
     }
 
-    public static void register(Plugins plugins, Replacements replacements, AMD64 arch, boolean explicitUnsafeNullChecks,
-                    boolean emitJDK9StringSubstitutions,
-                    boolean useFMAIntrinsics) {
+    public static void register(Plugins plugins, Replacements replacements, AMD64 arch, boolean explicitUnsafeNullChecks, boolean useFMAIntrinsics, OptionValues options) {
         InvocationPlugins invocationPlugins = plugins.getInvocationPlugins();
         invocationPlugins.defer(new Runnable() {
             @Override
@@ -96,10 +95,13 @@ public class AMD64GraphBuilderPlugins implements TargetGraphBuilderPlugins {
                 registerPlatformSpecificUnsafePlugins(invocationPlugins, replacements, explicitUnsafeNullChecks,
                                 new JavaKind[]{JavaKind.Int, JavaKind.Long, JavaKind.Object, JavaKind.Boolean, JavaKind.Byte, JavaKind.Short, JavaKind.Char, JavaKind.Float, JavaKind.Double});
                 registerUnsafePlugins(invocationPlugins, replacements, explicitUnsafeNullChecks);
-                registerStringPlugins(invocationPlugins, replacements);
-                if (emitJDK9StringSubstitutions) {
-                    registerStringLatin1Plugins(invocationPlugins, replacements);
-                    registerStringUTF16Plugins(invocationPlugins, replacements);
+                if (GraalOptions.EmitStringSubstitutions.getValue(options)) {
+                    if (JavaVersionUtil.JAVA_SPEC <= 8) {
+                        registerStringPlugins(invocationPlugins, replacements);
+                    } else {
+                        registerStringLatin1Plugins(invocationPlugins, replacements);
+                        registerStringUTF16Plugins(invocationPlugins, replacements);
+                    }
                 }
                 registerMathPlugins(invocationPlugins, useFMAIntrinsics, arch, replacements);
                 registerArraysEqualsPlugins(invocationPlugins, replacements);
@@ -304,9 +306,19 @@ public class AMD64GraphBuilderPlugins implements TargetGraphBuilderPlugins {
     private static void registerUnsafePlugins(InvocationPlugins plugins, Replacements replacements, boolean explicitUnsafeNullChecks) {
         registerUnsafePlugins(new Registration(plugins, Unsafe.class), explicitUnsafeNullChecks, new JavaKind[]{JavaKind.Int, JavaKind.Long, JavaKind.Object}, true);
         if (JavaVersionUtil.JAVA_SPEC > 8) {
-            registerUnsafePlugins(new Registration(plugins, "jdk.internal.misc.Unsafe", replacements), explicitUnsafeNullChecks,
+            Registration r = new Registration(plugins, "jdk.internal.misc.Unsafe", replacements);
+            registerUnsafePlugins(r, explicitUnsafeNullChecks,
                             new JavaKind[]{JavaKind.Boolean, JavaKind.Byte, JavaKind.Char, JavaKind.Short, JavaKind.Int, JavaKind.Long, JavaKind.Object},
                             JavaVersionUtil.JAVA_SPEC <= 11);
+            registerUnsafeUnalignedPlugins(r, explicitUnsafeNullChecks);
+        }
+    }
+
+    private static void registerUnsafeUnalignedPlugins(Registration r, boolean explicitUnsafeNullChecks) {
+        for (JavaKind kind : new JavaKind[]{JavaKind.Char, JavaKind.Short, JavaKind.Int, JavaKind.Long}) {
+            Class<?> javaClass = kind.toJavaClass();
+            r.registerOptional3("get" + kind.name() + "Unaligned", Receiver.class, Object.class, long.class, new UnsafeGetPlugin(kind, explicitUnsafeNullChecks));
+            r.registerOptional4("put" + kind.name() + "Unaligned", Receiver.class, Object.class, long.class, javaClass, new UnsafePutPlugin(kind, explicitUnsafeNullChecks));
         }
     }
 
@@ -329,18 +341,13 @@ public class AMD64GraphBuilderPlugins implements TargetGraphBuilderPlugins {
                     public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver unsafe, ValueNode object, ValueNode offset, ValueNode delta) {
                         // Emits a null-check for the otherwise unused receiver
                         unsafe.get();
-                        createUnsafeAccess(object, b, (obj, loc) -> new AtomicReadAndAddNode(b.add(new OffsetAddressNode(obj, offset)), delta, kind, loc));
+                        createUnsafeAccess(object, b, (obj, loc) -> new AtomicReadAndAddNode(obj, offset, delta, kind, loc));
                         return true;
                     }
                 });
             }
         }
 
-        for (JavaKind kind : new JavaKind[]{JavaKind.Char, JavaKind.Short, JavaKind.Int, JavaKind.Long}) {
-            Class<?> javaClass = kind.toJavaClass();
-            r.registerOptional3("get" + kind.name() + "Unaligned", Receiver.class, Object.class, long.class, new UnsafeGetPlugin(kind, explicitUnsafeNullChecks));
-            r.registerOptional4("put" + kind.name() + "Unaligned", Receiver.class, Object.class, long.class, javaClass, new UnsafePutPlugin(kind, explicitUnsafeNullChecks));
-        }
     }
 
     private static void registerArraysEqualsPlugins(InvocationPlugins plugins, Replacements replacements) {

@@ -40,33 +40,15 @@
  */
 package com.oracle.truffle.tck.tests;
 
-import static com.oracle.truffle.tck.tests.ValueAssert.Trait.ARRAY_ELEMENTS;
-import static com.oracle.truffle.tck.tests.ValueAssert.Trait.BOOLEAN;
-import static com.oracle.truffle.tck.tests.ValueAssert.Trait.DATE;
-import static com.oracle.truffle.tck.tests.ValueAssert.Trait.DURATION;
-import static com.oracle.truffle.tck.tests.ValueAssert.Trait.EXCEPTION;
-import static com.oracle.truffle.tck.tests.ValueAssert.Trait.EXECUTABLE;
-import static com.oracle.truffle.tck.tests.ValueAssert.Trait.HOST_OBJECT;
-import static com.oracle.truffle.tck.tests.ValueAssert.Trait.INSTANTIABLE;
-import static com.oracle.truffle.tck.tests.ValueAssert.Trait.MEMBERS;
-import static com.oracle.truffle.tck.tests.ValueAssert.Trait.META;
-import static com.oracle.truffle.tck.tests.ValueAssert.Trait.NATIVE;
-import static com.oracle.truffle.tck.tests.ValueAssert.Trait.NULL;
-import static com.oracle.truffle.tck.tests.ValueAssert.Trait.NUMBER;
-import static com.oracle.truffle.tck.tests.ValueAssert.Trait.PROXY_OBJECT;
-import static com.oracle.truffle.tck.tests.ValueAssert.Trait.STRING;
-import static com.oracle.truffle.tck.tests.ValueAssert.Trait.TIME;
-import static com.oracle.truffle.tck.tests.ValueAssert.Trait.TIMEZONE;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import org.graalvm.polyglot.HostAccess.Implementable;
+import org.graalvm.polyglot.PolyglotException;
+import org.graalvm.polyglot.TypeLiteral;
+import org.graalvm.polyglot.Value;
+import org.graalvm.polyglot.proxy.Proxy;
 
 import java.lang.reflect.Modifier;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -89,11 +71,34 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.function.Function;
 
-import org.graalvm.polyglot.HostAccess.Implementable;
-import org.graalvm.polyglot.PolyglotException;
-import org.graalvm.polyglot.TypeLiteral;
-import org.graalvm.polyglot.Value;
-import org.graalvm.polyglot.proxy.Proxy;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.ARRAY_ELEMENTS;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.BOOLEAN;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.BUFFER_ELEMENTS;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.DATE;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.DURATION;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.EXCEPTION;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.EXECUTABLE;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.HOST_OBJECT;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.INSTANTIABLE;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.ITERABLE;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.ITERATOR;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.MEMBERS;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.META;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.NATIVE;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.NULL;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.NUMBER;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.PROXY_OBJECT;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.STRING;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.TIME;
+import static com.oracle.truffle.tck.tests.ValueAssert.Trait.TIMEZONE;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class ValueAssert {
 
@@ -118,6 +123,10 @@ public class ValueAssert {
     private static final TypeLiteral<Map<Double, Object>> DOUBLE_OBJECT_MAP = new TypeLiteral<Map<Double, Object>>() {
     };
     private static final TypeLiteral<Function<Object, Object>> FUNCTION = new TypeLiteral<Function<Object, Object>>() {
+    };
+    private static final TypeLiteral<Iterable<Object>> OBJECT_ITERABLE = new TypeLiteral<Iterable<Object>>() {
+    };
+    private static final TypeLiteral<Iterator<Object>> OBJECT_ITERATOR = new TypeLiteral<Iterator<Object>>() {
     };
 
     public static void assertValue(Value value) {
@@ -332,6 +341,31 @@ public class ValueAssert {
                         assertNull(value.as(Object[].class));
                     }
                     break;
+                case BUFFER_ELEMENTS:
+                    assertFalse(value.hasBufferElements());
+                    assertFails(() -> value.isBufferWritable(), UnsupportedOperationException.class);
+                    assertFails(() -> value.getBufferSize(), UnsupportedOperationException.class);
+                    assertFails(() -> value.readBufferByte(0), UnsupportedOperationException.class);
+                    assertFails(() -> value.writeBufferByte(0, (byte) 0), UnsupportedOperationException.class);
+                    assertFails(() -> value.readBufferShort(ByteOrder.LITTLE_ENDIAN, 0), UnsupportedOperationException.class);
+                    assertFails(() -> value.writeBufferShort(ByteOrder.LITTLE_ENDIAN, 0, (short) 0), UnsupportedOperationException.class);
+                    assertFails(() -> value.readBufferInt(ByteOrder.LITTLE_ENDIAN, 0), UnsupportedOperationException.class);
+                    assertFails(() -> value.writeBufferInt(ByteOrder.LITTLE_ENDIAN, 0, 0), UnsupportedOperationException.class);
+                    assertFails(() -> value.readBufferLong(ByteOrder.LITTLE_ENDIAN, 0), UnsupportedOperationException.class);
+                    assertFails(() -> value.writeBufferLong(ByteOrder.LITTLE_ENDIAN, 0, 0L), UnsupportedOperationException.class);
+                    assertFails(() -> value.readBufferFloat(ByteOrder.LITTLE_ENDIAN, 0), UnsupportedOperationException.class);
+                    assertFails(() -> value.writeBufferFloat(ByteOrder.LITTLE_ENDIAN, 0, 0f), UnsupportedOperationException.class);
+                    assertFails(() -> value.readBufferDouble(ByteOrder.LITTLE_ENDIAN, 0), UnsupportedOperationException.class);
+                    assertFails(() -> value.writeBufferDouble(ByteOrder.LITTLE_ENDIAN, 0, 0.0), UnsupportedOperationException.class);
+
+                    if (!value.isNull()) {
+                        if ((!value.isHostObject() || (!(value.asHostObject() instanceof ByteBuffer)))) {
+                            assertFails(() -> value.as(ByteBuffer.class), ClassCastException.class);
+                        }
+                    } else {
+                        assertNull(value.as(ByteBuffer.class));
+                    }
+                    break;
                 case HOST_OBJECT:
                     assertFalse(value.isHostObject());
                     assertFails(() -> value.asHostObject(), ClassCastException.class);
@@ -421,6 +455,15 @@ public class ValueAssert {
                     assertFails(() -> value.getMetaSimpleName(), UnsupportedOperationException.class);
                     assertFails(() -> value.isMetaInstance(""), UnsupportedOperationException.class);
                     break;
+                case ITERABLE:
+                    assertFalse(value.hasIterator());
+                    assertFails(() -> value.getIterator(), UnsupportedOperationException.class);
+                    break;
+                case ITERATOR:
+                    assertFalse(value.isIterator());
+                    assertFails(() -> value.hasIteratorNextElement(), UnsupportedOperationException.class);
+                    assertFails(() -> value.getIteratorNextElement(), UnsupportedOperationException.class);
+                    break;
                 default:
                     throw new AssertionError();
             }
@@ -471,6 +514,10 @@ public class ValueAssert {
                     assertTrue(msg, value.hasArrayElements());
                     assertValueArrayElements(value, depth, hasHostAccess);
                     break;
+                case BUFFER_ELEMENTS:
+                    assertTrue(msg, value.hasBufferElements());
+                    assertValueBufferElements(value);
+                    break;
                 case EXECUTABLE:
                     assertTrue(msg, value.canExecute());
                     assertFunctionalInterfaceMapping(value);
@@ -493,13 +540,18 @@ public class ValueAssert {
                             if (isStaticClass) {
                                 assertClassMembers(value, (Class<?>) hostObject, true);
                             } else {
-                                if (hasHostAccess) {
-                                    assertClassMembers(value, Class.class, false);
-                                    assertTrue(value.hasMember("static"));
-                                }
+                                assertClassMembers(value, Class.class, false);
+                                assertTrue(value.hasMember("static"));
                             }
                         } else {
-                            assertClassMembers(value, hostObject.getClass(), false);
+                            // Asserts that value exposes the same members as the host object's
+                            // class first public inclusive ancestor.
+                            for (Class<?> clazz = hostObject.getClass(); clazz != null; clazz = clazz.getSuperclass()) {
+                                if (Modifier.isPublic(clazz.getModifiers())) {
+                                    assertClassMembers(value, clazz, false);
+                                    break;
+                                }
+                            }
                         }
                     }
                     assertEquals(Value.asValue(hostObject), value);
@@ -518,35 +570,39 @@ public class ValueAssert {
                 case MEMBERS:
                     assertTrue(msg, value.hasMembers());
 
-                    Map<Object, Object> expectedValues = new HashMap<>();
                     for (String key : value.getMemberKeys()) {
                         Value child = value.getMember(key);
-                        expectedValues.put(key, child.as(Object.class));
                         if (!isSameHostObject(value, child)) {
                             assertValueImpl(child, depth + 1, hasHostAccess, detectSupportedTypes(child));
                         }
                     }
 
-                    if (value.isHostObject() && value.asHostObject() instanceof Map) {
-                        expectedValues = value.asHostObject();
+                    if (value.isNull()) {
+                        assertNull(value.as(STRING_OBJECT_MAP));
+                    } else if (value.isHostObject() && value.asHostObject() instanceof Map) {
+                        Map<Object, Object> expectedValues = value.asHostObject();
+                        assertEquals(value.as(OBJECT_OBJECT_MAP), expectedValues);
                     } else {
-                        if (value.isNull()) {
-                            assertNull(value.as(STRING_OBJECT_MAP));
-                        } else {
-                            Map<String, Object> stringMap = value.as(STRING_OBJECT_MAP);
-                            assertTrue(expectedValues.equals(expectedValues));
-                            assertTrue(stringMap.equals(stringMap));
-                            assertFalse(value.as(STRING_OBJECT_MAP).equals(expectedValues));
-                            assertTrue(value.as(STRING_OBJECT_MAP).equals(value.as(STRING_OBJECT_MAP)));
-                            Set<String> keySet = value.as(Map.class).keySet();
-                            assertEquals(value.getMemberKeys(), keySet);
-                            for (String key : keySet) {
-                                assertTrue(value.hasMember(key));
-                            }
-                            assertNotNull(value.as(STRING_OBJECT_MAP).hashCode());
-                            assertNotNull(value.as(STRING_OBJECT_MAP).toString());
-                            assertEquals(value.toString(), value.as(Map.class).toString());
+                        Map<String, Object> expectedValues = new HashMap<>();
+                        for (String key : value.getMemberKeys()) {
+                            Value child = value.getMember(key);
+                            expectedValues.put(key, child.as(Object.class));
                         }
+
+                        Map<String, Object> stringMap = value.as(STRING_OBJECT_MAP);
+                        assertEquals("PolyglotMap should be equal with itself", stringMap, stringMap);
+                        assertEquals("Two PolyglotMaps wrapping the same host object should be equal", value.as(STRING_OBJECT_MAP), value.as(STRING_OBJECT_MAP));
+                        assertNotEquals("A PolyglotMap should not be equal with a Map", value.as(STRING_OBJECT_MAP), expectedValues);
+
+                        Set<String> keySet = value.as(Map.class).keySet();
+                        assertEquals(value.getMemberKeys(), keySet);
+
+                        for (String key : keySet) {
+                            assertTrue(value.hasMember(key));
+                        }
+
+                        assertNotNull(value.as(STRING_OBJECT_MAP).toString());
+                        assertEquals(value.toString(), value.as(Map.class).toString());
                     }
                     break;
                 case NATIVE:
@@ -612,7 +668,14 @@ public class ValueAssert {
                     assertNotNull(value.getMetaSimpleName());
                     value.isMetaInstance("");
                     break;
-
+                case ITERABLE:
+                    assertTrue(msg, value.hasIterator());
+                    assertValueIterable(value, depth, hasHostAccess);
+                    break;
+                case ITERATOR:
+                    assertTrue(msg, value.isIterator());
+                    value.hasIteratorNextElement();
+                    break;
                 default:
                     throw new AssertionError();
             }
@@ -675,6 +738,54 @@ public class ValueAssert {
         assertCollectionEqualValues(receivedObjectsLongMap.values(), objectMap4.values());
     }
 
+    private static void assertValueBufferElements(Value value) {
+        assertTrue(value.hasBufferElements());
+        final boolean isWritable = value.isBufferWritable();
+
+        for (long i = 0L; i < value.getBufferSize(); i++) {
+            final byte result = value.readBufferByte(i);
+            if (isWritable) {
+                // Write the same value in order not to change buffer's content.
+                value.writeBufferByte(i, result);
+            }
+        }
+
+        for (long i = 0L; i < value.getBufferSize() - 1; i += 2) {
+            final short result = value.readBufferShort(ByteOrder.LITTLE_ENDIAN, i);
+            if (isWritable) {
+                value.writeBufferShort(ByteOrder.LITTLE_ENDIAN, i, result);
+            }
+        }
+
+        for (long i = 0L; i < value.getBufferSize() - 3; i += 4) {
+            final int result = value.readBufferInt(ByteOrder.LITTLE_ENDIAN, i);
+            if (isWritable) {
+                value.writeBufferInt(ByteOrder.LITTLE_ENDIAN, i, result);
+            }
+        }
+
+        for (long i = 0L; i < value.getBufferSize() - 7; i += 8) {
+            final long result = value.readBufferLong(ByteOrder.LITTLE_ENDIAN, i);
+            if (isWritable) {
+                value.writeBufferLong(ByteOrder.LITTLE_ENDIAN, i, result);
+            }
+        }
+
+        for (long i = 0L; i < value.getBufferSize() - 3; i += 4) {
+            final float result = value.readBufferFloat(ByteOrder.LITTLE_ENDIAN, i);
+            if (isWritable) {
+                value.writeBufferFloat(ByteOrder.LITTLE_ENDIAN, i, result);
+            }
+        }
+
+        for (long i = 0L; i < value.getBufferSize() - 7; i += 8) {
+            final double result = value.readBufferDouble(ByteOrder.LITTLE_ENDIAN, i);
+            if (isWritable) {
+                value.writeBufferDouble(ByteOrder.LITTLE_ENDIAN, i, result);
+            }
+        }
+    }
+
     private static void assertCollectionEqualValues(Collection<? extends Object> expected, Collection<? extends Object> actual) {
         assertEquals(expected.size(), actual.size());
         Iterator<? extends Object> expectedi = expected.iterator();
@@ -732,6 +843,32 @@ public class ValueAssert {
                     break;
             }
         }
+    }
+
+    private static void assertValueIterable(Value value, int depth, boolean hasHostAccess) {
+        assertTrue(value.hasIterator());
+        List<Object> receivedObjects = new ArrayList<>();
+        Value iterator = value.getIterator();
+        while (iterator.hasIteratorNextElement()) {
+            Value element = iterator.getIteratorNextElement();
+            receivedObjects.add(element.as(Object.class));
+            assertValueImpl(element, depth + 1, hasHostAccess, detectSupportedTypes(element));
+        }
+        Iterable<Object> objectIterable = value.as(OBJECT_ITERABLE);
+        assertTrue(objectIterable.equals(objectIterable));
+        assertTrue(value.as(OBJECT_ITERABLE).equals(value.as(OBJECT_ITERABLE)));
+        assertNotEquals(0, objectIterable.hashCode());
+        assertNotNull(objectIterable.toString());
+
+        Iterator<Object> receivedIterator = receivedObjects.iterator();
+        Iterator<Object> objectIterator1 = objectIterable.iterator();
+        Iterator<Object> objectIterator2 = value.getIterator().as(OBJECT_ITERATOR);
+        while (objectIterator1.hasNext() && objectIterator2.hasNext() && receivedIterator.hasNext()) {
+            Object expected = receivedIterator.next();
+            assertEqualValues(expected, objectIterator1.next());
+            assertEqualValues(expected, objectIterator2.next());
+        }
+        assertFalse(objectIterator1.hasNext() || objectIterator2.hasNext() || receivedIterator.hasNext());
     }
 
     @SafeVarargs
@@ -903,6 +1040,9 @@ public class ValueAssert {
         if (value.hasArrayElements()) {
             valueTypes.add(ARRAY_ELEMENTS);
         }
+        if (value.hasBufferElements()) {
+            valueTypes.add(BUFFER_ELEMENTS);
+        }
         if (value.canInstantiate()) {
             valueTypes.add(INSTANTIABLE);
         }
@@ -933,6 +1073,12 @@ public class ValueAssert {
         if (value.isMetaObject()) {
             valueTypes.add(META);
         }
+        if (value.hasIterator()) {
+            valueTypes.add(ITERABLE);
+        }
+        if (value.isIterator()) {
+            valueTypes.add(ITERATOR);
+        }
         return valueTypes.toArray(new Trait[0]);
     }
 
@@ -949,12 +1095,15 @@ public class ValueAssert {
         INSTANTIABLE,
         MEMBERS,
         ARRAY_ELEMENTS,
+        BUFFER_ELEMENTS,
         DATE,
         TIME,
         TIMEZONE,
         DURATION,
         EXCEPTION,
         META,
+        ITERABLE,
+        ITERATOR,
     }
 
 }

@@ -52,7 +52,7 @@ final class GraalTestTVMCI extends TVMCI.Test<GraalTestContext, OptimizedCallTar
             GraphOutput<Void, ?> output = null;
             try {
                 if (debug.isDumpEnabled()) {
-                    output = debug.buildOutput(GraphOutput.newBuilder(VoidGraphStructure.INSTANCE).protocolVersion(7, 0));
+                    output = debug.buildOutput(GraphOutput.newBuilder(VoidGraphStructure.INSTANCE));
                     output.beginGroup(null, testName, testName, null, 0, debug.getVersionProperties());
                     return output;
                 }
@@ -71,7 +71,7 @@ final class GraalTestTVMCI extends TVMCI.Test<GraalTestContext, OptimizedCallTar
 
         private synchronized void init(OptimizedCallTarget target) {
             if (debug == null) {
-                final Map<String, Object> optionsMap = TruffleRuntimeOptions.getOptionsForCompiler(target);
+                final Map<String, Object> optionsMap = GraalTruffleRuntime.getOptionsForCompiler(target);
                 debug = runtime.getTruffleCompiler(target).openDebugContext(optionsMap, null);
                 /*
                  * Open a dump group around all compilations happening during the execution of a
@@ -117,6 +117,7 @@ final class GraalTestTVMCI extends TVMCI.Test<GraalTestContext, OptimizedCallTar
     @SuppressWarnings("try")
     @Override
     public void finishWarmup(GraalTestContext testContext, OptimizedCallTarget callTarget) {
-        truffleRuntime.doCompile(callTarget, new CancellableCompileTask(new WeakReference<>(callTarget), true));
+        BackgroundCompileQueue.Priority priority = new BackgroundCompileQueue.Priority(Integer.MAX_VALUE, BackgroundCompileQueue.Priority.Tier.LAST);
+        truffleRuntime.doCompile(testContext.debug, callTarget, CompilationTask.createCompilationTask(priority, new WeakReference<>(callTarget), 0));
     }
 }

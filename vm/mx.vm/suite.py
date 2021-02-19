@@ -1,7 +1,7 @@
 suite = {
     "name": "vm",
-    "version" : "20.3.0",
-    "mxversion" : "5.256.0",
+    "version" : "21.1.0",
+    "mxversion" : "5.280.0",
     "release" : False,
     "groupId" : "org.graalvm",
 
@@ -39,7 +39,7 @@ suite = {
                 "name": "graal-nodejs",
                 "subdir": True,
                 "dynamic": True,
-                "version": "7170cfbf2e49156d1054e11d4c53319bb20301cf",
+                "version": "6688acde48d388a00e4fd09a09c0b3a36b44db15",
                 "urls" : [
                     {"url" : "https://github.com/graalvm/graaljs.git", "kind" : "git"},
                     {"url": "https://curio.ssw.jku.at/nexus/content/repositories/snapshots", "kind": "binary"},
@@ -49,7 +49,7 @@ suite = {
                 "name": "graal-js",
                 "subdir": True,
                 "dynamic": True,
-                "version": "7170cfbf2e49156d1054e11d4c53319bb20301cf",
+                "version": "6688acde48d388a00e4fd09a09c0b3a36b44db15",
                 "urls": [
                     {"url": "https://github.com/graalvm/graaljs.git", "kind" : "git"},
                     {"url": "https://curio.ssw.jku.at/nexus/content/repositories/snapshots", "kind": "binary"},
@@ -57,7 +57,7 @@ suite = {
             },
             {
                 "name": "truffleruby",
-                "version": "b8bc6c493579d2deb38ddf40b068f1517d3a4096",
+                "version": "2e3bf7d50321a5ffc48906829e7bb1e2a4bece53",
                 "dynamic": True,
                 "urls": [
                     {"url": "https://github.com/oracle/truffleruby.git", "kind": "git"},
@@ -66,7 +66,7 @@ suite = {
             },
             {
                 "name": "fastr",
-                "version": "3cb23e3148ad9d300691ba40d043b309d1f507da",
+                "version": "06953faea79e675bdcb3cdc26712dec0127b1583",
                 "dynamic": True,
                 "urls": [
                     {"url": "https://github.com/oracle/fastr.git", "kind": "git"},
@@ -75,7 +75,7 @@ suite = {
             },
             {
                 "name": "graalpython",
-                "version": "0da41049e87d66e4b93eeced0f00d59a1d3631b6",
+                "version": "18f1af35fac4514556a31ab70e0e2bc757bb1334",
                 "dynamic": True,
                 "urls": [
                     {"url": "https://github.com/graalvm/graalpython.git", "kind": "git"},
@@ -94,6 +94,7 @@ suite = {
             "checkstyleVersion" : "8.8",
             "dependencies": [
                 "sdk:LAUNCHER_COMMON",
+                "truffle:TruffleJSON",
             ],
         },
         "org.graalvm.component.installer.test" : {
@@ -107,6 +108,33 @@ suite = {
             "checkstyle": "org.graalvm.component.installer",
             "license" : "GPLv2-CPE",
         },
+        "org.graalvm.polybench" : {
+            "subDir" : "src",
+            "sourceDirs" : ["src"],
+            "javaCompliance" : "1.8+",
+            "license" : "GPLv2-CPE",
+            "checkstyle": "org.graalvm.component.installer",
+            "dependencies": [
+                "sdk:LAUNCHER_COMMON",
+            ],
+        },
+        "org.graalvm.polybench.jdk11" : {
+            "subDir" : "src",
+            "sourceDirs" : ["src"],
+            "dependencies" : [
+                "org.graalvm.polybench",
+            ],
+            "requires" : [
+                "java.logging",
+                "jdk.jfr",
+            ],
+            "javaCompliance" : "11+",
+            "license" : "GPLv2-CPE",
+            "checkstyle": "org.graalvm.component.installer",
+            "checkPackagePrefix" : "false",
+      		"overlayTarget" : "org.graalvm.polybench",
+      		"multiReleaseJarVersion" : "11",
+        },
     },
 
     "distributions": {
@@ -118,6 +146,9 @@ suite = {
             ],
             "distDependencies": [
                 "sdk:LAUNCHER_COMMON",
+            ],
+            "exclude" : [
+                "truffle:TruffleJSON"
             ],
             "maven" : False,
         },
@@ -151,6 +182,37 @@ suite = {
                 "THIRD_PARTY_LICENSE.txt": "file:THIRD_PARTY_LICENSE_CE.txt",
             },
             "maven": False,
+        },
+        "POLYBENCH": {
+            "subDir": "src",
+            "mainClass": "org.graalvm.polybench.PolyBenchLauncher",
+            "dependencies": [
+                "org.graalvm.polybench",
+            ],
+            "distDependencies": [
+                "sdk:LAUNCHER_COMMON",
+            ],
+            "maven" : False,
+        },
+        "POLYBENCH_BENCHMARKS": {
+            "native": True,
+            "description": "Distribution for polybench benchmarks",
+            # llvm bitcode is platform dependent
+            "platformDependent": True,
+            "layout": {
+                # The layout may be modified via mx_vm.mx_register_dynamic_suite_constituents() to include dynamic projects.
+                "./interpreter/": [
+                    "file:benchmarks/interpreter/*.js",
+                    "file:benchmarks/interpreter/*.rb",
+                ],
+                "./interpreter/dependencies/": [
+                    "file:benchmarks/interpreter/dependencies/*",
+                ],
+                "./compiler/": [
+                    "file:benchmarks/compiler/*",
+                ],
+            },
+            "defaultBuild": False,
         },
     },
 }

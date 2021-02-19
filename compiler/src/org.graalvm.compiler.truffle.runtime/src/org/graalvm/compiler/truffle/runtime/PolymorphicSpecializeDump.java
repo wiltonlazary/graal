@@ -46,7 +46,7 @@ class PolymorphicSpecializeDump {
             Collections.reverse(toDump);
             PolymorphicSpecializeDump.PolymorphicSpecializeGraph graph = new PolymorphicSpecializeDump.PolymorphicSpecializeGraph(toDump);
             final GraphOutput<PolymorphicSpecializeGraph, ?> output = debugContext.buildOutput(
-                            GraphOutput.newBuilder(new PolymorphicSpecializeDump.PolymorphicSpecializeGraphStructure()).protocolVersion(7, 0));
+                            GraphOutput.newBuilder(new PolymorphicSpecializeDump.PolymorphicSpecializeGraphStructure()));
             output.beginGroup(graph, "Polymorphic Specialize [" + callTarget + "]", "Polymorphic Specialize", null, 0, null);
             output.print(graph, null, 0, toDump.get(toDump.size() - 1).toString());
             output.endGroup();
@@ -57,7 +57,7 @@ class PolymorphicSpecializeDump {
     }
 
     private static TruffleDebugContext openDebugContext(OptimizedCallTarget callTarget) {
-        return GraalTruffleRuntime.getRuntime().getTruffleCompiler(callTarget).openDebugContext(TruffleRuntimeOptions.getOptionsForCompiler(callTarget), null);
+        return GraalTruffleRuntime.getRuntime().getTruffleCompiler(callTarget).openDebugContext(GraalTruffleRuntime.getOptionsForCompiler(callTarget), null);
     }
 
     static class PolymorphicSpecializeGraph {

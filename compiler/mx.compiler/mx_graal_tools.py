@@ -73,10 +73,9 @@ def run_netbeans_app(app_name, env=None, args=None):
 def netbeans_jdk(appName):
     v8u20 = mx.VersionSpec("1.8.0_20")
     v8u40 = mx.VersionSpec("1.8.0_40")
-    v11 = mx.VersionSpec("11") # IGV requires java.xml.bind which has been removed in 11 (JEP320)
     def _igvJdkVersionCheck(version):
-        return (version < v8u20 or version >= v8u40) and version < v11
-    return mx.get_jdk(_igvJdkVersionCheck, versionDescription='(< 1.8.0u20 or >= 1.8.0u40) and < 11', purpose="running " + appName).home
+        return version < v8u20 or version >= v8u40
+    return mx.get_jdk(_igvJdkVersionCheck, versionDescription='(< 1.8.0u20 or >= 1.8.0u40)', purpose="running " + appName).home
 
 def igv(args):
     """(obsolete) informs about IGV"""
@@ -116,8 +115,6 @@ def hsdis(args, copyToDir=None):
         r'intel\hsdis-amd64-windows-%s.dll' : '6a388372cdd5fe905c1a26ced614334e405d1f30',
         r'intel/hsdis-amd64-linux-%s.so' : '0d031013db9a80d6c88330c42c983fbfa7053193',
         r'intel/hsdis-amd64-darwin-%s.dylib' : '67f6d23cbebd8998450a88b5bef362171f66f11a',
-        r'hsdis-sparcv9-solaris-%s.so': '970640a9af0bd63641f9063c11275b371a59ee60',
-        r'hsdis-sparcv9-linux-%s.so': '0c375986d727651dee1819308fbbc0de4927d5d9',
         r'hsdis-aarch64-linux-%s.so': 'fcc9b70ac91c00db8a50b0d4345490a68e3743e1',
     }
 

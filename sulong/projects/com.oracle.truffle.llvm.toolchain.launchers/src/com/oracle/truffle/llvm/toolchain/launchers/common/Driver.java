@@ -75,10 +75,12 @@ public class Driver {
             throw new IllegalArgumentException("unknown OS: " + name);
         }
 
-        private static final OS current = findCurrent();
+        private static final class Lazy {
+            private static final OS current = findCurrent();
+        }
 
         public static OS getCurrent() {
-            return current;
+            return Lazy.current;
         }
     }
 
@@ -186,7 +188,11 @@ public class Driver {
         }
     }
 
-    @SuppressWarnings("unused")
+    /**
+     * @param inputStream
+     * @param outputStream
+     * @param errorStream
+     */
     protected void processIO(InputStream inputStream, OutputStream outputStream, InputStream errorStream) {
     }
 

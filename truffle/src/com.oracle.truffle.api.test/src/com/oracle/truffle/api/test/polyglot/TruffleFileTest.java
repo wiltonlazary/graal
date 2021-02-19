@@ -227,14 +227,15 @@ public class TruffleFileTest extends AbstractPolyglotTest {
     @Test
     public void testDetectEncoding() {
         TruffleFile file = languageEnv.getPublicTruffleFile("/folder/filename.duplicate");
-        Charset encoding = TestAPIAccessor.languageAccess().detectEncoding(file, null);
+        assertFails(() -> TestAPIAccessor.languageAccess().detectEncoding(file, null), IllegalArgumentException.class);
+        String mimeType = "text/x-duplicate-mime";
+        Charset encoding = TestAPIAccessor.languageAccess().detectEncoding(file, mimeType);
         assertNull(encoding);
         Language1Detector detector1 = Language1Detector.getInstance();
         Language2Detector detector2 = Language2Detector.getInstance();
-        String mimeType = "text/x-duplicate-mime";
         detector1.reset();
         detector2.reset().mimeType(mimeType);
-        encoding = TestAPIAccessor.languageAccess().detectEncoding(file, null);
+        encoding = TestAPIAccessor.languageAccess().detectEncoding(file, mimeType);
         assertNull(encoding);
         detector1.reset().mimeType(mimeType);
         detector2.reset().mimeType(mimeType).encoding(UTF_16);
@@ -476,6 +477,46 @@ public class TruffleFileTest extends AbstractPolyglotTest {
         assertFails(() -> finalPublicFile.isSameFile(null), NullPointerException.class);
         assertFails(() -> finalPublicFile.isSameFile(finalInternalFile, (LinkOption[]) null), NullPointerException.class);
         assertFails(() -> finalPublicFile.isSameFile(finalInternalFile, (LinkOption) null), NullPointerException.class);
+    }
+
+    @Test
+    public void testRelativeSymLinkWithCustomUserDir() throws IOException {
+        Assume.assumeFalse("Link creation requires a special privilege on Windows", OSUtils.isWindows());
+        Path workDir = Files.createTempDirectory(TruffleFileTest.class.getSimpleName());
+        Path targetPath = workDir.relativize(Files.createFile(Files.createDirectory(workDir.resolve("folder")).resolve("target")));
+        try {
+            setupEnv(Context.newBuilder().allowIO(true).build());
+            languageEnv.setCurrentWorkingDirectory(languageEnv.getPublicTruffleFile(workDir.toString()));
+            TruffleFile symLink = languageEnv.getPublicTruffleFile("link");
+            TruffleFile targetRelativePath = languageEnv.getPublicTruffleFile(targetPath.toString());
+            assertFalse(targetRelativePath.isAbsolute());
+            symLink.createSymbolicLink(targetRelativePath);
+            TruffleFile readLink = symLink.readSymbolicLink();
+            assertFalse(readLink.isAbsolute());
+            assertEquals(targetRelativePath, readLink);
+            assertEquals(targetRelativePath.getCanonicalFile(), symLink.getCanonicalFile());
+            symLink = languageEnv.getPublicTruffleFile("folder/link");
+            TruffleFile target = languageEnv.getPublicTruffleFile(targetPath.getFileName().toString());
+            assertFalse(target.isAbsolute());
+            symLink.createSymbolicLink(target);
+            readLink = symLink.readSymbolicLink();
+            assertFalse(readLink.isAbsolute());
+            assertEquals(target, readLink);
+            assertEquals(targetRelativePath.getCanonicalFile(), symLink.getCanonicalFile());
+        } finally {
+            delete(workDir);
+        }
+    }
+
+    private static void delete(Path path) throws IOException {
+        if (Files.isDirectory(path)) {
+            try (DirectoryStream<Path> dir = Files.newDirectoryStream(path)) {
+                for (Path child : dir) {
+                    delete(child);
+                }
+            }
+        }
+        Files.delete(path);
     }
 
     private static Type erase(Type type) {

@@ -31,7 +31,6 @@ package com.oracle.truffle.llvm.tests.interop;
 
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.interop.InvalidArrayIndexException;
-import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.llvm.tests.interop.values.ArrayObject;
 import com.oracle.truffle.llvm.tests.interop.values.NullValue;
 import com.oracle.truffle.llvm.tests.interop.values.StructObject;
@@ -54,7 +53,7 @@ import org.junit.runner.RunWith;
 @RunWith(TruffleRunner.class)
 public class TypedInteropTest extends InteropTestBase {
 
-    private static TruffleObject testLibrary;
+    private static Object testLibrary;
 
     @BeforeClass
     public static void loadTestBitcode() {
@@ -284,6 +283,29 @@ public class TypedInteropTest extends InteropTestBase {
         flipPoint.call(point);
         Assert.assertEquals("x", 24, point.get("x"));
         Assert.assertEquals("y", 42, point.get("y"));
+    }
+
+    public static class GetPointTypeNode extends SulongTestNode {
+
+        public GetPointTypeNode() {
+            super(testLibrary, "getPointType");
+        }
+    }
+
+    public static class FlipPointDynamicNode extends SulongTestNode {
+
+        public FlipPointDynamicNode() {
+            super(testLibrary, "flipPointDynamic");
+        }
+    }
+
+    @Test
+    public void testFlipPointDynamic(@Inject(GetPointTypeNode.class) CallTarget getPointType, @Inject(FlipPointDynamicNode.class) CallTarget flipPointDynamic) {
+        StructObject point = makePoint(123, 321);
+        Object type = getPointType.call();
+        flipPointDynamic.call(point, type);
+        Assert.assertEquals("x", 321, point.get("x"));
+        Assert.assertEquals("y", 123, point.get("y"));
     }
 
     public static class SumPointsNode extends SulongTestNode {

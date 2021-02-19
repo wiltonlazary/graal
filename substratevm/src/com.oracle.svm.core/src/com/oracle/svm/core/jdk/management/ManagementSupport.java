@@ -170,7 +170,7 @@ public final class ManagementSupport {
 
         Object existing = platformManagedObjectsMap.get(clazz);
         if (existing != null) {
-            throw UserError.abort("PlatformManagedObject already registered: " + clazz.getName());
+            throw UserError.abort("PlatformManagedObject already registered: %s", clazz.getName());
         }
         platformManagedObjectsMap.put(clazz, object);
         platformManagedObjectsSet.add(object);
@@ -197,7 +197,7 @@ public final class ManagementSupport {
 
         Object existing = platformManagedObjectsMap.get(clazz);
         if (existing instanceof PlatformManagedObject) {
-            throw UserError.abort("PlatformManagedObject already registered as a singleton: " + clazz.getName());
+            throw UserError.abort("PlatformManagedObject already registered as a singleton: %s", clazz.getName());
         }
 
         ArrayList<Object> newList = new ArrayList<>();
@@ -211,8 +211,29 @@ public final class ManagementSupport {
         platformManagedObjectsSet.addAll(objects);
     }
 
-    public boolean isRegisteredPlatformManagedObject(PlatformManagedObject object) {
-        return platformManagedObjectsSet.contains(object);
+    public boolean isAllowedPlatformManagedObject(PlatformManagedObject object) {
+        if (platformManagedObjectsSet.contains(object)) {
+            /* Fast path check: object provided by our registry. */
+            return true;
+        }
+
+        for (Class<? extends PlatformManagedObject> interf : ManagementFactory.getPlatformManagementInterfaces()) {
+            if (interf.isInstance(object)) {
+                if (ManagementFactory.getPlatformMXBeans(interf).contains(object)) {
+                    /*
+                     * Object is provided by the hosting HotSpot VM. It must not be reachable in the
+                     * image heap, because it is for the wrong VM.
+                     */
+                    return false;
+                }
+            }
+        }
+
+        /*
+         * Object provided neither by our registry nor by the hosting HotSpot VM, i.e., it is
+         * provided by the application. This is allowed.
+         */
+        return true;
     }
 
     public void noteThreadStart(Thread thread) {

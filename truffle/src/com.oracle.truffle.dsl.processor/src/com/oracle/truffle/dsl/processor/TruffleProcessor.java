@@ -166,6 +166,11 @@ public class TruffleProcessor extends AbstractProcessor implements ProcessCallba
     }
 
     @Override
+    public Set<String> getSupportedOptions() {
+        return TruffleProcessorOptions.getSupportedOptions();
+    }
+
+    @Override
     public void callback(TypeElement template) {
         for (AnnotationProcessor<?> generator : currentProcessors.get()) {
             DeclaredType annotationType = generator.getParser().getAnnotationType();

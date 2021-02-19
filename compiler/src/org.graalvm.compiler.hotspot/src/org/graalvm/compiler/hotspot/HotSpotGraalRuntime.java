@@ -24,22 +24,20 @@
  */
 package org.graalvm.compiler.hotspot;
 
-import jdk.vm.ci.code.Architecture;
-import jdk.vm.ci.code.stack.StackIntrospection;
-import jdk.vm.ci.common.InitTimer;
-import jdk.vm.ci.hotspot.HotSpotCompilationRequest;
-import jdk.vm.ci.hotspot.HotSpotJVMCIRuntime;
-import jdk.vm.ci.hotspot.HotSpotResolvedJavaMethod;
-import jdk.vm.ci.hotspot.HotSpotResolvedJavaType;
-import jdk.vm.ci.hotspot.HotSpotResolvedObjectType;
-import jdk.vm.ci.hotspot.HotSpotVMConfigStore;
-import jdk.vm.ci.meta.JavaKind;
-import jdk.vm.ci.meta.MetaAccessProvider;
-import jdk.vm.ci.meta.ResolvedJavaMethod;
-import jdk.vm.ci.meta.ResolvedJavaType;
-import jdk.vm.ci.runtime.JVMCI;
-import jdk.vm.ci.runtime.JVMCIBackend;
-import jdk.vm.ci.services.Services;
+import static jdk.vm.ci.common.InitTimer.timer;
+import static jdk.vm.ci.hotspot.HotSpotJVMCIRuntime.runtime;
+import static org.graalvm.compiler.core.common.GraalOptions.GeneratePIC;
+import static org.graalvm.compiler.core.common.GraalOptions.HotSpotPrintInlining;
+import static org.graalvm.compiler.hotspot.GraalHotSpotVMConfigAccess.JDK;
+
+import java.io.PrintStream;
+import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
+
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.Equivalence;
@@ -47,6 +45,7 @@ import org.graalvm.collections.UnmodifiableMapCursor;
 import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
 import org.graalvm.compiler.api.runtime.GraalRuntime;
 import org.graalvm.compiler.core.CompilationWrapper.ExceptionAction;
+import org.graalvm.compiler.core.Instrumentation;
 import org.graalvm.compiler.core.common.CompilationIdentifier;
 import org.graalvm.compiler.core.common.CompilationListenerProfiler;
 import org.graalvm.compiler.core.common.CompilerProfiler;
@@ -80,19 +79,22 @@ import org.graalvm.compiler.replacements.SnippetCounter.Group;
 import org.graalvm.compiler.runtime.RuntimeProvider;
 import org.graalvm.compiler.serviceprovider.GraalServices;
 
-import java.io.PrintStream;
-import java.util.ArrayList;
-import java.util.EnumMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
-
-import static jdk.vm.ci.common.InitTimer.timer;
-import static jdk.vm.ci.hotspot.HotSpotJVMCIRuntime.runtime;
-import static org.graalvm.compiler.core.common.GraalOptions.GeneratePIC;
-import static org.graalvm.compiler.core.common.GraalOptions.HotSpotPrintInlining;
-import static org.graalvm.compiler.hotspot.GraalHotSpotVMConfigAccess.JDK;
+import jdk.vm.ci.code.Architecture;
+import jdk.vm.ci.code.stack.StackIntrospection;
+import jdk.vm.ci.common.InitTimer;
+import jdk.vm.ci.hotspot.HotSpotCompilationRequest;
+import jdk.vm.ci.hotspot.HotSpotJVMCIRuntime;
+import jdk.vm.ci.hotspot.HotSpotResolvedJavaMethod;
+import jdk.vm.ci.hotspot.HotSpotResolvedJavaType;
+import jdk.vm.ci.hotspot.HotSpotResolvedObjectType;
+import jdk.vm.ci.hotspot.HotSpotVMConfigStore;
+import jdk.vm.ci.meta.JavaKind;
+import jdk.vm.ci.meta.MetaAccessProvider;
+import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.vm.ci.meta.ResolvedJavaType;
+import jdk.vm.ci.runtime.JVMCI;
+import jdk.vm.ci.runtime.JVMCIBackend;
+import jdk.vm.ci.services.Services;
 
 //JaCoCo Exclude
 
@@ -155,7 +157,7 @@ public final class HotSpotGraalRuntime implements HotSpotGraalRuntimeProvider {
     /**
      * @param nameQualifier a qualifier to be added to this runtime's {@linkplain #getName() name}
      * @param compilerConfigurationFactory factory for the compiler configuration
-     *            {@link CompilerConfigurationFactory#selectFactory(String, OptionValues)}
+     *            {@link CompilerConfigurationFactory#selectFactory}
      */
     @SuppressWarnings("try")
     HotSpotGraalRuntime(String nameQualifier, HotSpotJVMCIRuntime jvmciRuntime, CompilerConfigurationFactory compilerConfigurationFactory, OptionValues initialOptions) {
@@ -189,11 +191,8 @@ public final class HotSpotGraalRuntime implements HotSpotGraalRuntimeProvider {
         if (management != null) {
             try {
                 management.initialize(this, config);
-            } catch (ThreadDeath td) {
-                throw td;
             } catch (Throwable error) {
-                TTY.println("Cannot install GraalVM MBean due to " + error.getMessage());
-                management = null;
+                handleManagementInitializationFailure(error);
             }
         }
 
@@ -247,37 +246,58 @@ public final class HotSpotGraalRuntime implements HotSpotGraalRuntimeProvider {
     }
 
     /**
-     * Constants denoting the GC algorithms available in HotSpot.
+     * Constants denoting the GC algorithms available in HotSpot. The names of the constants match
+     * the constants in the {@code CollectedHeap::Name} C++ enum.
      */
     public enum HotSpotGC {
         // Supported GCs
-        Serial(true, "UseSerialGC", true),
-        Parallel(true, "UseParallelGC", true, "UseParallelOldGC", JDK < 15, "UseParNewGC", JDK < 10),
-        CMS(true, "UseConcMarkSweepGC", JDK < 14),
-        G1(true, "UseG1GC", true),
+        Serial(true, JDK >= 11, "UseSerialGC", true),
+        Parallel(true, JDK >= 11, "UseParallelGC", true, "UseParallelOldGC", JDK < 15, "UseParNewGC", JDK < 10),
+        CMS(true, JDK >= 11 && JDK <= 14, "UseConcMarkSweepGC", JDK < 14),
+        G1(true, JDK >= 11, "UseG1GC", true),
 
         // Unsupported GCs
-        Epsilon(false, "UseEpsilonGC", JDK >= 11),
-        Z(false, "UseZGC", JDK >= 11);
+        Epsilon(false, JDK >= 11, "UseEpsilonGC", JDK >= 11),
+        Z(false, JDK >= 11, "UseZGC", JDK >= 11),
+        Shenandoah(false, JDK >= 12, "UseShenandoahGC", JDK >= 12);
 
-        HotSpotGC(boolean supported,
+        HotSpotGC(boolean supported, boolean expectNamePresent,
                         String flag1, boolean expectFlagPresent1,
                         String flag2, boolean expectFlagPresent2,
                         String flag3, boolean expectFlagPresent3) {
             this.supported = supported;
+            this.expectNamePresent = expectNamePresent;
             this.expectFlagsPresent = new boolean[]{expectFlagPresent1, expectFlagPresent2, expectFlagPresent3};
             this.flags = new String[]{flag1, flag2, flag3};
         }
 
-        HotSpotGC(boolean supported, String flag, boolean expectFlagPresent) {
+        HotSpotGC(boolean supported, boolean expectNamePresent, String flag, boolean expectFlagPresent) {
             this.supported = supported;
+            this.expectNamePresent = expectNamePresent;
             this.expectFlagsPresent = new boolean[]{expectFlagPresent};
             this.flags = new String[]{flag};
         }
 
+        /**
+         * Specifies if this GC supported by Graal.
+         */
         final boolean supported;
-        final boolean[] expectFlagsPresent;
+
+        /**
+         * Specifies if {@link #name()} is expected to be present in the {@code CollectedHeap::Name}
+         * C++ enum.
+         */
+        final boolean expectNamePresent;
+
+        /**
+         * The VM flags that will select this GC.
+         */
         private final String[] flags;
+
+        /**
+         * Specifies which {@link #flags} are expected to be present in the VM.
+         */
+        final boolean[] expectFlagsPresent;
 
         public boolean isSelected(GraalHotSpotVMConfig config) {
             boolean selected = false;
@@ -292,6 +312,20 @@ public final class HotSpotGraalRuntime implements HotSpotGraalRuntimeProvider {
                 }
             }
             return selected;
+        }
+
+        /**
+         * Gets the GC matching {@code name}.
+         *
+         * @param name the ordinal of a {@code CollectedHeap::Name} value
+         */
+        static HotSpotGC forName(int name, GraalHotSpotVMConfig config) {
+            for (HotSpotGC gc : HotSpotGC.values()) {
+                if (config.getConstant("CollectedHeap::" + gc.name(), Integer.class, -1, gc.expectNamePresent) == name) {
+                    return gc;
+                }
+            }
+            return null;
         }
     }
 
@@ -494,15 +528,17 @@ public final class HotSpotGraalRuntime implements HotSpotGraalRuntimeProvider {
 
         outputDirectory.close();
 
-        shutdownLibGraal();
+        shutdownLibGraal(this);
     }
 
     /**
      * Substituted by
      * {@code com.oracle.svm.graal.hotspot.libgraal.Target_org_graalvm_compiler_hotspot_HotSpotGraalRuntime}
-     * to call {@code org.graalvm.nativeimage.VMRuntime.shutdown()}.
+     * to notify {@code org.graalvm.libgraal.LibGraalIsolate} and call
+     * {@code org.graalvm.nativeimage.VMRuntime.shutdown()}.
      */
-    private static void shutdownLibGraal() {
+    @SuppressWarnings("unused")
+    private static void shutdownLibGraal(HotSpotGraalRuntime runtime) {
     }
 
     void clearMetrics() {
@@ -545,6 +581,14 @@ public final class HotSpotGraalRuntime implements HotSpotGraalRuntimeProvider {
      */
     public HotSpotGraalManagementRegistration getManagement() {
         return management;
+    }
+
+    public void handleManagementInitializationFailure(Throwable cause) {
+        if (cause instanceof ThreadDeath) {
+            throw (ThreadDeath) cause;
+        }
+        TTY.println("Cannot install GraalVM MBean due to " + cause.getMessage());
+        management = null;
     }
 
     /**

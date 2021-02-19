@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,12 +43,15 @@ package org.graalvm.polyglot;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.ZoneId;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Predicate;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -567,10 +570,12 @@ public final class Context implements AutoCloseable {
      * object}. Host objects expose all their public java fields and methods as
      * {@link Value#getMember(String) members}. In addition, Java arrays and subtypes of
      * {@link List} will be interpreted as a value with {@link Value#hasArrayElements() array
-     * elements} and single method interfaces annotated with {@link FunctionalInterface} are
-     * {@link Value#execute(Object...) executable} directly. Java {@link Class} instances are
-     * interpreted as {@link Value#canInstantiate() instantiable}, but they do not expose Class
-     * methods as members.
+     * elements}. The subtypes of {@link Iterable} will be interpreted as a value with
+     * {@link Value#hasIterator()} iterator}. The subtypes of {@link Iterator} will be interpreted
+     * as an {@link Value#isIterator() iterator} value. And single method interfaces annotated with
+     * {@link FunctionalInterface} are {@link Value#execute(Object...) executable} directly. Java
+     * {@link Class} instances are interpreted as {@link Value#canInstantiate() instantiable}, but
+     * they do not expose Class methods as members.
      * </ol>
      * <p>
      * <b>Basic Examples:</b>
@@ -762,6 +767,30 @@ public final class Context implements AutoCloseable {
      */
     public void close() {
         close(false);
+    }
+
+    /**
+     * Use this method to interrupt this context. The interruption is non-destructive meaning the
+     * context is still usable after this method finishes. Please note that guest finally blocks are
+     * executed during interrupt. A context thread may not be interruptiple if it uses
+     * non-interruptible waiting or executes non-interruptible host code.
+     * 
+     * This method may be used as a "soft exit", meaning that it can be used before
+     * {@link #close(boolean) close(true)} is executed.
+     *
+     * @param timeout specifies the duration the interrupt method will wait for the active threads
+     *            of the context to be finished. Setting the duration to {@link Duration#ZERO 0}
+     *            means wait indefinitely.
+     * @throws IllegalStateException in case the context is entered in the current thread.
+     * @throws TimeoutException in case the interrupt was not successful, i.e., not all threads were
+     *             finished within the specified time limit.
+     *
+     * @since 20.3
+     */
+    public void interrupt(Duration timeout) throws TimeoutException {
+        if (!impl.interrupt(this, timeout)) {
+            throw new TimeoutException("Interrupt timed out.");
+        }
     }
 
     /**
@@ -1138,6 +1167,9 @@ public final class Context implements AutoCloseable {
          * options in production environments. If set to {@code false} (the default), then passing
          * an experimental option results in an {@link IllegalArgumentException} when the context is
          * built.
+         * <p>
+         * Alternatively {@link Engine.Builder#allowExperimentalOptions(boolean)} may be used when
+         * constructing the context using an {@link #engine(Engine) explicit engine}.
          *
          * @since 19.0
          */

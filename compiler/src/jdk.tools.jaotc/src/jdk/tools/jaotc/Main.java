@@ -54,6 +54,7 @@ import org.graalvm.compiler.hotspot.HotSpotGraalOptionValues;
 import org.graalvm.compiler.hotspot.HotSpotGraalRuntime;
 import org.graalvm.compiler.hotspot.HotSpotGraalRuntime.HotSpotGC;
 import org.graalvm.compiler.hotspot.HotSpotHostBackend;
+import org.graalvm.compiler.hotspot.HotSpotMarkId;
 import org.graalvm.compiler.hotspot.meta.HotSpotInvokeDynamicPlugin;
 import org.graalvm.compiler.java.GraphBuilderPhase;
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
@@ -67,9 +68,9 @@ import org.graalvm.compiler.runtime.RuntimeProvider;
 
 import jdk.tools.jaotc.Options.Option;
 import jdk.tools.jaotc.binformat.BinaryContainer;
+import jdk.vm.ci.hotspot.HotSpotJVMCIRuntime;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
-import jdk.vm.ci.runtime.JVMCI;
 
 public final class Main {
 
@@ -175,8 +176,19 @@ public final class Main {
                 graalOptions = new OptionValues(graalOptions, TieredAOT, options.tiered);
             }
             graalOptions = new OptionValues(graalOptions, GeneratePIC, true, ImmutableCode, true);
-            GraalJVMCICompiler graalCompiler = HotSpotGraalCompilerFactory.createCompiler("JAOTC", JVMCI.getRuntime(), graalOptions, CompilerConfigurationFactory.selectFactory(null, graalOptions));
+            HotSpotJVMCIRuntime jvmciRuntime = HotSpotJVMCIRuntime.runtime();
+            CompilerConfigurationFactory factory = CompilerConfigurationFactory.selectFactory(null, graalOptions, jvmciRuntime);
+            GraalJVMCICompiler graalCompiler = HotSpotGraalCompilerFactory.createCompiler("JAOTC", jvmciRuntime, graalOptions, factory);
             HotSpotGraalRuntime runtime = (HotSpotGraalRuntime) graalCompiler.getGraalRuntime();
+            GraalHotSpotVMConfig graalHotSpotVMConfig = runtime.getVMConfig();
+
+            if (graalHotSpotVMConfig.verifyOops) {
+                if (!HotSpotMarkId.VERIFY_OOPS.isAvailable() || !HotSpotMarkId.VERIFY_OOP_COUNT_ADDRESS.isAvailable()) {
+                    System.err.println("Running jaotc with -XX:+VerifyOops is not supported by this JDK");
+                    return false;
+                }
+            }
+
             HotSpotHostBackend backend = (HotSpotHostBackend) runtime.getCapability(RuntimeProvider.class).getHostBackend();
             MetaAccessProvider metaAccess = backend.getProviders().getMetaAccess();
             filters = new GraalFilters(metaAccess);
@@ -207,12 +219,12 @@ public final class Main {
                     return false;
                 }
             };
+
             AOTBackend aotBackend = new AOTBackend(this, graalOptions, backend, indyPlugin);
             SnippetReflectionProvider snippetReflection = aotBackend.getProviders().getSnippetReflection();
             AOTCompiler compiler = new AOTCompiler(this, graalOptions, aotBackend, options.threads);
             classes = compiler.compileClasses(classes);
 
-            GraalHotSpotVMConfig graalHotSpotVMConfig = runtime.getVMConfig();
             PhaseSuite<HighTierContext> graphBuilderSuite = aotBackend.getGraphBuilderSuite();
             ListIterator<BasePhase<? super HighTierContext>> iterator = graphBuilderSuite.findPhase(GraphBuilderPhase.class);
             GraphBuilderConfiguration graphBuilderConfig = ((GraphBuilderPhase) iterator.previous()).getGraphBuilderConfig();

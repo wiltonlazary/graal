@@ -33,6 +33,7 @@ import static org.graalvm.compiler.hotspot.HotSpotBackend.GHASH_PROCESS_BLOCKS;
 import static org.graalvm.compiler.hotspot.HotSpotBackend.UPDATE_BYTES_CRC32;
 import static org.graalvm.compiler.hotspot.HotSpotBackend.UPDATE_BYTES_CRC32C;
 import static org.graalvm.compiler.hotspot.meta.HotSpotAOTProfilingPlugin.Options.TieredAOT;
+import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.HOTSPOT_OOP_HANDLE_LOCATION;
 import static org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil.JAVA_THREAD_THREAD_OBJECT_LOCATION;
 import static org.graalvm.compiler.java.BytecodeParserOptions.InlineDuringParsing;
 import static org.graalvm.compiler.nodes.ConstantNode.forBoolean;
@@ -70,9 +71,9 @@ import org.graalvm.compiler.hotspot.replacements.DigestBaseSubstitutions;
 import org.graalvm.compiler.hotspot.replacements.FastNotifyNode;
 import org.graalvm.compiler.hotspot.replacements.HotSpotArraySubstitutions;
 import org.graalvm.compiler.hotspot.replacements.HotSpotClassSubstitutions;
+import org.graalvm.compiler.hotspot.replacements.HotSpotIdentityHashCodeNode;
 import org.graalvm.compiler.hotspot.replacements.HotSpotReflectionGetCallerClassNode;
 import org.graalvm.compiler.hotspot.replacements.HotSpotReplacementsUtil;
-import org.graalvm.compiler.hotspot.replacements.IdentityHashCodeNode;
 import org.graalvm.compiler.hotspot.replacements.ObjectCloneNode;
 import org.graalvm.compiler.hotspot.replacements.ReflectionSubstitutions;
 import org.graalvm.compiler.hotspot.replacements.ThreadSubstitutions;
@@ -112,6 +113,7 @@ import org.graalvm.compiler.nodes.graphbuilderconf.InvocationPlugins.Registratio
 import org.graalvm.compiler.nodes.java.ArrayLengthNode;
 import org.graalvm.compiler.nodes.java.DynamicNewInstanceNode;
 import org.graalvm.compiler.nodes.java.NewArrayNode;
+import org.graalvm.compiler.nodes.java.ValidateNewInstanceClassNode;
 import org.graalvm.compiler.nodes.memory.OnHeapMemoryAccess.BarrierType;
 import org.graalvm.compiler.nodes.memory.ReadNode;
 import org.graalvm.compiler.nodes.memory.address.AddressNode;
@@ -173,10 +175,11 @@ public class HotSpotGraphBuilderPlugins {
         InvocationPlugins invocationPlugins = new HotSpotInvocationPlugins(graalRuntime, config, compilerConfiguration);
 
         Plugins plugins = new Plugins(invocationPlugins);
+        plugins.appendNodePlugin(new HotSpotExceptionDispatchPlugin(config, wordTypes.getWordKind()));
         if (!IS_IN_NATIVE_IMAGE) {
             // In libgraal all word related operations have been fully processed so this is unneeded
             HotSpotWordOperationPlugin wordOperationPlugin = new HotSpotWordOperationPlugin(snippetReflection, wordTypes);
-            HotSpotNodePlugin nodePlugin = new HotSpotNodePlugin(wordOperationPlugin, config, wordTypes);
+            HotSpotNodePlugin nodePlugin = new HotSpotNodePlugin(wordOperationPlugin);
 
             plugins.appendTypePlugin(nodePlugin);
             plugins.appendNodePlugin(nodePlugin);
@@ -273,7 +276,7 @@ public class HotSpotGraphBuilderPlugins {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver) {
                 ValueNode object = receiver.get();
-                b.addPush(JavaKind.Int, new IdentityHashCodeNode(object, b.bci()));
+                b.addPush(JavaKind.Int, new HotSpotIdentityHashCodeNode(object, b.bci()));
                 return true;
             }
 
@@ -319,7 +322,6 @@ public class HotSpotGraphBuilderPlugins {
 
         r.registerMethodSubstitution(HotSpotClassSubstitutions.class, "getModifiers", Receiver.class);
         r.registerMethodSubstitution(HotSpotClassSubstitutions.class, "isInterface", Receiver.class);
-        r.registerMethodSubstitution(HotSpotClassSubstitutions.class, "isArray", Receiver.class);
         r.register1("isPrimitive", Receiver.class, new InvocationPlugin() {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver) {
@@ -393,7 +395,7 @@ public class HotSpotGraphBuilderPlugins {
                             @Override
                             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode srcBase, ValueNode srcOffset, ValueNode destBase,
                                             ValueNode destOffset, ValueNode bytes) {
-                                b.add(new UnsafeCopyMemoryNode(config.doingUnsafeAccessOffset == Integer.MAX_VALUE, receiver.get(), srcBase, srcOffset, destBase, destOffset, bytes));
+                                b.add(new UnsafeCopyMemoryNode(config.doingUnsafeAccessOffset != Integer.MAX_VALUE, receiver.get(), srcBase, srcOffset, destBase, destOffset, bytes));
                                 return true;
                             }
                         });
@@ -409,7 +411,8 @@ public class HotSpotGraphBuilderPlugins {
                  * check. Such a DynamicNewInstanceNode is also never constant folded to a
                  * NewInstanceNode.
                  */
-                b.addPush(JavaKind.Object, new DynamicNewInstanceNode(b.nullCheckedValue(clazz, DeoptimizationAction.None), true));
+                ValueNode clazzLegal = b.add(new ValidateNewInstanceClassNode(clazz));
+                b.addPush(JavaKind.Object, new DynamicNewInstanceNode(b.nullCheckedValue(clazzLegal, DeoptimizationAction.None), true));
                 return true;
             }
         });
@@ -422,7 +425,7 @@ public class HotSpotGraphBuilderPlugins {
         r.register1("identityHashCode", Object.class, new InvocationPlugin() {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode object) {
-                b.addPush(JavaKind.Int, new IdentityHashCodeNode(object, b.bci()));
+                b.addPush(JavaKind.Int, new HotSpotIdentityHashCodeNode(object, b.bci()));
                 return true;
             }
 
@@ -505,12 +508,22 @@ public class HotSpotGraphBuilderPlugins {
                 AddressNode address = b.add(new OffsetAddressNode(thread, offset));
                 // JavaThread::_threadObj is never compressed
                 ObjectStamp stamp = StampFactory.objectNonNull(TypeReference.create(b.getAssumptions(), metaAccess.lookupJavaType(Thread.class)));
-                b.addPush(JavaKind.Object, new ReadNode(address, JAVA_THREAD_THREAD_OBJECT_LOCATION, stamp, BarrierType.NONE));
+                ReadNode value = b.add(new ReadNode(address, JAVA_THREAD_THREAD_OBJECT_LOCATION,
+                                config.threadObjectFieldIsHandle ? StampFactory.forKind(wordTypes.getWordKind()) : stamp, BarrierType.NONE));
+                if (config.threadObjectFieldIsHandle) {
+                    // Read the Object from the OopHandle
+                    ValueNode handleOffset = ConstantNode.forIntegerKind(wordTypes.getWordKind(), 0, b.getGraph());
+                    AddressNode handleAddress = b.add(new OffsetAddressNode(value, handleOffset));
+                    value = b.add(new ReadNode(handleAddress, HOTSPOT_OOP_HANDLE_LOCATION, stamp, BarrierType.NONE));
+                }
+                b.push(JavaKind.Object, value);
                 return true;
             }
         });
 
         if (config.osThreadInterruptedOffset != Integer.MAX_VALUE) {
+            // This substitution is no longer in used when threadObj is a handle
+            assert !config.threadObjectFieldIsHandle;
             r.registerMethodSubstitution(ThreadSubstitutions.class, "isInterrupted", Receiver.class, boolean.class);
         }
 
@@ -571,8 +584,6 @@ public class HotSpotGraphBuilderPlugins {
             assert config.aescryptDecryptBlockStub != 0L;
             assert config.cipherBlockChainingEncryptAESCryptStub != 0L;
             assert config.cipherBlockChainingDecryptAESCryptStub != 0L;
-            String arch = config.osArch;
-            String decryptSuffix = arch.equals("sparc") ? "WithOriginalKey" : "";
 
             Registration r = new Registration(plugins, "com.sun.crypto.provider.CipherBlockChaining", replacements);
 
@@ -581,7 +592,7 @@ public class HotSpotGraphBuilderPlugins {
                             byte[].class, int.class);
 
             Pair<String, String> cbcDecryptName = selectIntrinsicName(config, "com/sun/crypto/provider/CipherBlockChaining", "implDecrypt", "decrypt");
-            registerAndCheckMismatch(r, CipherBlockChainingSubstitutions.class, cbcDecryptName, cbcDecryptName.getLeft() + decryptSuffix, Receiver.class, byte[].class, int.class, int.class,
+            registerAndCheckMismatch(r, CipherBlockChainingSubstitutions.class, cbcDecryptName, cbcDecryptName.getLeft(), Receiver.class, byte[].class, int.class, int.class,
                             byte[].class, int.class);
 
             r = new Registration(plugins, "com.sun.crypto.provider.AESCrypt", replacements);
@@ -590,7 +601,7 @@ public class HotSpotGraphBuilderPlugins {
             registerAndCheckMismatch(r, AESCryptSubstitutions.class, aesEncryptName, Receiver.class, byte[].class, int.class, byte[].class, int.class);
 
             Pair<String, String> aesDecryptName = selectIntrinsicName(config, "com/sun/crypto/provider/AESCrypt", "implDecryptBlock", "decryptBlock");
-            registerAndCheckMismatch(r, AESCryptSubstitutions.class, aesDecryptName, aesDecryptName.getLeft() + decryptSuffix, Receiver.class, byte[].class, int.class, byte[].class, int.class);
+            registerAndCheckMismatch(r, AESCryptSubstitutions.class, aesDecryptName, aesDecryptName.getLeft(), Receiver.class, byte[].class, int.class, byte[].class, int.class);
         }
     }
 

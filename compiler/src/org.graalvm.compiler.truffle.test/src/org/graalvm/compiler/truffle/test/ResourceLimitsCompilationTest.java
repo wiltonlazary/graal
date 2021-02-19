@@ -24,8 +24,6 @@
  */
 package org.graalvm.compiler.truffle.test;
 
-import static org.junit.Assume.assumeFalse;
-
 import java.util.concurrent.Semaphore;
 import java.util.function.Predicate;
 
@@ -35,6 +33,7 @@ import org.graalvm.compiler.nodes.InvokeWithExceptionNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.calc.AddNode;
 import org.graalvm.compiler.nodes.java.AtomicReadAndAddNode;
+import org.graalvm.compiler.nodes.java.LoweredAtomicReadAndAddNode;
 import org.graalvm.compiler.nodes.java.MethodCallTargetNode;
 import org.graalvm.compiler.nodes.memory.ReadNode;
 import org.graalvm.compiler.nodes.memory.WriteNode;
@@ -133,7 +132,7 @@ public class ResourceLimitsCompilationTest extends PartialEvaluationTest {
                  * Verify that the statements fold to a single read for the context and a single
                  * read/write for the statement counts.
                  */
-                Assert.assertEquals(1, countNodes(graph, ReadNode.TYPE, (n) -> n.getLocationIdentity().toString().equals("ContextThreadLocal.activeSingleContextNonVolatile")));
+                Assert.assertEquals(1, countNodes(graph, ReadNode.TYPE, (n) -> n.getLocationIdentity().toString().equals("PolyglotContextThreadLocal.activeSingleContextNonVolatile")));
                 Assert.assertEquals(1, countNodes(graph, ReadNode.TYPE, (n) -> n.getLocationIdentity().toString().equals("PolyglotContextImpl.statementCounter")));
                 Assert.assertEquals(0, countNodes(graph, ReadNode.TYPE, (n) -> n.getLocationIdentity().toString().equals("PolyglotContextImpl.statementLimit")));
                 Assert.assertEquals(1, countNodes(graph, WriteNode.TYPE, (n) -> n.getLocationIdentity().toString().equals("PolyglotContextImpl.statementCounter")));
@@ -151,7 +150,7 @@ public class ResourceLimitsCompilationTest extends PartialEvaluationTest {
          * Verify that the statements fold to a single read for the context and a single read/write
          * for the statement counts.
          */
-        Assert.assertEquals(1, countNodes(graph, ReadNode.TYPE, (n) -> n.getLocationIdentity().toString().equals("ContextThreadLocal.activeSingleContextNonVolatile")));
+        Assert.assertEquals(1, countNodes(graph, ReadNode.TYPE, (n) -> n.getLocationIdentity().toString().equals("PolyglotContextThreadLocal.activeSingleContextNonVolatile")));
         Assert.assertEquals(1, countNodes(graph, ReadNode.TYPE, (n) -> n.getLocationIdentity().toString().equals("PolyglotContextImpl.statementCounter")));
         Assert.assertEquals(1, countNodes(graph, WriteNode.TYPE, (n) -> n.getLocationIdentity().toString().equals("PolyglotContextImpl.statementCounter")));
         Assert.assertEquals(0, countNodes(graph, ReadNode.TYPE, (n) -> n.getLocationIdentity().toString().equals("PolyglotContextImpl.statementLimit")));
@@ -188,8 +187,6 @@ public class ResourceLimitsCompilationTest extends PartialEvaluationTest {
     @Test
     @SuppressWarnings("try")
     public void testStatementLimitContextMultiThread() throws InterruptedException {
-        assumeFalse("skipping SPARC unsupported test", isSPARC(getBackend().getTarget().arch));
-
         ResourceLimits limits = ResourceLimits.newBuilder().//
                         statementLimit(5000, null).//
                         build();
@@ -203,7 +200,7 @@ public class ResourceLimitsCompilationTest extends PartialEvaluationTest {
                 Assert.assertEquals(1, countNodes(graph, MethodCallTargetNode.TYPE));
                 Assert.assertEquals(6, countNodes(graph, AtomicReadAndAddNode.TYPE));
                 compile(target, graph);
-                Assert.assertEquals(6, countNodes(graph, AtomicReadAndAddNode.TYPE));
+                Assert.assertEquals(6, countNodes(graph, LoweredAtomicReadAndAddNode.TYPE));
                 Assert.assertEquals(1, countNodes(graph, InvokeWithExceptionNode.TYPE));
             }
         }
