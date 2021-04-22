@@ -22,9 +22,18 @@
  */
 package com.oracle.truffle.espresso.impl;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+
 import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.espresso.bytecode.BytecodeStream;
 import com.oracle.truffle.espresso.bytecode.Bytecodes;
@@ -40,19 +49,12 @@ import com.oracle.truffle.espresso.descriptors.Symbol;
 import com.oracle.truffle.espresso.jdwp.api.ErrorCodes;
 import com.oracle.truffle.espresso.jdwp.api.Ids;
 import com.oracle.truffle.espresso.jdwp.api.KlassRef;
+import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.Attribute;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.EspressoException;
 import com.oracle.truffle.espresso.runtime.StaticObject;
 import com.oracle.truffle.espresso.vm.InterpreterToVM;
-
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.regex.Matcher;
 
 public final class ClassRedefinition {
 
@@ -82,21 +84,6 @@ public final class ClassRedefinition {
         CONSTANT_POOL_CHANGE,
         NEW_CLASS,
         INVALID;
-    }
-
-    public static void lock() {
-        synchronized (redefineLock) {
-            check();
-            locked = true;
-        }
-    }
-
-    public static void unlock() {
-        synchronized (redefineLock) {
-            check();
-            locked = false;
-            redefineLock.notifyAll();
-        }
     }
 
     public static void begin() {
@@ -166,12 +153,13 @@ public final class ClassRedefinition {
             ClassChange classChange;
             DetectedChange detectedChange = new DetectedChange();
             if (klass instanceof ObjectKlass) {
-                parserKlass = ClassfileParser.parse(new ClassfileStream(bytes, null), "L" + hotSwapInfo.getName() + ";", null, context);
+                StaticObject loader = ((ObjectKlass) klass).getDefiningClassLoader();
+                parserKlass = ClassfileParser.parse(new ClassfileStream(bytes, null), loader, "L" + hotSwapInfo.getName() + ";", context);
                 if (hotSwapInfo.isPatched()) {
                     byte[] patched = hotSwapInfo.getPatchedBytes();
                     newParserKlass = parserKlass;
                     // we detect changes against the patched bytecode
-                    parserKlass = ClassfileParser.parse(new ClassfileStream(patched, null), "L" + hotSwapInfo.getNewName() + ";", null, context);
+                    parserKlass = ClassfileParser.parse(new ClassfileStream(patched, null), loader, "L" + hotSwapInfo.getNewName() + ";", context);
                 }
                 classChange = detectClassChanges(parserKlass, (ObjectKlass) klass, detectedChange, newParserKlass);
             } else {
@@ -519,16 +507,16 @@ public final class ClassRedefinition {
     }
 
     private static boolean checkLineNumberTable(LineNumberTableAttribute table1, LineNumberTableAttribute table2) {
-        LineNumberTableAttribute.Entry[] oldEntries = table1.getEntries();
-        LineNumberTableAttribute.Entry[] newEntries = table2.getEntries();
+        List<LineNumberTableAttribute.Entry> oldEntries = table1.getEntries();
+        List<LineNumberTableAttribute.Entry> newEntries = table2.getEntries();
 
-        if (oldEntries.length != newEntries.length) {
+        if (oldEntries.size() != newEntries.size()) {
             return true;
         }
 
-        for (int i = 0; i < oldEntries.length; i++) {
-            LineNumberTableAttribute.Entry oldEntry = oldEntries[i];
-            LineNumberTableAttribute.Entry newEntry = newEntries[i];
+        for (int i = 0; i < oldEntries.size(); i++) {
+            LineNumberTableAttribute.Entry oldEntry = oldEntries.get(i);
+            LineNumberTableAttribute.Entry newEntry = newEntries.get(i);
             if (oldEntry.getLineNumber() != newEntry.getLineNumber() || oldEntry.getBCI() != newEntry.getBCI()) {
                 return true;
             }
@@ -628,5 +616,25 @@ public final class ClassRedefinition {
         }
         oldKlass.redefineClass(packet, refreshSubClasses, ids);
         return 0;
+    }
+
+    @TruffleBoundary
+    public static Method handleRemovedMethod(Method resolutionSeed, Klass accessingKlass, StaticObject receiver) {
+        // wait for potential ongoing redefinition to complete
+        check();
+        Klass lookupKlass = receiver != null ? receiver.getKlass() : resolutionSeed.getDeclaringKlass();
+        Method replacementMethod = lookupKlass.lookupMethod(resolutionSeed.getName(), resolutionSeed.getRawSignature(), accessingKlass);
+        Meta meta = resolutionSeed.getMeta();
+        if (replacementMethod == null) {
+            throw meta.throwExceptionWithMessage(meta.java_lang_NoSuchMethodError,
+                            meta.toGuestString(resolutionSeed.getDeclaringKlass().getNameAsString() + "." + resolutionSeed.getName() + resolutionSeed.getRawSignature()) +
+                                            " was removed by class redefinition");
+        } else if (resolutionSeed.isStatic() != replacementMethod.isStatic()) {
+            String message = resolutionSeed.isStatic() ? "expected static method: " : "expected non-static method:" + replacementMethod.getName();
+            throw meta.throwExceptionWithMessage(meta.java_lang_IncompatibleClassChangeError, message);
+        } else {
+            // Update to the latest version of the replacement method
+            return replacementMethod;
+        }
     }
 }

@@ -1,7 +1,7 @@
 #
 # ----------------------------------------------------------------------------------------------------
 #
-# Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -64,6 +64,8 @@ else:
     from io import StringIO
     def _decode(x):
         return x.decode()
+
+USE_NI_JPMS = os.environ.get('USE_NATIVE_IMAGE_JAVA_PLATFORM_MODULE_SYSTEM', 'false').lower() == 'true'
 
 suite = mx.suite('substratevm')
 svmSuites = [suite]
@@ -271,7 +273,8 @@ GraalTags = Tags([
     'build',
     'benchmarktest',
     "nativeimagehelp",
-    'muslcbuild'
+    'muslcbuild',
+    'hellomodule'
 ])
 
 
@@ -427,6 +430,21 @@ def svm_gate_body(args, tasks):
             with native_image_context(IMAGE_ASSERTION_FLAGS) as native_image:
                 native_unittests_task()
 
+    with Task('Run Truffle unittests with SVM image', tasks, tags=["svmjunit"]) as t:
+        if t:
+            build()
+
+            truffle_args = ['--build-args', '--macro:truffle',
+                                        '-H:MaxRuntimeCompileMethods=5000',
+                                        '-H:+TruffleCheckBlackListedMethods',
+                                        '--run-args', '--very-verbose', '--enable-timing']
+
+            with native_image_context(IMAGE_ASSERTION_FLAGS) as native_image:
+                # ContextPreInitializationNativeImageTest can only run with its own image.
+                # See class javadoc for details.
+                native_unittest(['com.oracle.truffle.api.test.polyglot.ContextPreInitializationNativeImageTest'] + truffle_args)
+                native_unittest(['com.oracle.truffle.api.test.TruffleSafepointTest'] + truffle_args)
+
     with Task('Run Truffle NFI unittests with SVM image', tasks, tags=["svmjunit"]) as t:
         if t:
             build()
@@ -475,17 +493,17 @@ def svm_gate_body(args, tasks):
             maven_plugin_install([])
             maven_plugin_test([])
 
+    with Task('module build demo', tasks, tags=[GraalTags.hellomodule]) as t:
+        if t:
+            hellomodule([])
+
 
 def native_unittests_task():
-    if not svm_java8():
-        # Currently not working on Java > 8
-        mx_unittest.add_global_ignore_glob('com.oracle.svm.test.ServiceLoaderTest')
     if mx.is_windows():
         # GR-24075
         mx_unittest.add_global_ignore_glob('com.oracle.svm.test.ProcessPropertiesTest')
 
-    # We need the -H:+EnableAllSecurityServices for com.oracle.svm.test.SecurityServiceTest
-    native_unittest(['--build-args', _native_unittest_features, '-H:+EnableAllSecurityServices'])
+    native_unittest(['--build-args', _native_unittest_features])
 
 
 def javac_image_command(javac_path):
@@ -842,7 +860,7 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
     short_name='svm',
     license_files=[],
     third_party_license_files=[],
-    dependencies=['GraalVM compiler', 'Truffle Macro', 'Truffle NFI'],
+    dependencies=['GraalVM compiler', 'Truffle Macro', 'SVM Truffle NFI Support'],
     jar_distributions=['substratevm:LIBRARY_SUPPORT'],
     builder_jar_distributions=[
         'substratevm:SVM',
@@ -850,13 +868,29 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
         'substratevm:POINTSTO',
     ],
     support_distributions=['substratevm:SVM_GRAALVM_SUPPORT'],
+    stability="earlyadopter",
+    jlink=False,
+))
+
+mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmLanguage(
+    suite=suite,
+    name='SVM Truffle NFI Support',
+    short_name='svmnfi',
+    license_files=[],
+    third_party_license_files=[],
+    dir_name='nfi',
+    dependencies=['SubstrateVM', 'Truffle NFI'],
+    truffle_jars=[],
+    builder_jar_distributions=['substratevm:SVM_LIBFFI'],
+    support_distributions=['substratevm:SVM_NFI_GRAALVM_SUPPORT'],
 ))
 
 def _native_image_launcher_main_class():
     """
     Gets the name of the entry point for running com.oracle.svm.driver.NativeImage.
     """
-    return "com.oracle.svm.driver.NativeImage" + ("" if svm_java8() else "$JDK9Plus")
+    return "com.oracle.svm.driver.NativeImage"
+
 
 def _native_image_launcher_extra_jvm_args():
     """
@@ -864,12 +898,13 @@ def _native_image_launcher_extra_jvm_args():
     """
     if svm_java8():
         return []
+    # Support for running as Java module
+    res = []
     jdk = mx.get_jdk(tag='default')
-    # Support for com.oracle.svm.driver.NativeImage$JDK9Plus
-    res = ['--add-exports=java.base/jdk.internal.module=ALL-UNNAMED']
     if not mx_sdk_vm.jdk_enables_jvmci_by_default(jdk):
         res.extend(['-XX:+UnlockExperimentalVMOptions', '-XX:+EnableJVMCI'])
     return res
+
 
 mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
     suite=suite,
@@ -883,6 +918,7 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
     support_distributions=['substratevm:NATIVE_IMAGE_GRAALVM_SUPPORT'],
     launcher_configs=[
         mx_sdk_vm.LauncherConfig(
+            is_module_launcher=not svm_java8(),
             destination="bin/<exe:native-image>",
             jar_distributions=["substratevm:SVM_DRIVER"],
             main_class=_native_image_launcher_main_class(),
@@ -916,6 +952,8 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
     ],
     provided_executables=['bin/<cmd:rebuild-images>'],
     installable=True,
+    stability="earlyadopter",
+    jlink=False,
 ))
 
 mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
@@ -930,6 +968,8 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
     support_distributions=['substratevm:NATIVE_IMAGE_LICENSE_GRAALVM_SUPPORT'],
     installable=True,
     priority=1,
+    stability="earlyadopter",
+    jlink=False,
 ))
 
 if not mx.is_windows():
@@ -947,6 +987,8 @@ if not mx.is_windows():
             'substratevm:JAVACPP_SHADOWED',
             'substratevm:LLVM_PLATFORM_SPECIFIC_SHADOWED',
         ],
+        stability="experimental-earlyadopter",
+        jlink=False,
     ))
 
 
@@ -965,7 +1007,7 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
     polyglot_lib_build_args=[
         "--macro:truffle",
         "-H:Features=org.graalvm.polyglot.nativeapi.PolyglotNativeAPIFeature",
-        "-Dorg.graalvm.polyglot.nativeapi.libraryPath=${.}/../../../polyglot/",
+        "-Dorg.graalvm.polyglot.nativeapi.libraryPath=${java.home}" + ("/jre" if svm_java8() else "") + "/lib/polyglot/",
         "-H:CStandard=C11",
         "-H:+SpawnIsolates",
     ],
@@ -973,6 +1015,8 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
         "substratevm:POLYGLOT_NATIVE_API",
     ],
     has_polyglot_lib_entrypoints=True,
+    stability="earlyadopter",
+    jlink=False,
 ))
 
 mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVMSvmMacro(
@@ -985,6 +1029,7 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVMSvmMacro(
     dependencies=['SubstrateVM'],
     builder_jar_distributions=['mx:JUNIT_TOOL', 'mx:JUNIT', 'mx:HAMCREST'],
     support_distributions=['substratevm:NATIVE_IMAGE_JUNIT_SUPPORT'],
+    jlink=False,
 ))
 
 jar_distributions = [
@@ -1023,6 +1068,8 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
             ],
         ),
     ],
+    stability="supported",
+    jlink=False,
 ))
 
 def _native_image_configure_extra_jvm_args():
@@ -1054,6 +1101,7 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
             extra_jvm_args=_native_image_configure_extra_jvm_args(),
         )
     ],
+    jlink=False,
 ))
 
 
@@ -1106,6 +1154,34 @@ def helloworld(args, config=None):
     builds a Hello, World! native image.
     """
     run_helloworld_command(args, config, "helloworld")
+
+
+@mx.command(suite_name=suite.name, command_name='hellomodule')
+def hellomodule(args):
+    """
+    builds a Hello, World! native image from a Java module.
+    """
+    if svm_java8():
+        mx.abort('Experimental module support requires Java 11+')
+    if os.environ.get('USE_NATIVE_IMAGE_JAVA_PLATFORM_MODULE_SYSTEM', 'false') != 'true':
+        mx.abort('Experimental module support requires USE_NATIVE_IMAGE_JAVA_PLATFORM_MODULE_SYSTEM=true for "mx build" and "mx hellomodule"')
+
+    # Build a helloworld Java module with maven
+    module_path = []
+    proj_dir = join(suite.dir, 'src', 'native-image-module-tests', 'hello.lib')
+    mx.run_maven(['-e', 'install'], cwd=proj_dir)
+    module_path.append(join(proj_dir, 'target', 'hello-lib-1.0-SNAPSHOT.jar'))
+    proj_dir = join(suite.dir, 'src', 'native-image-module-tests', 'hello.app')
+    mx.run_maven(['-e', 'install'], cwd=proj_dir)
+    module_path.append(join(proj_dir, 'target', 'hello-app-1.0-SNAPSHOT.jar'))
+    with native_image_context(hosted_assertions=False) as native_image:
+        build_dir = join(svmbuild_dir(), 'hellomodule')
+        # Build module into native image
+        mx.log('Building image from java modules: ' + str(module_path))
+        module_path_sep = ';' if mx.is_windows() else ':'
+        built_image = native_image(['--verbose', '-H:Path=' + build_dir, '-p', module_path_sep.join(module_path), '-m', 'moduletests.hello.app'])
+        mx.log('Running image ' + built_image + ' built from module:')
+        mx.run([built_image])
 
 
 @mx.command(suite.name, 'cinterfacetutorial', 'Runs the ')
@@ -1431,81 +1507,20 @@ class SubstrateCompilerFlagsBuilder(mx.ArchivableProject):
             distributions_transitive = mx.classpath_entries(self.deps)
             jdk = mx.get_jdk(tag='default')
             required_exports = mx_javamodules.requiredExports(distributions_transitive, jdk)
-            target_module = 'ALL-UNNAMED'
+            target_module = None if USE_NI_JPMS else 'ALL-UNNAMED'
             exports_flags = mx_sdk_vm.AbstractNativeImageConfig.get_add_exports_list(required_exports, target_module)
             graal_compiler_flags_map[11].extend(exports_flags)
-
-            # Packages to add-open
-            add_opens_packages = [
-                # Reflective access to jdk.internal.vm.compiler
-                'jdk.internal.vm.compiler/org.graalvm.compiler.debug',
-                'jdk.internal.vm.compiler/org.graalvm.compiler.nodes',
-
-                # Reflective access
-                'jdk.unsupported/sun.reflect',
-                # Reflective access to jdk.internal.module.Modules, using which I can export and open other modules.
-                'java.base/jdk.internal.module',
-
-                # These packages should be opened at runtime calls to Modules.addOpens, if they are still needed.
-                # Reflective access to jdk.internal.ref.CleanerImpl$PhantomCleanableRef.
-                'java.base/jdk.internal.ref',
-                # Reflective access to jdk.internal.reflect.MethodAccessor.
-                'java.base/jdk.internal.reflect',
-                # Reflective access to java.io.ExpiringCache
-                'java.base/java.io',
-                # Reflective access to private fields of java.lang.Class.
-                'java.base/java.lang',
-                # Reflective access to java.lang.reflect.ProxyGenerator.generateProxyClass
-                'java.base/java.lang.reflect',
-                # Reflective access to java.lang.invoke.VarHandle*.
-                'java.base/java.lang.invoke',
-                # Reflective access to java.lang.Reference.referent.
-                'java.base/java.lang.ref',
-                # Reflective access to java.net.URL.getURLStreamHandler.
-                'java.base/java.net',
-                # Reflective access to java.nio.MappedByteBuffer.fd.
-                'java.base/java.nio',
-                # Reflective access to java.nio.files.FileTypeDetector
-                'java.base/java.nio.file',
-                # Reflective access to java.security.Provider.knownEngines
-                'java.base/java.security',
-                # Reflective access javax.crypto.JceSecurity.getVerificationResult
-                'java.base/javax.crypto',
-                # Reflective access to java.util.Bits.words.
-                'java.base/java.util',
-                # Reflective access to java.util.concurrent.atomic.AtomicIntegerFieldUpdater$AtomicIntegerFieldUpdaterImpl.tclass.
-                'java.base/java.util.concurrent.atomic',
-                # Reflective access to sun.security.x509.OIDMap.nameMap
-                'java.base/sun.security.x509',
-                'java.base/jdk.internal.logger',
-
-                # Reflective access to org.graalvm.nativeimage.impl.ImageSingletonsSupport.
-                'org.graalvm.sdk/org.graalvm.nativeimage.impl',
-                'org.graalvm.sdk/org.graalvm.polyglot',
-
-                'org.graalvm.truffle/com.oracle.truffle.polyglot',
-                'org.graalvm.truffle/com.oracle.truffle.api.impl',
-            ]
-            graal_compiler_flags_map[11].extend(['--add-opens=' + entry + '=' + target_module for entry in add_opens_packages])
 
             # Currently JDK 13, 14, 15 and JDK 11 have the same flags
             graal_compiler_flags_map[13] = graal_compiler_flags_map[11]
             graal_compiler_flags_map[14] = graal_compiler_flags_map[11]
             graal_compiler_flags_map[15] = graal_compiler_flags_map[11]
-
-            add_opens_packages_jdk16 = [
-                'java.base/jdk.internal.org.objectweb.asm',
-                'java.base/sun.util.locale.provider',
-                'java.base/sun.util.resources',
-                'java.base/sun.security.util',
-                'java.base/sun.util.calendar',
-                'java.base/sun.security.provider',
-                'java.base/sun.reflect.generics.repository',
-                'java.base/sun.reflect.annotation',
-                'java.base/sun.invoke.util',
-                'java.xml.crypto/org.jcp.xml.dsig.internal.dom'
-            ]
-            graal_compiler_flags_map[16] = graal_compiler_flags_map[11] + ['--add-opens=' + entry + '=' + target_module for entry in add_opens_packages_jdk16]
+            graal_compiler_flags_map[16] = graal_compiler_flags_map[11]
+            graal_compiler_flags_map[17] = graal_compiler_flags_map[11]
+            # DO NOT ADD ANY NEW ADD-OPENS OR ADD-EXPORTS HERE!
+            #
+            # Instead provide the correct requiresConcealed entries in the moduleInfo
+            # section of org.graalvm.nativeimage.builder in the substratevm suite.py.
 
         graal_compiler_flags_base = [
             '-XX:+UseParallelGC',  # native image generation is a throughput-oriented task
@@ -1536,6 +1551,14 @@ class SubstrateCompilerFlagsBuildTask(mx.ArchivableBuildTask):
 
     def build(self):
         self.subject._computeResults()
+
+    def clean(self, forBuild=False):
+        driver_resources_dir = join(mx.dependency('substratevm:com.oracle.svm.driver').dir, 'resources')
+        ancient_config_files = glob(join(driver_resources_dir, 'graal-compiler-flags-*.config'))
+        for f in ancient_config_files:
+            mx.warn('Removing leftover ' + f)
+            os.remove(f)
+
 
 def _ensure_vm_built(config):
     # build "jvm" config used by native-image and native-image-configure commands

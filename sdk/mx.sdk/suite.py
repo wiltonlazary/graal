@@ -39,9 +39,9 @@
 # SOFTWARE.
 #
 suite = {
-  "mxversion" : "5.282.0",
+  "mxversion" : "5.292.5",
   "name" : "sdk",
-  "version" : "21.1.0",
+  "version" : "21.2.0",
   "release" : False,
   "sourceinprojectwhitelist" : [],
   "url" : "https://github.com/oracle/graal",
@@ -78,6 +78,24 @@ suite = {
   "defaultLicense" : "UPL",
   "imports": {},
   "libraries" : {
+    "WRK": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/wrk.tar.gz"],
+      "sha1": "04b97d4d90b3d73dc3cd37b225d8aa3d6bca42da",
+      "packedResource": True,
+      "license": "Apache-2.0",
+    },
+    "WRK2": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/wrk2.tar.gz"],
+      "sha1": "a5c417b414f72951de4eb95641808a0a5aa31445",
+      "packedResource": True,
+      "license": "Apache-2.0",
+    },
+    "APACHE_JMETER_5.3": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/apache-jmeter-5.3.zip"],
+      "sha1": "17480a0905d9d485bc8ce8e7be9daec2de98c251",
+      "packedResource": True,
+      "license": "Apache-2.0",
+    },
     "JLINE" : {
       "sha1" : "c3aeac59c022bdc497c8c48ed86fa50450e4896a",
       "maven" : {
@@ -173,7 +191,7 @@ suite = {
       "dependencies" : [],
       "checkstyle" : "org.graalvm.word",
       "javaCompliance" : "8+",
-      "checkstyleVersion" : "8.8",
+      "checkstyleVersion" : "8.36.1",
       "workingSets" : "API,SDK",
     },
 
@@ -322,6 +340,7 @@ suite = {
           "org.graalvm.word",
           "org.graalvm.polyglot.impl to org.graalvm.truffle",
           "org.graalvm.word.impl to jdk.internal.vm.compiler",
+          "org.graalvm.nativeimage.impl to org.graalvm.nativeimage.builder",
         ],
         "uses" : [
           "org.graalvm.polyglot.impl.AbstractPolyglotImpl"

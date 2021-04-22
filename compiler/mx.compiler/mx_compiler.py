@@ -1,7 +1,7 @@
 #
 # ----------------------------------------------------------------------------------------------------
 #
-# Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -57,8 +57,6 @@ from mx_updategraalinopenjdk import updategraalinopenjdk
 from mx_renamegraalpackages import renamegraalpackages
 from mx_sdk_vm import jlink_new_jdk
 import mx_sdk_vm_impl
-
-import mx_jaotc
 
 import mx_graal_benchmark # pylint: disable=unused-import
 import mx_graal_tools #pylint: disable=unused-import
@@ -149,7 +147,7 @@ if os.environ.get('JVMCI_VERSION_CHECK', None) != 'ignore':
     _check_jvmci_version(jdk)
 
 mx_gate.add_jacoco_includes(['org.graalvm.*'])
-mx_gate.add_jacoco_excludes(['com.oracle.truffle.*'])
+mx_gate.add_jacoco_excludes(['com.oracle.truffle'])
 mx_gate.add_jacoco_excluded_annotations(['@Snippet', '@ClassSubstitution'])
 
 def _get_XX_option_value(vmargs, name, default):
@@ -453,7 +451,7 @@ def compiler_gate_runner(suites, unit_test_runs, bootstrap_tests, tasks, extraVM
     with Task('CTW:hosted', tasks, tags=GraalTags.ctw) as t:
         if t:
             ctw([
-                    '-DCompileTheWorld.Config=Inline=false CompilationFailureAction=ExitVM', '-esa', '-XX:-UseJVMCICompiler', '-XX:+EnableJVMCI',
+                    '-DCompileTheWorld.Config=Inline=false CompilationFailureAction=ExitVM CompilationBailoutAsFailure=false', '-esa', '-XX:-UseJVMCICompiler', '-XX:+EnableJVMCI',
                     '-DCompileTheWorld.MultiThreaded=true', '-Dgraal.InlineDuringParsing=false', '-Dgraal.TrackNodeSourcePosition=true',
                     '-DCompileTheWorld.Verbose=false', '-XX:ReservedCodeCacheSize=300m',
                 ], _remove_empty_entries(extraVMarguments))
@@ -604,14 +602,9 @@ graal_bootstrap_tests = [
     BootstrapTest('BootstrapWithSystemAssertionsImmutableCode', _defaultFlags + _assertionFlags + _immutableCodeFlags + ['-Dgraal.VerifyPhases=true'] + _graalErrorFlags, tags=GraalTags.bootstrap)
 ]
 
-def _is_jaotc_supported():
-    return exists(jdk.exe_path('jaotc'))
-
 def _graal_gate_runner(args, tasks):
     compiler_gate_runner(['compiler', 'truffle'], graal_unit_test_runs, graal_bootstrap_tests, tasks, args.extra_vm_argument, args.extra_unittest_argument)
     compiler_gate_benchmark_runner(tasks, args.extra_vm_argument)
-    if _is_jaotc_supported():
-        mx_jaotc.jaotc_gate_runner(tasks)
 
 class ShellEscapedStringAction(argparse.Action):
     """Turns a shell-escaped string into a list of arguments.
@@ -925,7 +918,7 @@ def collate_metrics(args):
                 print(n +';' + ';'.join((str(v) for v in series)) + ';' + units[n], file=fp)
         mx.log('Collated metrics into ' + collated_filename)
 
-def run_java(args, nonZeroIsFatal=True, out=None, err=None, cwd=None, timeout=None, env=None, addDefaultArgs=True):
+def run_java(args, nonZeroIsFatal=True, out=None, err=None, cwd=None, timeout=None, env=None, addDefaultArgs=True, command_mapper_hooks=None):
     graaljdk = get_graaljdk()
     vm_args = _parseVmArgs(args, addDefaultArgs=addDefaultArgs)
     args = ['-XX:+UnlockExperimentalVMOptions', '-XX:+EnableJVMCI'] + vm_args
@@ -938,6 +931,7 @@ def run_java(args, nonZeroIsFatal=True, out=None, err=None, cwd=None, timeout=No
 
     with StdoutUnstripping(args, out, err, mapFiles=[map_file]) as u:
         try:
+            cmd = mx.apply_command_mapper_hooks(cmd, command_mapper_hooks)
             return mx.run(cmd, nonZeroIsFatal=nonZeroIsFatal, out=u.out, err=u.err, cwd=cwd, env=env)
         finally:
             # Collate AggratedMetricsFile
@@ -1116,6 +1110,8 @@ def create_archive(srcdir, arcpath, prefix):
     arc.close()
 
 
+def _jlink_libraries():
+    return not (mx.get_opts().no_jlinking or mx.env_var_to_bool('NO_JLINKING'))
 
 def makegraaljdk_cli(args):
     """make a JDK with Graal as the default top level JIT"""
@@ -1280,21 +1276,25 @@ def _update_graaljdk(src_jdk, dst_jdk_dir=None, root_module_names=None, export_t
             vendor_info = {'vendor-version' : vm_name}
             # Setting dedup_legal_notices=False avoids due to license files conflicting
             # when switching JAVA_HOME from an OpenJDK to an OracleJDK or vice versa between executions.
-            jlink_new_jdk(jdk, tmp_dst_jdk_dir, module_dists, root_module_names=root_module_names, vendor_info=vendor_info, dedup_legal_notices=False)
+            if _jlink_libraries():
+                jlink_new_jdk(jdk, tmp_dst_jdk_dir, module_dists, ignore_dists=[], root_module_names=root_module_names, vendor_info=vendor_info, dedup_legal_notices=False)
+                if export_truffle:
+                    jmd = as_java_module(_graal_config().dists_dict['truffle:TRUFFLE_API'], jdk)
+                    add_exports = []
+                    for package in jmd.packages:
+                        if package == 'com.oracle.truffle.api.impl':
+                            # The impl package should remain private
+                            continue
+                        if jmd.get_package_visibility(package, "<unnamed>") == 'concealed':
+                            add_exports.append('--add-exports={}/{}=ALL-UNNAMED'.format(jmd.name, package))
+                    if add_exports:
+                        with open(join(tmp_dst_jdk_dir, '.add_exports'), 'w') as fp:
+                            fp.write(os.linesep.join(add_exports))
+            else:
+                mx.warn("--no-jlinking flag used. The resulting VM will be HotSpot, not GraalVM")
+                shutil.copytree(jdk.home, tmp_dst_jdk_dir, symlinks=True)
             jre_dir = tmp_dst_jdk_dir
             jvmci_dir = mx.ensure_dir_exists(join(jre_dir, 'lib', 'jvmci'))
-            if export_truffle:
-                jmd = as_java_module(_graal_config().dists_dict['truffle:TRUFFLE_API'], jdk)
-                add_exports = []
-                for package in jmd.packages:
-                    if package == 'com.oracle.truffle.api.impl':
-                        # The impl package should remain private
-                        continue
-                    if jmd.get_package_visibility(package, "<unnamed>") == 'concealed':
-                        add_exports.append('--add-exports={}/{}=ALL-UNNAMED'.format(jmd.name, package))
-                if add_exports:
-                    with open(join(tmp_dst_jdk_dir, '.add_exports'), 'w') as fp:
-                        fp.write(os.linesep.join(add_exports))
 
         if with_compiler_name_file:
             with open(join(jvmci_dir, 'compiler-name'), 'w') as fp:
@@ -1397,7 +1397,7 @@ def _jvmci_jars():
         'compiler:GRAAL',
         'compiler:GRAAL_MANAGEMENT',
         'compiler:GRAAL_TRUFFLE_JFR_IMPL',
-    ] + (['compiler:JAOTC'] if not isJDK8 and _is_jaotc_supported() else [])
+    ]
 
 # The community compiler component
 cmp_ce_components = [
@@ -1414,6 +1414,7 @@ cmp_ce_components = [
         ],
         jvmci_jars=_jvmci_jars(),
         graal_compiler='graal',
+        stability="supported",
     ),
     mx_sdk_vm.GraalVmComponent(
         suite=_suite,
@@ -1444,8 +1445,6 @@ def print_graaljdk_home(args):
 mx.update_commands(_suite, {
     'sl' : [sl, '[SL args|@VM options]'],
     'vm': [run_vm_with_jvmci_compiler, '[-options] class [args...]'],
-    'jaotc': [mx_jaotc.run_jaotc, '[-options] class [args...]'],
-    'jaotc-test': [mx_jaotc.jaotc_test, ''],
     'collate-metrics': [collate_metrics, 'filename'],
     'ctw': [ctw, '[-vmoptions|noinline|nocomplex|full]'],
     'nodecostdump' : [_nodeCostDump, ''],

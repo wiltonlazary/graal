@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -42,8 +42,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 import org.graalvm.compiler.truffle.options.PolyglotCompilerOptions;
-import org.graalvm.compiler.truffle.runtime.collection.BTreeQueue;
-import org.graalvm.compiler.truffle.runtime.collection.DelegatingBlockingQueue;
 
 /**
  * The compilation queue accepts compilation requests, and schedules compilations.
@@ -131,11 +129,7 @@ public class BackgroundCompileQueue {
             long compilerIdleDelay = runtime.getCompilerIdleDelay(callTarget);
             long keepAliveTime = compilerIdleDelay >= 0 ? compilerIdleDelay : 0;
 
-            if (callTarget.getOptionValue(PolyglotCompilerOptions.ConfigurableCompilationQueue)) {
-                this.compilationQueue = new DelegatingBlockingQueue<>(new BTreeQueue<>());
-            } else {
-                this.compilationQueue = new IdlingPriorityBlockingQueue<>();
-            }
+            initQueue(callTarget);
             ThreadPoolExecutor threadPoolExecutor = new ThreadPoolExecutor(threads, threads,
                             keepAliveTime, TimeUnit.MILLISECONDS,
                             compilationQueue, factory) {
@@ -154,6 +148,14 @@ public class BackgroundCompileQueue {
             }
 
             return compilationExecutorService = threadPoolExecutor;
+        }
+    }
+
+    private void initQueue(OptimizedCallTarget callTarget) {
+        if (callTarget.getOptionValue(PolyglotCompilerOptions.TraversingCompilationQueue)) {
+            this.compilationQueue = new TraversingBlockingQueue();
+        } else {
+            this.compilationQueue = new IdlingPriorityBlockingQueue<>();
         }
     }
 

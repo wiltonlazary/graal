@@ -1,10 +1,10 @@
 suite = {
-  "mxversion" : "5.280.0",
+  "mxversion" : "5.292.5",
   "name" : "compiler",
   "sourceinprojectwhitelist" : [],
 
   "groupId" : "org.graalvm.compiler",
-  "version" : "21.1.0",
+  "version" : "21.2.0",
   "release" : False,
   "url" : "http://www.graalvm.org/",
   "developer" : {
@@ -227,10 +227,31 @@ suite = {
         ],
       },
       "checkstyle" : "org.graalvm.compiler.graph",
-      "javaCompliance" : "13+",
+      "javaCompliance" : "13..15",
       "checkPackagePrefix" : "false",
       "overlayTarget" : "org.graalvm.compiler.serviceprovider",
       "multiReleaseJarVersion" : "13",
+      "workingSets" : "API,Graal",
+    },
+
+    "org.graalvm.compiler.serviceprovider.jdk16" : {
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "dependencies" : ["org.graalvm.compiler.serviceprovider"],
+      "requiresConcealed" : {
+        "jdk.internal.vm.ci" : [
+          "jdk.vm.ci.meta",
+          "jdk.vm.ci.code",
+          "jdk.vm.ci.code.site",
+          "jdk.vm.ci.services",
+          "jdk.vm.ci.runtime",
+        ],
+      },
+      "checkstyle" : "org.graalvm.compiler.graph",
+      "javaCompliance" : "16+",
+      "checkPackagePrefix" : "false",
+      "overlayTarget" : "org.graalvm.compiler.serviceprovider",
+      "multiReleaseJarVersion" : "16",
       "workingSets" : "API,Graal",
     },
 
@@ -570,7 +591,7 @@ suite = {
       "overlayTarget" : "org.graalvm.compiler.hotspot",
       "multiReleaseJarVersion" : "13",
       "checkstyle" : "org.graalvm.compiler.graph",
-      "javaCompliance" : "13+",
+      "javaCompliance" : "13..14",
       "workingSets" : "Graal,HotSpot",
     },
 
@@ -826,7 +847,7 @@ suite = {
         "org.graalvm.compiler.bytecode",
       ],
       "javaCompliance" : "8+",
-      "checkstyleVersion" : "8.8",
+      "checkstyleVersion" : "8.36.1",
       "annotationProcessors" : [
         "GRAAL_PROCESSOR"
       ],
@@ -981,26 +1002,6 @@ suite = {
       "checkstyle" : "org.graalvm.compiler.graph",
       "javaCompliance" : "8+",
       "workingSets" : "Graal,LIR,AArch64",
-    },
-
-    "org.graalvm.compiler.lir.aarch64.jdk11" : {
-      "subDir" : "src",
-      "sourceDirs" : ["src"],
-      "dependencies" : [
-        "org.graalvm.compiler.lir.aarch64",
-      ],
-      "requiresConcealed" : {
-        "jdk.internal.vm.ci" : [
-          "jdk.vm.ci.code",
-          "jdk.vm.ci.aarch64",
-        ],
-      },
-      "annotationProcessors" : ["GRAAL_PROCESSOR"],
-      "checkstyle" : "org.graalvm.compiler.graph",
-      "javaCompliance" : "11+",
-      "workingSets" : "Graal,LIR,AArch64",
-      "overlayTarget" : "org.graalvm.compiler.lir.aarch64",
-      "multiReleaseJarVersion" : "11",
     },
 
     "org.graalvm.compiler.lir.amd64" : {
@@ -1530,58 +1531,6 @@ suite = {
       "jacoco" : "exclude",
       "spotbugs" : "false",
       "testProject" : True,
-    },
-
-    # ------------- JDK AOT -------------
-
-    "jdk.tools.jaotc" : {
-      "subDir" : "src",
-      "sourceDirs" : ["src"],
-      "dependencies" : [
-        "JVMCI_HOTSPOT",
-        "jdk.tools.jaotc.binformat",
-        "org.graalvm.compiler.asm.amd64",
-        "org.graalvm.compiler.asm.aarch64",
-      ],
-      "requiresConcealed" : {
-        "jdk.internal.vm.ci" : '*',
-      },
-      "requires" : [
-        "java.management"
-      ],
-      "checkstyle" : "org.graalvm.compiler.graph",
-      "javaCompliance" : "11+",
-      "workingSets" : "Graal,HotSpot",
-    },
-
-    "jdk.tools.jaotc.binformat" : {
-      "subDir" : "src",
-      "sourceDirs" : ["src"],
-      "dependencies" : [
-        "JVMCI_HOTSPOT",
-        "org.graalvm.compiler.hotspot",
-      ],
-      "requiresConcealed" : {
-        "jdk.internal.vm.ci" : [
-          "jdk.vm.ci.hotspot",
-          "jdk.vm.ci.services"
-        ]
-      },
-      "checkstyle" : "org.graalvm.compiler.graph",
-      "javaCompliance" : "11+",
-      "workingSets" : "Graal,HotSpot",
-    },
-
-    "jdk.tools.jaotc.test" : {
-      "subDir" : "src",
-      "sourceDirs" : ["src"],
-      "dependencies" : [
-        "jdk.tools.jaotc",
-        "mx:JUNIT",
-      ],
-      "checkstyle" : "org.graalvm.compiler.graph",
-      "javaCompliance" : "11+",
-      "workingSets" : "Graal,Test",
     },
 
     # ------------- GraalTruffle -------------
@@ -2155,37 +2104,14 @@ suite = {
           "jdk.unsupported" # sun.misc.Unsafe
         ],
         "exports" : [
-          "* to com.oracle.graal.graal_enterprise",
-          "org.graalvm.compiler.api.directives         to jdk.aot",
-          "org.graalvm.compiler.api.runtime            to jdk.aot",
-          "org.graalvm.compiler.api.replacements       to jdk.aot",
-          "org.graalvm.compiler.asm.amd64              to jdk.aot",
-          "org.graalvm.compiler.asm.aarch64            to jdk.aot",
-          "org.graalvm.compiler.bytecode               to jdk.aot",
-          "org.graalvm.compiler.code                   to jdk.aot",
-          "org.graalvm.compiler.core                   to jdk.aot",
-          "org.graalvm.compiler.core.common            to jdk.aot,jdk.internal.vm.compiler.management",
-          "org.graalvm.compiler.core.target            to jdk.aot",
-          "org.graalvm.compiler.debug                  to jdk.aot,jdk.internal.vm.compiler.management",
-          "org.graalvm.compiler.graph                  to jdk.aot",
-          "org.graalvm.compiler.hotspot                to jdk.aot,jdk.internal.vm.compiler.management",
-          "org.graalvm.compiler.hotspot.meta           to jdk.aot",
-          "org.graalvm.compiler.hotspot.replacements   to jdk.aot",
-          "org.graalvm.compiler.hotspot.stubs          to jdk.aot",
-          "org.graalvm.compiler.hotspot.word           to jdk.aot",
-          "org.graalvm.compiler.java                   to jdk.aot",
-          "org.graalvm.compiler.lir.asm                to jdk.aot",
-          "org.graalvm.compiler.lir.phases             to jdk.aot",
-          "org.graalvm.compiler.nodes                  to jdk.aot",
-          "org.graalvm.compiler.nodes.graphbuilderconf to jdk.aot",
-          "org.graalvm.compiler.options                to jdk.aot,jdk.internal.vm.compiler.management",
-          "org.graalvm.compiler.phases                 to jdk.aot",
+          "* to com.oracle.graal.graal_enterprise,org.graalvm.nativeimage.pointsto,org.graalvm.nativeimage.builder,org.graalvm.nativeimage.llvm,com.oracle.svm.svm_enterprise",
+          "org.graalvm.compiler.core.common            to jdk.internal.vm.compiler.management",
+          "org.graalvm.compiler.debug                  to jdk.internal.vm.compiler.management,org.graalvm.nativeimage.objectfile",
+          "org.graalvm.compiler.hotspot                to jdk.internal.vm.compiler.management",
+          "org.graalvm.compiler.nodes.graphbuilderconf to org.graalvm.nativeimage.driver",
+          "org.graalvm.compiler.options                to jdk.internal.vm.compiler.management,org.graalvm.nativeimage.driver,org.graalvm.nativeimage.librarysupport",
           "org.graalvm.compiler.phases.common.jmx      to jdk.internal.vm.compiler.management",
-          "org.graalvm.compiler.phases.tiers           to jdk.aot",
-          "org.graalvm.compiler.printer                to jdk.aot",
-          "org.graalvm.compiler.runtime                to jdk.aot",
-          "org.graalvm.compiler.replacements           to jdk.aot",
-          "org.graalvm.compiler.serviceprovider        to jdk.aot,jdk.internal.vm.compiler.management",
+          "org.graalvm.compiler.serviceprovider        to jdk.internal.vm.compiler.management,org.graalvm.nativeimage.driver",
           "org.graalvm.compiler.truffle.jfr            to jdk.internal.vm.compiler.truffle.jfr",
           "org.graalvm.libgraal                        to jdk.internal.vm.compiler.management",
           "org.graalvm.util                            to jdk.internal.vm.compiler.management",
@@ -2305,42 +2231,6 @@ suite = {
       ],
       "maven": False,
       "javaCompliance" : "8+",
-    },
-
-    "JAOTC" : {
-      # This distribution defines a module.
-      "moduleInfo" : {
-        "name":"jdk.aot",
-      },
-      "subDir" : "src",
-      "dependencies" : [
-        "jdk.tools.jaotc",
-      ],
-      "distDependencies" : [
-        "GRAAL",
-        "GRAAL_MANAGEMENT",
-      ],
-      "exclude" : [
-        "JVMCI_SERVICES",
-        "JVMCI_API",
-        "JVMCI_HOTSPOT",
-      ],
-      "maven": False,
-    },
-
-    "JAOTC_TEST" : {
-      "subDir" : "src",
-      "dependencies" : [
-        "jdk.tools.jaotc.test",
-      ],
-      "distDependencies" : [
-        "JAOTC",
-      ],
-      "exclude" : [
-        "mx:JUNIT",
-      ],
-      "testDistribution" : True,
-      "maven": False,
     },
 
     "GRAAL_COMPILER_WHITEBOX_MICRO_BENCHMARKS" : {

@@ -1,5 +1,5 @@
 suite = {
-  "mxversion" : "5.239.0",
+  "mxversion" : "5.292.4",
   "name" : "sulong",
   "versionConflictResolution" : "latest",
 
@@ -176,6 +176,9 @@ suite = {
         "test.sulongtest.lib" : "<path:SULONG_TEST_NATIVE>/<lib:sulongtest>",
         "test.sulongtest.lib.path" : "<path:SULONG_TEST_NATIVE>",
         "sulongtest.projectRoot" : "<path:com.oracle.truffle.llvm>/../",
+        "sulongtest.source.GCC_SOURCE" : "<path:GCC_SOURCE>",
+        "sulongtest.source.LLVM_TEST_SUITE" : "<path:LLVM_TEST_SUITE>",
+        "sulongtest.source.NWCC_SUITE" : "<path:NWCC_SUITE>",
       },
       "workingSets" : "Truffle, LLVM",
       "license" : "BSD-new",
@@ -431,6 +434,20 @@ suite = {
       "license" : "BSD-new",
     },
 
+    "bootstrap-toolchain-launchers-no-home": {
+      "subDir": "projects",
+      "class" : "BootstrapToolchainLauncherProject",
+      "buildDependencies" : [
+        "sdk:LLVM_TOOLCHAIN",
+        "com.oracle.truffle.llvm.toolchain.launchers",
+      ],
+      "javaProperties" : {
+        # we intentionally set llvm home to a non-existent location to avoid picking up outdated files
+        "org.graalvm.language.llvm.home" : "<path:SULONG_BOOTSTRAP_TOOLCHAIN_NO_HOME>/nonexistent",
+      },
+      "license" : "BSD-new",
+    },
+
     "toolchain-launchers-tests": {
       "subDir": "tests",
       "native": True,
@@ -596,30 +613,33 @@ suite = {
     },
     "com.oracle.truffle.llvm.libraries.bitcode" : {
       "subDir" : "projects",
-      "native" : True,
+      "class" : "CMakeNinjaProject",
+      # NinjaBuildTask uses only 1 job otherwise
+      "max_jobs" : "8",
       "vpath" : True,
+      "ninja_targets" : [
+        "<lib:sulong>",
+        "<lib:sulong++>",
+      ],
+      "ninja_install_targets" : ["install"],
       "results" : [
         "bin/<lib:sulong>",
         "bin/<lib:sulong++>",
       ],
       "buildDependencies" : [
-        "com.oracle.truffle.llvm.libraries.graalvm.llvm",
         "sdk:LLVM_TOOLCHAIN",
         "sdk:LLVM_ORG_SRC",
+        "SULONG_BOOTSTRAP_TOOLCHAIN_NO_HOME",
         "NATIVE_MODE_SUPPORT",
       ],
-      "buildEnv" : {
-        "CFLAGS" : "-Xclang -disable-O0-optnone",
-        "CPPFLAGS" : "-I<path:com.oracle.truffle.llvm.libraries.graalvm.llvm>/include",
-        "CLANG" : "<path:LLVM_TOOLCHAIN>/bin/clang",
-        "CLANGXX" : "<path:LLVM_TOOLCHAIN>/bin/clang++",
-        "OPT" : "<path:LLVM_TOOLCHAIN>/bin/opt",
-        "LLVM_LINK" : "<path:LLVM_TOOLCHAIN>/bin/llvm-link",
-        "LLVM_TOOLCHAIN_LIB" : "<path:LLVM_TOOLCHAIN>/lib",
-        "LIBSULONG" : "<lib:sulong>",
-        "LIBSULONGXX" : "<lib:sulong++>",
+      "cmakeConfig" : {
+        "CMAKE_OSX_DEPLOYMENT_TARGET" : "10.11",
+        "CMAKE_C_COMPILER" : "<path:SULONG_BOOTSTRAP_TOOLCHAIN_NO_HOME>/bin/clang",
+        "CMAKE_CXX_COMPILER" : "<path:SULONG_BOOTSTRAP_TOOLCHAIN_NO_HOME>/bin/clang++",
+        "GRAALVM_LLVM_INCLUDE_DIR" : "<path:com.oracle.truffle.llvm.libraries.graalvm.llvm>/include",
         "LIBCXX_SRC" : "<path:sdk:LLVM_ORG_SRC>",
-        "OS" : "<os>",
+        "MX_OS" : "<os>",
+        "MX_ARCH" : "<arch>",
       },
       "license" : "BSD-new",
     },
@@ -643,43 +663,56 @@ suite = {
     },
     "com.oracle.truffle.llvm.libraries.graalvm.llvm.libs" : {
       "subDir" : "projects",
-      "native" : True,
+      "class" : "CMakeNinjaProject",
+      # NinjaBuildTask uses only 1 job otherwise
+      "max_jobs" : "8",
       "vpath" : True,
+      "ninja_targets" : [
+        "<libv:graalvm-llvm.1>",
+      ],
+      "ninja_install_targets" : ["install"],
       "results" : [
+        # "bin/<lib:graalvm-llvm>",
+        # We on purpose exclude the symlink from the results because the layout distribution would dereference it and
+        # create a copy instead of keeping the symlink.
+        # The symlink is added manually in the layout definition of the distribution.
         "bin/<libv:graalvm-llvm.1>",
       ],
       "buildDependencies" : [
-        "SULONG_TOOLCHAIN_LAUNCHERS",
-        "SULONG_BOOTSTRAP_TOOLCHAIN",
+        "SULONG_BOOTSTRAP_TOOLCHAIN_NO_HOME",
         "com.oracle.truffle.llvm.libraries.graalvm.llvm",
         "NATIVE_MODE_SUPPORT",
       ],
-      "buildEnv" : {
-        "SONAME" : "<libv:graalvm-llvm.1>",
-        "CLANG" : "<toolchainGetToolPath:native,CC>",
-        "CPPFLAGS" : "-I<path:com.oracle.truffle.llvm.libraries.graalvm.llvm>/include",
-        "OS" : "<os>",
+      "cmakeConfig" : {
+        "CMAKE_OSX_DEPLOYMENT_TARGET" : "10.11",
+        "CMAKE_C_COMPILER" : "<path:SULONG_BOOTSTRAP_TOOLCHAIN_NO_HOME>/bin/clang",
+        "GRAALVM_LLVM_INCLUDE_DIR" : "<path:com.oracle.truffle.llvm.libraries.graalvm.llvm>/include",
       },
       "license" : "BSD-new",
     },
     "com.oracle.truffle.llvm.libraries.native" : {
       "subDir" : "projects",
-      "native" : True,
+      "class" : "CMakeNinjaProject",
+      # NinjaBuildTask uses only 1 job otherwise
+      "max_jobs" : "8",
       "vpath" : True,
+      "ninja_targets" : [
+        "<lib:sulong-native>",
+      ],
+      "ninja_install_targets" : ["install"],
       "results" : [
         "bin/<lib:sulong-native>",
       ],
       "buildDependencies" : [
         "truffle:TRUFFLE_NFI_NATIVE",
-        "com.oracle.truffle.llvm.libraries.bitcode",
         "sdk:LLVM_TOOLCHAIN",
         "NATIVE_MODE_SUPPORT",
       ],
-      "buildEnv" : {
-        "CLANG" : "<path:LLVM_TOOLCHAIN>/bin/clang",
-        "LIBSULONG" : "<lib:sulong-native>",
-        "CPPFLAGS" : "-I<path:truffle:TRUFFLE_NFI_NATIVE>/include -I<path:com.oracle.truffle.llvm.libraries.bitcode>/include",
-        "OS" : "<os>",
+      "cmakeConfig" : {
+        "CMAKE_OSX_DEPLOYMENT_TARGET" : "10.11",
+        "CMAKE_SHARED_LINKER_FLAGS" : "-lm",
+        "CMAKE_C_COMPILER" : "<path:LLVM_TOOLCHAIN>/bin/clang",
+        "TRUFFLE_NFI_NATIVE_INCLUDE" : "<path:truffle:TRUFFLE_NFI_NATIVE>/include",
       },
       "license" : "BSD-new",
     },
@@ -687,8 +720,11 @@ suite = {
       "subDir" : "projects",
       "vpath" : True,
       "sourceDir" : "<path:sdk:LLVM_ORG_SRC>/llvm",
-      "class" : "CMakeProject",
-      "makeTarget" : ["install-libcxxabi", "install-libcxx"],
+      "class" : "CMakeNinjaProject",
+      # NinjaBuildTask uses only 1 job otherwise
+      "max_jobs" : "8",
+      "ninja_targets" : ["<lib:c++abi>", "<lib:c++>"],
+      "ninja_install_targets" : ["install-libcxxabi", "install-libcxx"],
       "results" : ["native"],
       "cmakeConfig" : {
         "LLVM_ENABLE_PROJECTS" : "libcxx;libcxxabi",
@@ -701,22 +737,18 @@ suite = {
         "LIBCXXABI_ENABLE_STATIC" : "NO",
         "LIBCXX_INCLUDE_BENCHMARKS": "NO",
         "LIBCXX_INCLUDE_TESTS": "NO",
-        "LIBCXX_CXX_ABI" : "libcxxabi",
-        # shouldn't this be detected automatically?
-        "LIBCXX_CXX_ABI_LIBRARY_PATH" : "<path:com.oracle.truffle.llvm.libraries.bitcode.libcxx>/native/lib",
-        # shouldn't this be detected automatically?
-        "LIBCXX_CXX_ABI_INCLUDE_PATHS" : "<path:sdk:LLVM_ORG_SRC>/libcxxabi/include",
+        # using "default" will choose the in-tree version libc++abi and add a build dependency
+        # from libc++ to libc++abi
+        "LIBCXX_CXX_ABI" : "default",
         "LIBCXX_ENABLE_STATIC" : "NO",
         "LIBCXX_ENABLE_EXPERIMENTAL_LIBRARY" : "NO",
-        "CMAKE_C_COMPILER" : "<toolchainGetToolPath:native,CC>",
-        "CMAKE_CXX_COMPILER" :  "<toolchainGetToolPath:native,CXX>",
-        # Work around for mx not liking $ signs. We use '{{}}' as a placeholder and replace that in the CMakeProject.
-        "CMAKE_SHARED_LINKER_FLAGS" : "-Wl,-rpath,{{}}ORIGIN",
+        "CMAKE_C_COMPILER" : "<path:SULONG_BOOTSTRAP_TOOLCHAIN_NO_HOME>/bin/clang",
+        "CMAKE_CXX_COMPILER" : "<path:SULONG_BOOTSTRAP_TOOLCHAIN_NO_HOME>/bin/clang++",
         "CMAKE_INSTALL_PREFIX" : "native",
       },
       "buildDependencies" : [
         "sdk:LLVM_ORG_SRC",
-        "SULONG_BOOTSTRAP_TOOLCHAIN",
+        "SULONG_BOOTSTRAP_TOOLCHAIN_NO_HOME",
         "sdk:LLVM_TOOLCHAIN",
         "NATIVE_MODE_SUPPORT",
       ],
@@ -774,6 +806,7 @@ suite = {
       ],
       "buildDependencies" : [
         "SULONG_HOME",
+        "LINUX_AMD64_SUPPORT",
       ],
       "testProject" : True,
       "defaultBuild" : False,
@@ -816,23 +849,6 @@ suite = {
       "testProject" : True,
       "defaultBuild" : False,
     },
-    "com.oracle.truffle.llvm.tests.other.native" : {
-      "subDir" : "tests",
-      "class" : "SulongTestSuite",
-      "variants" : ["O0_MEM2REG"],
-      "buildRef" : False,
-      "buildEnv" : {
-        "SUITE_CPPFLAGS" : "-I<path:SULONG_LEGACY>/include -I<path:SULONG_HOME>/include -g",
-      },
-      "dependencies" : [
-        "SULONG_TEST",
-      ],
-      "buildDependencies" : [
-        "SULONG_HOME",
-      ],
-      "testProject" : True,
-      "defaultBuild" : False,
-    },
     "com.oracle.truffle.llvm.tests.sulong.native" : {
       "subDir" : "tests",
       "class" : "SulongTestSuite",
@@ -860,6 +876,9 @@ suite = {
       "dependencies" : [
         "SULONG_TEST",
       ],
+      "buildDependencies" : [
+        "LINUX_AMD64_SUPPORT",
+      ],
       "testProject" : True,
       "defaultBuild" : False,
     },
@@ -883,6 +902,9 @@ suite = {
       "dependencies" : [
         "SULONG_TEST",
       ],
+      "buildDependencies" : [
+        "LINUX_AMD64_SUPPORT",
+      ],
       "testProject" : True,
       "defaultBuild" : False,
     },
@@ -899,6 +921,9 @@ suite = {
       },
       "dependencies" : [
         "SULONG_TEST",
+      ],
+      "buildDependencies" : [
+        "LINUX_AMD64_SUPPORT",
       ],
       "testProject" : True,
       "defaultBuild" : False,
@@ -919,7 +944,6 @@ suite = {
         "SULONG_TEST",
       ],
       "buildDependencies" : [
-        # "AMD64_SUPPORT" currently not working on darwin GR-21946,
         "LINUX_AMD64_SUPPORT",
       ],
       "testProject" : True,
@@ -939,6 +963,21 @@ suite = {
       ],
       "buildDependencies" : [
         "LINUX_AMD64_SUPPORT",
+      ],
+      "testProject" : True,
+      "defaultBuild" : False,
+    },
+    "com.oracle.truffle.llvm.tests.pthread.native" : {
+      "subDir" : "tests",
+      "class" : "SulongTestSuite",
+      "variants" : ["O0"],
+      "buildEnv" : {
+        "SUITE_CFLAGS" : "-pthread",
+        "SUITE_LDFLAGS" : "-pthread",
+        "OS" : "<os>",
+      },
+      "dependencies" : [
+        "SULONG_TEST",
       ],
       "testProject" : True,
       "defaultBuild" : False,
@@ -988,23 +1027,20 @@ suite = {
         },
       },
     },
-    "inlineassemblytests" : {
+    "com.oracle.truffle.llvm.tests.inlineasm.native" : {
       "subDir" : "tests",
       "class" : "SulongTestSuite",
       "variants" : ["O0"],
       "buildEnv" : {
         "SUITE_CPPFLAGS" : "-I<path:SULONG_LEGACY>/include",
       },
-      "dependencies" : [
-        "SULONG_TEST_SUITES",
-      ],
       "buildDependencies" : [
         "LINUX_AMD64_SUPPORT",
       ],
       "testProject" : True,
       "defaultBuild" : False,
     },
-    "other" : {
+    "com.oracle.truffle.llvm.tests.standalone.other.native" : {
       "subDir" : "tests",
       "class" : "SulongTestSuite",
       "variants" : ["O1"],
@@ -1032,6 +1068,8 @@ suite = {
         "bitcodeformat/hello-darwin-link-fembed-bitcode",
         "bitcodeformat/hello-darwin-link-fembed-bitcode.dylib",
         "bitcodeformat/hello-darwin-link.bundle",
+        "bitcodeformat/hello-windows-compile-fembed-bitcode.o",
+        "bitcodeformat/hello-windows-link-fembed-bitcode.exe",
       ],
       "buildEnv": {
         "SUITE_CPPFLAGS": "-I<path:SULONG_LEGACY>/include -I<path:SULONG_HOME>/include",
@@ -1064,6 +1102,47 @@ suite = {
         "linker",
         "rpath",
         "reload",
+      ],
+      "testProject" : True,
+      "defaultBuild" : False,
+    },
+    "com.oracle.truffle.llvm.tests.dynloader.native" : {
+      "subDir" : "tests",
+      "native": True,
+      "vpath": True,
+      "buildEnv" : {
+        "OS" : "<os>",
+        "CLANG": "<toolchainGetToolPath:native,CC>",
+        "SRC_DIR": "<path:com.oracle.truffle.llvm.tests.dynloader.native>",
+      },
+      "dependencies" : [
+        "SULONG_TEST",
+        "SULONG_TOOLCHAIN_LAUNCHERS",
+        "SULONG_BOOTSTRAP_TOOLCHAIN",
+      ],
+      "results": [
+        "dlopenAbsolute",
+        "dlopenLocator",
+      ],
+      "testProject" : True,
+      "defaultBuild" : False,
+    },
+    "com.oracle.truffle.llvm.tests.embedded.custom.native" : {
+      "description" : "Embedded tests with custom Makefiles",
+      "subDir" : "tests",
+      "native": True,
+      "vpath": True,
+      "buildEnv" : {
+        "OS" : "<os>",
+        "CLANG": "<toolchainGetToolPath:native,CC>",
+        "SRC_DIR": "<path:com.oracle.truffle.llvm.tests.embedded.custom.native>",
+      },
+      "dependencies" : [
+        "SULONG_TEST",
+        "SULONG_TOOLCHAIN_LAUNCHERS",
+        "SULONG_BOOTSTRAP_TOOLCHAIN",
+      ],
+      "results": [
         "interop",
       ],
       "testProject" : True,
@@ -1178,8 +1257,7 @@ suite = {
       "requireDragonegg" : True,
       "native" : True,
       "vpath" : True,
-      "variants" : ["O0"],
-      "extraLibs" : ["libgfortran.so.3"],
+      "variants" : ["O0_OUT"],
       "single_job" : True, # problem with parallel builds and temporary module files
       "buildRef" : True,
       "buildEnv" : {
@@ -1198,7 +1276,6 @@ suite = {
     "parserTorture" : {
       "subDir" : "tests/gcc",
       "class" : "ExternalTestSuite",
-      "testClasses" : ["com.oracle.truffle.llvm.tests.ParserTortureSuite"],
       "testDir" : "gcc-5.2.0/gcc/testsuite/gcc.c-torture/compile",
       "configDir" : "configs/gcc.c-torture/compile",
       "fileExts" : [".c"],
@@ -1223,7 +1300,6 @@ suite = {
     "llvm" : {
       "subDir" : "tests/llvm",
       "class" : "ExternalTestSuite",
-      "testClasses" : ["com.oracle.truffle.llvm.tests.LLVMSuite"],
       "testDir" : "test-suite-3.2.src",
       "fileExts" : [".c", ".cpp", ".C", ".cc", ".m"],
       "native" : True,
@@ -1247,13 +1323,11 @@ suite = {
     "shootout" : {
       "subDir" : "tests/benchmarksgame",
       "class" : "ExternalTestSuite",
-      "testClasses" : ["com.oracle.truffle.llvm.tests.ShootoutsSuite"],
       "testDir" : "benchmarksgame-2014-08-31/benchmarksgame/bench/",
       "fileExts" : [".c", ".cpp", ".C", ".cc", ".m", ".gcc", ".cint", ".gpp"],
       "native" : True,
       "vpath" : True,
       "variants" : ["O1_OUT"],
-      "extraLibs" : ["libgmp.so.10"],
       "buildRef" : True,
       "buildEnv" : {
         "SUITE_LDFLAGS" : "-lm -lgmp",
@@ -1272,7 +1346,6 @@ suite = {
     "nwcc" : {
       "subDir" : "tests/nwcc",
       "class" : "ExternalTestSuite",
-      "testClasses" : ["com.oracle.truffle.llvm.tests.NWCCSuite"],
       "testDir" : "nwcc_0.8.3",
       "fileExts" : [".c"],
       "native" : True,
@@ -1340,6 +1413,7 @@ suite = {
       "distDependencies" : [
         "SULONG_CORE",
         "truffle:TRUFFLE_NFI",
+        "truffle:TRUFFLE_NFI_LIBFFI",
       ],
       "license" : "BSD-new",
     },
@@ -1424,15 +1498,25 @@ suite = {
     "SULONG_BOOTSTRAP_TOOLCHAIN": {
       "native": True,
       "relpath": False,
-      "platformDependent": False,
+      "platformDependent": True,
       "layout": {
         "./": "dependency:bootstrap-toolchain-launchers/*",
       },
-      "dependencies": [
-        "bootstrap-toolchain-launchers",
+      "buildDependencies" : [
         "SULONG_TOOLCHAIN_LAUNCHERS",
       ],
-      "distDependencies" : [
+      "license": "BSD-new",
+    },
+
+    "SULONG_BOOTSTRAP_TOOLCHAIN_NO_HOME": {
+      "description" : "Bootstrap toolchain without an llvm.home. Use for bootstrapping libraries that should be contained in llvm.home.",
+      "native": True,
+      "relpath": False,
+      "platformDependent": True,
+      "layout": {
+        "./": "dependency:bootstrap-toolchain-launchers-no-home/*",
+      },
+      "buildDependencies": [
         "SULONG_TOOLCHAIN_LAUNCHERS",
       ],
       "license": "BSD-new",
@@ -1514,35 +1598,150 @@ suite = {
       "defaultBuild" : False,
     },
 
-    "SULONG_TEST_SUITES" : {
+    "SULONG_STANDALONE_TEST_SUITES" : {
+      "description" : "Tests with a reference executable that is used to verify the result.",
       "native" : True,
       "relpath" : True,
       "platformDependent" : True,
       "layout" : {
         "./" : [
-          "dependency:com.oracle.truffle.llvm.tests.bitcodeformat.native/*",
-          "dependency:com.oracle.truffle.llvm.tests.debug.native/*",
-          "dependency:com.oracle.truffle.llvm.tests.debugexpr.native/*",
           "dependency:com.oracle.truffle.llvm.tests.llirtestgen.generated/*",
-          "dependency:com.oracle.truffle.llvm.tests.irdebug.native/*",
-          "dependency:com.oracle.truffle.llvm.tests.interop.native/*",
-          "dependency:com.oracle.truffle.llvm.tests.other.native/*",
           "dependency:com.oracle.truffle.llvm.tests.sulong.native/*",
           "dependency:com.oracle.truffle.llvm.tests.sulongavx.native/*",
           "dependency:com.oracle.truffle.llvm.tests.sulongcpp.native/*",
           "dependency:com.oracle.truffle.llvm.tests.libc.native/*",
           "dependency:com.oracle.truffle.llvm.tests.linker.native/*",
           "dependency:com.oracle.truffle.llvm.tests.va.native/*",
+          "dependency:com.oracle.truffle.llvm.tests.inlineasm.native/*",
           "dependency:com.oracle.truffle.llvm.tests.bitcode.native/*",
           "dependency:com.oracle.truffle.llvm.tests.bitcode.uncommon.native/*",
-          "dependency:com.oracle.truffle.llvm.tests.bitcode.other.native/*",
           "dependency:com.oracle.truffle.llvm.tests.bitcode.amd64.native/*",
+          "dependency:com.oracle.truffle.llvm.tests.pthread.native/*",
+          "dependency:com.oracle.truffle.llvm.tests.dynloader.native/*",
         ],
       },
       "license" : "BSD-new",
       "testDistribution" : True,
       "defaultBuild" : False,
     },
+    "SULONG_EMBEDDED_TEST_SUITES" : {
+      "description" : "Tests without a reference executable that require a special JUnit test class.",
+      "native" : True,
+      "relpath" : True,
+      "platformDependent" : True,
+      "layout" : {
+        "./" : [
+          "dependency:com.oracle.truffle.llvm.tests.standalone.other.native/*",
+          "dependency:com.oracle.truffle.llvm.tests.debug.native/*",
+          "dependency:com.oracle.truffle.llvm.tests.bitcodeformat.native/*",
+          "dependency:com.oracle.truffle.llvm.tests.interop.native/*",
+          "dependency:com.oracle.truffle.llvm.tests.debugexpr.native/*",
+          "dependency:com.oracle.truffle.llvm.tests.irdebug.native/*",
+          "dependency:com.oracle.truffle.llvm.tests.embedded.custom.native/*",
+          "dependency:com.oracle.truffle.llvm.tests.bitcode.other.native/*",
+          # the reload tests are not only ran as standalone test (SulongSuite) but also as embedded test (LoaderTest)
+          "dependency:com.oracle.truffle.llvm.tests.linker.native/reload",
+        ],
+      },
+      "license" : "BSD-new",
+      "testDistribution" : True,
+      "defaultBuild" : False,
+    },
+    "SULONG_TEST_SUITES" : {
+      "native" : True,
+      "relpath" : True,
+      "platformDependent" : True,
+      "license" : "BSD-new",
+      "testDistribution" : True,
+      "defaultBuild" : False,
+      "ignore" : "No longer available. Use either SULONG_STANDALONE_TEST_SUITES or SULONG_EMBEDDED_TEST_SUITES.",
+    },
+    # <editor-fold desc="External Test Suites">
+    "SULONG_GCC_C_TEST_SUITE" : {
+      "native" : True,
+      "relpath" : True,
+      "platformDependent" : True,
+      "layout" : {
+        "./" : [
+          "dependency:gcc_c/*",
+        ],
+      },
+      "testDistribution" : True,
+      "defaultBuild" : False,
+    },
+    "SULONG_GCC_CPP_TEST_SUITE" : {
+      "native" : True,
+      "relpath" : True,
+      "platformDependent" : True,
+      "layout" : {
+        "./" : [
+          "dependency:gcc_cpp/*",
+        ],
+      },
+      "testDistribution" : True,
+      "defaultBuild" : False,
+    },
+    "SULONG_GCC_FORTRAN_TEST_SUITE" : {
+      "native" : True,
+      "relpath" : True,
+      "platformDependent" : True,
+      "layout" : {
+        "./" : [
+          "dependency:gcc_fortran/*",
+        ],
+      },
+      "testDistribution" : True,
+      "defaultBuild" : False,
+    },
+    "SULONG_PARSER_TORTURE" : {
+      "native" : True,
+      "relpath" : True,
+      "platformDependent" : True,
+      "layout" : {
+        "./" : [
+          "dependency:parserTorture/*",
+        ],
+      },
+      "testDistribution" : True,
+      "defaultBuild" : False,
+    },
+    "SULONG_LLVM_TEST_SUITE" : {
+      "native" : True,
+      "relpath" : True,
+      "platformDependent" : True,
+      "layout" : {
+        "./" : [
+          "dependency:llvm/*",
+        ],
+      },
+      "testDistribution" : True,
+      "defaultBuild" : False,
+    },
+    "SULONG_SHOOTOUT_TEST_SUITE" : {
+      "native" : True,
+      "relpath" : True,
+      "platformDependent" : True,
+      "layout" : {
+        "./" : [
+          "dependency:shootout/*",
+        ],
+      },
+      "testDistribution" : True,
+      "defaultBuild" : False,
+    },
+    "SULONG_NWCC_TEST_SUITE" : {
+      "native" : True,
+      "relpath" : True,
+      "platformDependent" : True,
+      "layout" : {
+        "./" : [
+          "dependency:nwcc/*",
+        ],
+      },
+      "testDistribution" : True,
+      "defaultBuild" : False,
+    },
+    # </editor-fold>
     "SULONG_TCK_NATIVE" : {
       "native" : True,
       "relpath" : True,

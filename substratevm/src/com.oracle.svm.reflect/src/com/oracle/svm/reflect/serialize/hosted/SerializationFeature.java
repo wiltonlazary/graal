@@ -31,7 +31,6 @@ import java.io.Externalizable;
 import java.io.ObjectStreamClass;
 import java.io.Serializable;
 import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Collections;
@@ -48,6 +47,7 @@ import com.oracle.svm.core.configure.ConfigurationFiles;
 import com.oracle.svm.core.configure.SerializationConfigurationParser;
 import com.oracle.svm.core.configure.SerializationConfigurationParser.SerializationParserFunction;
 import com.oracle.svm.core.jdk.Package_jdk_internal_reflect;
+import com.oracle.svm.core.jdk.RecordSupport;
 import com.oracle.svm.core.jdk.serialize.SerializationRegistry;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.VMError;
@@ -132,6 +132,18 @@ public class SerializationFeature implements Feature {
             RuntimeReflection.register(ReflectionUtil.lookupConstructor(serializationTargetClass, (Class<?>[]) null));
         }
 
+        RecordSupport recordSupport = RecordSupport.singleton();
+        if (recordSupport.isRecord(serializationTargetClass)) {
+            /* Serialization for records uses the canonical record constructor directly. */
+            RuntimeReflection.register(recordSupport.getCanonicalRecordConstructor(serializationTargetClass));
+            /*
+             * Serialization for records invokes Class.getRecordComponents(). Registering all record
+             * component accessor methods for reflection ensures that the record components are
+             * available at run time.
+             */
+            RuntimeReflection.register(recordSupport.getRecordComponentAccessorMethods(serializationTargetClass));
+        }
+
         RuntimeReflection.register(serializationTargetClass);
         /*
          * ObjectStreamClass.computeDefaultSUID is always called at runtime to verify serialization
@@ -150,16 +162,7 @@ public class SerializationFeature implements Feature {
     }
 
     private static void registerFields(Class<?> serializationTargetClass) {
-        for (Field f : serializationTargetClass.getDeclaredFields()) {
-            int modifiers = f.getModifiers();
-            boolean allowWrite = false;
-            boolean allowUnsafeAccess = false;
-            int staticFinalMask = Modifier.STATIC | Modifier.FINAL;
-            if ((modifiers & staticFinalMask) != staticFinalMask) {
-                allowUnsafeAccess = !Modifier.isStatic(f.getModifiers());
-            }
-            RuntimeReflection.register(allowWrite, allowUnsafeAccess, f);
-        }
+        RuntimeReflection.register(serializationTargetClass.getDeclaredFields());
     }
 
     private static Class<?> resolveClass(String typeName, FeatureAccess a) {

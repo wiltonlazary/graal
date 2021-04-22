@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -577,6 +577,41 @@ public class LanguageSPITest {
                 }
                 if (!leaveFailed) {
                     fail("no assertion error for leaving without enter");
+                }
+                return null;
+            }
+        };
+        eval(context, f);
+        context.close();
+    }
+
+    @Test
+    public void testEnterInNewThread() {
+        Context context = Context.create();
+        Function<Env, Object> f = new Function<Env, Object>() {
+            @Override
+            public Object apply(Env env) {
+                Throwable[] error = new Throwable[1];
+                Thread thread = new Thread(() -> {
+                    try {
+                        try {
+                            Object prev = env.getContext().enter(null);
+                            assertNull("already entered in new thread", prev);
+                        } finally {
+                            env.getContext().leave(null, null);
+                        }
+                    } catch (Throwable t) {
+                        error[0] = t;
+                    }
+                });
+                thread.start();
+                try {
+                    thread.join();
+                } catch (InterruptedException ex) {
+                    throw new RuntimeException(ex);
+                }
+                if (error[0] != null) {
+                    throw new AssertionError(error[0]);
                 }
                 return null;
             }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -171,16 +171,12 @@ public abstract class LayoutImpl extends com.oracle.truffle.api.object.Layout {
         protected Support() {
         }
 
-        public final void growAndSetShape(DynamicObject object, Shape oldShape, Shape newShape) {
-            DynamicObjectSupport.growAndSetShape(object, oldShape, newShape);
+        public final void grow(DynamicObject object, Shape thisShape, Shape otherShape) {
+            DynamicObjectSupport.grow(object, thisShape, otherShape);
         }
 
         public final void resize(DynamicObject object, Shape thisShape, Shape otherShape) {
             DynamicObjectSupport.resize(object, thisShape, otherShape);
-        }
-
-        public final void resizeAndSetShape(DynamicObject object, Shape thisShape, Shape otherShape) {
-            DynamicObjectSupport.resizeAndSetShape(object, thisShape, otherShape);
         }
 
         public final void invalidateAllPropertyAssumptions(Shape shape) {

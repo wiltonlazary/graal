@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -912,6 +912,15 @@ public class Graph {
 
     private static final CounterKey GraphCompressions = DebugContext.counter("GraphCompressions");
 
+    @SuppressWarnings("unused")
+    protected Object beforeNodeIdChange(Node node) {
+        return null;
+    }
+
+    @SuppressWarnings("unused")
+    protected void afterNodeIdChange(Node node, Object value) {
+    }
+
     /**
      * If the {@linkplain Options#GraphCompressionThreshold compression threshold} is met, the list
      * of nodes is compressed such that all non-null entries precede all null entries while
@@ -935,7 +944,9 @@ public class Graph {
                 assert n.id == i;
                 if (i != nextId) {
                     assert n.id > nextId;
+                    Object value = beforeNodeIdChange(n);
                     n.id = nextId;
+                    afterNodeIdChange(n, value);
                     nodes[nextId] = n;
                     nodes[i] = null;
                 }

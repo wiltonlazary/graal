@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -52,6 +52,7 @@ import com.oracle.truffle.api.OptimizationFailedException;
 import com.oracle.truffle.api.ReplaceObserver;
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.Truffle;
+import com.oracle.truffle.api.TruffleSafepoint;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.impl.DefaultCompilerOptions;
@@ -134,19 +135,29 @@ public abstract class OptimizedCallTarget implements CompilableTruffleAST, RootC
     /**
      * The call threshold is counted up for each real call until it reaches a
      * {@link PolyglotCompilerOptions#FirstTierCompilationThreshold first tier} or
-     * {@link PolyglotCompilerOptions#CompilationThreshold second tier} compilation threshold, and
-     * triggers a {@link #compile(boolean) compilation}. It is incremented for each real call to the
-     * call target. Reset by TruffleFeature after boot image generation.
+     * {@link PolyglotCompilerOptions#LastTierCompilationThreshold second tier} compilation
+     * threshold, and triggers a {@link #compile(boolean) compilation}. It is incremented for each
+     * real call to the call target. Reset by TruffleFeature after image generation.
      */
     private int callCount;
+
     /**
      * The call and loop threshold is counted up for each real call until it reaches a
      * {@link PolyglotCompilerOptions#FirstTierCompilationThreshold first tier} or
-     * {@link PolyglotCompilerOptions#CompilationThreshold second tier} compilation threshold, and
-     * triggers a {@link #compile(boolean) compilation}. It is incremented for each real call to the
-     * call target. Reset by TruffleFeature after boot image generation.
+     * {@link PolyglotCompilerOptions#LastTierCompilationThreshold second tier} compilation
+     * threshold, and triggers a {@link #compile(boolean) compilation}. It is incremented for each
+     * real call to the call target. Reset by TruffleFeature after image generation.
      */
     private int callAndLoopCount;
+    private int highestCompiledTier = 0;
+
+    public void compiledTier(int tier) {
+        highestCompiledTier = Math.max(highestCompiledTier, tier);
+    }
+
+    public int highestCompiledTier() {
+        return highestCompiledTier;
+    }
 
     /*
      * Profiling information (types and Assumption) are kept in 2-final-fields objects to ensure to
@@ -163,9 +174,9 @@ public abstract class OptimizedCallTarget implements CompilableTruffleAST, RootC
      * the CallTarget, except that the newer profile can only be less precise (= more null) and so
      * will end up not casting at all the argument indices that did not match the profile.
      *
-     * These fields are reset by TruffleFeature after boot image generation. These fields are
-     * initially null, and once they become non-null they never become null again (except through
-     * the reset of TruffleFeature).
+     * These fields are reset by TruffleFeature after image generation. These fields are initially
+     * null, and once they become non-null they never become null again (except through the reset of
+     * TruffleFeature).
      */
     @CompilationFinal private volatile ArgumentsProfile argumentsProfile;
     @CompilationFinal private volatile ReturnProfile returnProfile;
@@ -240,8 +251,7 @@ public abstract class OptimizedCallTarget implements CompilableTruffleAST, RootC
     }
 
     /**
-     * Set if compilation failed or was ignored. Reset by TruffleFeature after boot image
-     * generation.
+     * Set if compilation failed or was ignored. Reset by TruffleFeature after image generation.
      */
     private volatile boolean compilationFailed;
     /**
@@ -253,7 +263,7 @@ public abstract class OptimizedCallTarget implements CompilableTruffleAST, RootC
 
     /**
      * Timestamp when the call target was initialized e.g. used the first time. Reset by
-     * TruffleFeature after boot image generation.
+     * TruffleFeature after image generation.
      */
     private volatile long initializedTimestamp;
 
@@ -608,11 +618,12 @@ public abstract class OptimizedCallTarget implements CompilableTruffleAST, RootC
             GraalRuntimeAccessor.LANGUAGE.onThrowable(null, this, profiledT, frame);
             throw rethrow(profiledT);
         } finally {
-            // this assertion is needed to keep the values from being cleared as non-live locals
-            assert frame != null && this != null;
             if (CompilerDirectives.inInterpreter() && inCompiled) {
                 notifyDeoptimized(frame);
             }
+            TruffleSafepoint.poll(rootNode);
+            // this assertion is needed to keep the values from being cleared as non-live locals
+            assert frame != null && this != null;
         }
     }
 
@@ -653,7 +664,7 @@ public abstract class OptimizedCallTarget implements CompilableTruffleAST, RootC
     }
 
     public final OptionValues getOptionValues() {
-        return engine.engineOptions;
+        return engine.getEngineOptions();
     }
 
     public final <T> T getOptionValue(OptionKey<T> key) {
@@ -943,6 +954,9 @@ public abstract class OptimizedCallTarget implements CompilableTruffleAST, RootC
         String result = nameCache;
         if (result == null) {
             result = rootNode.toString();
+            if (sourceCallTarget != null) {
+                result += " <split-" + Integer.toHexString(hashCode()) + ">";
+            }
             nameCache = result;
         }
         return result;

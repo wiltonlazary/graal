@@ -195,6 +195,14 @@ final class JDWP {
 
                 PacketStream reply = new PacketStream().replyPacket().id(packet.id);
                 controller.suspendAll();
+
+                // give threads time to suspend before returning
+                for (Object guestThread : controller.getContext().getAllGuestThreads()) {
+                    SuspendedInfo info = controller.getSuspendedInfo(guestThread);
+                    if (info instanceof UnknownSuspendedInfo) {
+                        awaitSuspendedInfo(controller, guestThread, info);
+                    }
+                }
                 return new CommandResult(reply);
             }
         }
@@ -1309,14 +1317,14 @@ final class JDWP {
                 LineNumberTableRef table = method.getLineNumberTable();
 
                 if (table != null) {
-                    LineNumberTableRef.EntryRef[] entries = table.getEntries();
+                    List<? extends LineNumberTableRef.EntryRef> entries = table.getEntries();
                     long start = method.isMethodNative() ? -1 : 0;
                     long end = method.isMethodNative() ? -1 : method.getLastBCI();
-                    int lines = entries.length;
+                    int lines = entries.size();
                     Line[] allLines = new Line[lines];
 
-                    for (int i = 0; i < entries.length; i++) {
-                        LineNumberTableRef.EntryRef entry = entries[i];
+                    for (int i = 0; i < entries.size(); i++) {
+                        LineNumberTableRef.EntryRef entry = entries.get(i);
                         int bci = entry.getBCI();
                         int line = entry.getLineNumber();
                         allLines[i] = new Line(bci, line);
@@ -2501,8 +2509,8 @@ final class JDWP {
                     switch (tag) {
                         case BOOLEAN:
                             boolean bool = input.readBoolean();
-                            boolean[] boolArray = context.getUnboxedArray(array);
-                            boolArray[i] = bool;
+                            byte[] boolArray = context.getUnboxedArray(array);
+                            boolArray[i] = bool ? (byte) 1 : (byte) 0;
                             break;
                         case TagConstants.BYTE:
                             byte b = input.readByte();

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -162,6 +162,19 @@ final class HostInteropErrors {
                             String.format("Illegal identifier type '%s' for Map<%s, %s> %s.", identifier == null ? "null" : identifier.getClass().getTypeName(), formatComponentType(keyType),
                                             formatComponentType(valueType), getValueInfo(context, receiver)));
         }
+    }
+
+    @TruffleBoundary
+    static RuntimeException mapEntryUnsupported(PolyglotLanguageContext context, Object receiver, Type keyType, Type valueType, String operation) {
+        String message = String.format("Unsupported operation %s for Map.Entry<%s, %s> %s.", operation, formatComponentType(keyType), formatComponentType(valueType), getValueInfo(context, receiver));
+        throw PolyglotEngineException.unsupported(message);
+    }
+
+    @TruffleBoundary
+    static RuntimeException invalidMapEntryArrayIndex(PolyglotLanguageContext context, Object receiver, Type keyType, Type valueType, long index) {
+        throw PolyglotEngineException.classCast(
+                        String.format("Invalid index %d for Map.Entry<%s, %s> %s.",
+                                        index, formatComponentType(keyType), formatComponentType(valueType), getValueInfo(context, receiver)));
     }
 
     @TruffleBoundary

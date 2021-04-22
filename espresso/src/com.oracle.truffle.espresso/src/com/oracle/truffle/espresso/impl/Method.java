@@ -36,7 +36,6 @@ import static com.oracle.truffle.espresso.classfile.Constants.REF_invokeInterfac
 import static com.oracle.truffle.espresso.classfile.Constants.REF_invokeSpecial;
 import static com.oracle.truffle.espresso.classfile.Constants.REF_invokeStatic;
 import static com.oracle.truffle.espresso.classfile.Constants.REF_invokeVirtual;
-import static com.oracle.truffle.espresso.jni.NativeEnv.word;
 
 import java.io.PrintStream;
 import java.lang.reflect.Modifier;
@@ -54,10 +53,8 @@ import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.api.interop.TruffleObject;
-import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.espresso.EspressoOptions;
-import com.oracle.truffle.espresso.Utils;
 import com.oracle.truffle.espresso.bytecode.BytecodeStream;
 import com.oracle.truffle.espresso.bytecode.Bytecodes;
 import com.oracle.truffle.espresso.classfile.ConstantPool;
@@ -75,6 +72,10 @@ import com.oracle.truffle.espresso.descriptors.Symbol;
 import com.oracle.truffle.espresso.descriptors.Symbol.Name;
 import com.oracle.truffle.espresso.descriptors.Symbol.Signature;
 import com.oracle.truffle.espresso.descriptors.Symbol.Type;
+import com.oracle.truffle.espresso.ffi.NativeAccess;
+import com.oracle.truffle.espresso.ffi.NativeSignature;
+import com.oracle.truffle.espresso.ffi.NativeType;
+import com.oracle.truffle.espresso.ffi.Pointer;
 import com.oracle.truffle.espresso.jdwp.api.Ids;
 import com.oracle.truffle.espresso.jdwp.api.KlassRef;
 import com.oracle.truffle.espresso.jdwp.api.LineNumberTableRef;
@@ -82,7 +83,6 @@ import com.oracle.truffle.espresso.jdwp.api.LocalVariableTableRef;
 import com.oracle.truffle.espresso.jdwp.api.MethodBreakpoint;
 import com.oracle.truffle.espresso.jdwp.api.MethodRef;
 import com.oracle.truffle.espresso.jni.Mangle;
-import com.oracle.truffle.espresso.jni.NativeLibrary;
 import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.ExceptionHandler;
 import com.oracle.truffle.espresso.meta.JavaKind;
@@ -91,13 +91,13 @@ import com.oracle.truffle.espresso.meta.MetaUtil;
 import com.oracle.truffle.espresso.nodes.BytecodeNode;
 import com.oracle.truffle.espresso.nodes.EspressoRootNode;
 import com.oracle.truffle.espresso.nodes.NativeMethodNode;
+import com.oracle.truffle.espresso.nodes.interop.AbstractLookupNode;
 import com.oracle.truffle.espresso.nodes.methodhandle.MethodHandleIntrinsicNode;
 import com.oracle.truffle.espresso.runtime.Attribute;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.MethodHandleIntrinsics;
 import com.oracle.truffle.espresso.runtime.StaticObject;
 import com.oracle.truffle.espresso.vm.InterpreterToVM;
-import com.oracle.truffle.nfi.spi.types.NativeSimpleType;
 
 public final class Method extends Member<Signature> implements TruffleObject, ContextAccess {
 
@@ -189,7 +189,8 @@ public final class Method extends Member<Signature> implements TruffleObject, Co
             this.parsedSignature = getSignatures().parsed(this.getRawSignature());
         } catch (IllegalArgumentException | ClassFormatError e) {
             CompilerDirectives.transferToInterpreterAndInvalidate();
-            throw Meta.throwExceptionWithMessage(getMeta().java_lang_ClassFormatError, e.getMessage());
+            Meta meta = getMeta();
+            throw meta.throwExceptionWithMessage(meta.java_lang_ClassFormatError, e.getMessage());
         }
 
         // Proxy the method, so that we have the same callTarget if it is not yet initialized.
@@ -211,7 +212,8 @@ public final class Method extends Member<Signature> implements TruffleObject, Co
             this.parsedSignature = getSignatures().parsed(this.getRawSignature());
         } catch (IllegalArgumentException | ClassFormatError e) {
             CompilerDirectives.transferToInterpreterAndInvalidate();
-            throw Meta.throwExceptionWithMessage(getMeta().java_lang_ClassFormatError, e.getMessage());
+            Meta meta = getMeta();
+            throw meta.throwExceptionWithMessage(meta.java_lang_ClassFormatError, e.getMessage());
         }
         // Proxy the method, so that we have the same callTarget if it is not yet initialized.
         // Allows for not duplicating the codeAttribute
@@ -236,7 +238,8 @@ public final class Method extends Member<Signature> implements TruffleObject, Co
             this.parsedSignature = getSignatures().parsed(this.getRawSignature());
         } catch (IllegalArgumentException | ClassFormatError e) {
             CompilerDirectives.transferToInterpreterAndInvalidate();
-            throw Meta.throwExceptionWithMessage(getMeta().java_lang_ClassFormatError, e.getMessage());
+            Meta meta = getMeta();
+            throw meta.throwExceptionWithMessage(meta.java_lang_ClassFormatError, e.getMessage());
         }
 
         this.exceptionsAttribute = (ExceptionsAttribute) linkedMethod.getAttribute(ExceptionsAttribute.NAME);
@@ -324,32 +327,34 @@ public final class Method extends Member<Signature> implements TruffleObject, Co
         return res;
     }
 
-    private static String buildJniNativeSignature(Method method) {
+    public static NativeSignature buildJniNativeSignature(Symbol<Type>[] signature) {
+        NativeType returnType = NativeAccess.kindToNativeType(Signatures.returnKind(signature));
+        int argCount = Signatures.parameterCount(signature, false);
+
+        // Prepend JNIEnv* and class|receiver.
+        NativeType[] parameterTypes = new NativeType[argCount + 2];
+
         // Prepend JNIEnv*.
-        StringBuilder sb = new StringBuilder("(").append(NativeSimpleType.POINTER);
-        final Symbol<Type>[] signature = method.getParsedSignature();
+        parameterTypes[0] = NativeType.POINTER;
 
         // Receiver for instance methods, class for static methods.
-        sb.append(", ").append(word());
+        parameterTypes[1] = NativeType.OBJECT;
 
-        int argCount = Signatures.parameterCount(signature, false);
         for (int i = 0; i < argCount; ++i) {
-            sb.append(", ").append(Utils.kindToType(Signatures.parameterKind(signature, i)));
+            parameterTypes[i + 2] = NativeAccess.kindToNativeType(Signatures.parameterKind(signature, i));
         }
 
-        sb.append("): ").append(Utils.kindToType(Signatures.returnKind(signature)));
-
-        return sb.toString();
+        return NativeSignature.create(returnType, parameterTypes);
     }
 
-    public static TruffleObject bind(TruffleObject library, Method m, String mangledName) throws UnknownIdentifierException {
-        String signature = buildJniNativeSignature(m);
-        return NativeLibrary.lookupAndBind(library, mangledName, signature);
+    public TruffleObject lookupAndBind(@Pointer TruffleObject library, String mangledName) {
+        NativeSignature signature = buildJniNativeSignature(getParsedSignature());
+        return getNativeAccess().lookupAndBindSymbol(library, mangledName, signature);
     }
 
-    private static TruffleObject bind(TruffleObject symbol, Method m) {
-        String signature = buildJniNativeSignature(m);
-        return NativeLibrary.bind(symbol, signature);
+    private TruffleObject bind(@Pointer TruffleObject symbol) {
+        NativeSignature signature = buildJniNativeSignature(getParsedSignature());
+        return getNativeAccess().bindSymbol(symbol, signature);
     }
 
     /**
@@ -414,9 +419,9 @@ public final class Method extends Member<Signature> implements TruffleObject, Co
                  * Supposed to be IncompatibleClassChangeError (see jvms-6.5.invokeinterface), but
                  * HotSpot throws AbstractMethodError.
                  */
-                throw Meta.throwExceptionWithMessage(meta.java_lang_AbstractMethodError, "Conflicting default methods: " + getName());
+                throw meta.throwExceptionWithMessage(meta.java_lang_AbstractMethodError, "Conflicting default methods: " + getName());
             }
-            throw Meta.throwExceptionWithMessage(meta.java_lang_IncompatibleClassChangeError, "Conflicting default methods: " + getName());
+            throw meta.throwExceptionWithMessage(meta.java_lang_IncompatibleClassChangeError, "Conflicting default methods: " + getName());
         }
     }
 
@@ -426,12 +431,10 @@ public final class Method extends Member<Signature> implements TruffleObject, Co
         if (StaticObject.isNull(getDeclaringKlass().getDefiningClassLoader())) {
             for (boolean withSignature : new boolean[]{false, true}) {
                 String mangledName = Mangle.mangleMethod(this, withSignature);
-                try {
-                    // Look in libjava
-                    TruffleObject nativeMethod = bind(getVM().getJavaLibrary(), this, mangledName);
-                    return Truffle.getRuntime().createCallTarget(EspressoRootNode.create(null, new NativeMethodNode(nativeMethod, getMethodVersion(), true)));
-                } catch (UnknownIdentifierException e) {
-                    // native method not found in libjava, safe to ignore
+                // Look in libjava
+                TruffleObject nativeMethod = lookupAndBind(getVM().getJavaLibrary(), mangledName);
+                if (nativeMethod != null) {
+                    return Truffle.getRuntime().createCallTarget(EspressoRootNode.create(null, new NativeMethodNode(nativeMethod, getMethodVersion())));
                 }
             }
         }
@@ -444,7 +447,7 @@ public final class Method extends Member<Signature> implements TruffleObject, Co
             String mangledName = Mangle.mangleMethod(this, withSignature);
             TruffleObject nativeMethod = getContext().bindToAgent(this, mangledName);
             if (nativeMethod != null) {
-                return Truffle.getRuntime().createCallTarget(EspressoRootNode.create(null, new NativeMethodNode(nativeMethod, getMethodVersion(), true)));
+                return Truffle.getRuntime().createCallTarget(EspressoRootNode.create(null, new NativeMethodNode(nativeMethod, getMethodVersion())));
             }
         }
         return null;
@@ -469,8 +472,8 @@ public final class Method extends Member<Signature> implements TruffleObject, Co
             return null;
         }
         TruffleObject symbol = getVM().getFunction(handle);
-        TruffleObject nativeMethod = bind(symbol, this);
-        return Truffle.getRuntime().createCallTarget(EspressoRootNode.create(null, new NativeMethodNode(nativeMethod, this.getMethodVersion(), true)));
+        TruffleObject nativeMethod = bind(symbol);
+        return Truffle.getRuntime().createCallTarget(EspressoRootNode.create(null, new NativeMethodNode(nativeMethod, this.getMethodVersion())));
     }
 
     public boolean isConstructor() {
@@ -652,9 +655,9 @@ public final class Method extends Member<Signature> implements TruffleObject, Co
         StaticObject curMethod = seed;
         Method target = null;
         while (target == null) {
-            target = (Method) curMethod.getHiddenField(meta.HIDDEN_METHOD_KEY);
+            target = (Method) meta.HIDDEN_METHOD_KEY.getHiddenObject(curMethod);
             if (target == null) {
-                curMethod = (StaticObject) meta.java_lang_reflect_Method_root.get(curMethod);
+                curMethod = meta.java_lang_reflect_Method_root.getObject(curMethod);
             }
         }
         return target;
@@ -665,9 +668,9 @@ public final class Method extends Member<Signature> implements TruffleObject, Co
         StaticObject curMethod = seed;
         Method target = null;
         while (target == null) {
-            target = (Method) curMethod.getHiddenField(meta.HIDDEN_CONSTRUCTOR_KEY);
+            target = (Method) meta.HIDDEN_CONSTRUCTOR_KEY.getHiddenObject(curMethod);
             if (target == null) {
-                curMethod = (StaticObject) meta.java_lang_reflect_Constructor_root.get(curMethod);
+                curMethod = meta.java_lang_reflect_Constructor_root.getObject(curMethod);
             }
         }
         return target;
@@ -944,6 +947,11 @@ public final class Method extends Member<Signature> implements TruffleObject, Co
 
     public String getNameAsString() {
         return getName().toString();
+    }
+
+    @TruffleBoundary
+    public String getInteropString() {
+        return getNameAsString() + AbstractLookupNode.METHOD_SELECTION_SEPARATOR + getRawSignature();
     }
 
     public String getSignatureAsString() {
@@ -1226,11 +1234,13 @@ public final class Method extends Member<Signature> implements TruffleObject, Co
 
                 if (target == null) {
                     getContext().getLogger().log(Level.WARNING, "Failed to link native method: {0}", getMethod().toString());
-                    throw Meta.throwException(getMeta().java_lang_UnsatisfiedLinkError);
+                    Meta meta = getMeta();
+                    throw meta.throwException(meta.java_lang_UnsatisfiedLinkError);
                 }
             } else {
                 if (codeAttribute == null) {
-                    throw Meta.throwExceptionWithMessage(getMeta().java_lang_AbstractMethodError,
+                    Meta meta = getMeta();
+                    throw meta.throwExceptionWithMessage(meta.java_lang_AbstractMethodError,
                                     "Calling abstract method: " + getMethod().getDeclaringKlass().getType() + "." + getName() + " -> " + getRawSignature());
                 }
                 FrameDescriptor frameDescriptor = new FrameDescriptor();
@@ -1335,8 +1345,9 @@ public final class Method extends Member<Signature> implements TruffleObject, Co
         @Override
         public Object invokeMethod(Object callee, Object[] args) {
             if (getMethod().isRemovedByRedefition()) {
-                throw Meta.throwExceptionWithMessage(getMeta().java_lang_NoSuchMethodError,
-                                getMeta().toGuestString(getMethod().getDeclaringKlass().getNameAsString() + "." + getMethod().getName() + getMethod().getRawSignature()));
+                Meta meta = getMeta();
+                throw meta.throwExceptionWithMessage(meta.java_lang_NoSuchMethodError,
+                                meta.toGuestString(getMethod().getDeclaringKlass().getNameAsString() + "." + getMethod().getName() + getMethod().getRawSignature()));
             }
             return getMethod().invokeMethod(callee, args);
         }
@@ -1407,9 +1418,14 @@ public final class Method extends Member<Signature> implements TruffleObject, Co
             }
             return bci;
         }
+
+        @Override
+        public String toString() {
+            return getMethod().toString();
+        }
     }
 
-    class SharedRedefinitionContent {
+    static class SharedRedefinitionContent {
 
         private final LinkedMethod linkedMethod;
         private final RuntimeConstantPool pool;

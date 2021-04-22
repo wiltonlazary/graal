@@ -41,7 +41,6 @@ import org.graalvm.compiler.options.Option;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.impl.ReflectionRegistry;
-import org.graalvm.nativeimage.impl.RuntimeReflectionSupport;
 
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.flow.FieldTypeFlow;
@@ -105,8 +104,6 @@ public class JNIAccessFeature implements Feature {
 
     private final Map<JNINativeLinkage, JNINativeLinkage> nativeLinkages = new ConcurrentHashMap<>();
 
-    private boolean haveJavaRuntimeReflectionSupport;
-
     public static class Options {
         @Option(help = "Print JNI methods added to generated image")//
         public static final HostedOptionKey<Boolean> PrintJNIMethods = new HostedOptionKey<>(false);
@@ -144,8 +141,7 @@ public class JNIAccessFeature implements Feature {
         }
 
         @Override
-        public void register(boolean finalIsWritable, boolean allowUnsafeAccess, Field... fields) {
-            UserError.guarantee(!allowUnsafeAccess, "Unsafe access cannot be controlled through JNI configuration.");
+        public void register(boolean finalIsWritable, Field... fields) {
             abortIfSealed();
             for (Field field : fields) {
                 boolean writable = finalIsWritable || !Modifier.isFinal(field.getModifiers());
@@ -168,7 +164,6 @@ public class JNIAccessFeature implements Feature {
 
         BeforeAnalysisAccessImpl access = (BeforeAnalysisAccessImpl) arg;
         this.nativeLibraries = access.getNativeLibraries();
-        this.haveJavaRuntimeReflectionSupport = ImageSingletons.contains(RuntimeReflectionSupport.class);
 
         varargsCallTrampolineMethod = createJavaCallTrampoline(access, CallVariant.VARARGS, false);
         arrayCallTrampolineMethod = createJavaCallTrampoline(access, CallVariant.ARRAY, false);
@@ -364,10 +359,5 @@ public class JNIAccessFeature implements Feature {
                 access.registerAsImmutable(method); // for constant address to use as identifier
             }
         }
-    }
-
-    @Fold
-    public boolean haveJavaRuntimeReflectionSupport() {
-        return haveJavaRuntimeReflectionSupport;
     }
 }
